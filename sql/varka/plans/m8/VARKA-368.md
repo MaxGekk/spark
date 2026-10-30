@@ -92,12 +92,26 @@ into them, both recorded in `m8/results/VARKA-368-probe-local.txt`; the probe is
 ### What differs from the row text and the milestone plan
 
 - **"Forced on" is the harness, not a switch**: no configuration exists or is added (item 6).
-- **"Constant folding excluded" needs no exclusion**: no optimizer runs below the session, and the
-  lift makes each literal a column. Spark's own optimizer arm of `checkEvaluation` stays as it is.
+- **A departure from the row's text: "constant folding excluded" excludes nothing.** The row
+  names the exclusion, as Gluten's session does (item 8). Below the session no optimizer runs, so
+  there is no rule to exclude, and the lift makes each literal a column, which is what keeps the
+  expression from being a constant. Spark's own optimizer arm of `checkEvaluation` stays as it
+  is, folding included, since it is Spark's check and not Varka's.
 - **Spark's checks are kept and Varka's added beside them**, where Gluten replaces them (item 8):
   the subclass must pass Spark's assertions and Varka's both.
 - **The record is per form, with no counts** (2.6): ScalaCheck's literals change every run.
-- **The suites reach 333 forms the matrix does not hold** (item 5), which the diff uses (2.7).
+- **The suites reach 333 forms the matrix does not hold** (item 5): recorded, and checked
+  against `casts.tsv`'s claims only (2.7). Whether the registry's forms grow to hold them is the
+  owner's scope choice (section 8).
+- **The random checks run nightly, not in the Build** (section 4).
+- **The hash half waits on row 337** (section 5): until 337 lands every hash declines.
+
+*The lead's decisions on the plan's five open points, 30 October 2026, after the reviewer: 17
+rows a literal; a decline fails the diff only where `casts_fused.tsv` says the form fuses, with an
+expected-declines list under the option matrix's stale rule; the fixed-value checks in the Build
+and the random ones in the nightly; the forms outside the matrix recorded and checked against
+`casts.tsv` only, the registry's gap put to the owner; the harness alone. Sections 2 to 9 carry
+them.*
 
 ## 1. Goal and non-goal
 
@@ -107,7 +121,7 @@ evaluator with those literals as columns, and holds the kernel's answer to Spark
 and hash the suites exercise is recorded fused or declined per form and mode, with the reason; and
 a form the matrix calls fused that the suites find declined fails a check. Not this row: making
 any cast or hash fuse (rows 332, 343, 350, 364, 337), Spark's other expression suites, a session
-route (section 8, point 5), checks that bypass the helpers (`HashExpressionsSuite`'s `.eval()`
+route (section 7), checks that bypass the helpers (`HashExpressionsSuite`'s `.eval()`
 calls, `CastSuiteBase.scala:1658` and `:1662`'s `evaluateWithoutCodegen`).
 
 ## 2. Design
@@ -147,8 +161,8 @@ row's value at its ordinal (item 0.2's four hash checks).
 
 The fixture is `VarkaHarnessPlans.Fixture(columns, rows)` with the lifted columns, an int `rid`
 column numbering the rows, and `LiftedRows` (17) equal rows, so the kernel runs a full lane group
-and its epilogue at every width. Section 8 point 1 asks whether one row, the brief's wording, is
-wanted instead.
+and its epilogue at every width; one row would never fill a lane. `VarkaLiteralLiftSuite` holds
+the golden suite's lift to the same count (`VarkaLiteralLiftSuite.scala:53`).
 
 ### 2.3 Each check through the harness
 
@@ -194,7 +208,7 @@ Each run check ends in one of these, per batch and per output:
 | answered a raising row | the kernel answered a row Spark raises on | **fails: a Varka bug** |
 | kernel path threw | not a decline; `serveBatch` raises `INTERNAL_ERROR` | **fails: a Varka bug** |
 | raised | the batch declined with a value status and Spark raises on the row | passes (2.5) |
-| batch-declined | the batch declined on a row Spark answers | passes; recorded (point 2) |
+| batch-declined | the batch declined on a row Spark answers | passes; recorded (2.7) |
 | compile-declined | no kernel, or the output left residual, with the reason | passes; recorded |
 | Spark disagrees | Spark's interpreted and generated projections differ | not compared |
 
@@ -229,9 +243,9 @@ own to compare, and what the subclass checks is three things:
 
 The third check is equal by construction while the fallback is Spark's own projection; what it
 proves is that the Arrow read and `serveBatch`'s dispatch hand the user Spark's error, not a
-wrapped or a lost one. A session route (Gluten's) would compare the error a query raises end to
-end, at the cost of a session per suite and the planner between the check and the kernel: section
-8, point 5.
+wrapped or a lost one. The error a query raises end to end, through a session, the planner and
+the cache, is compared by the golden-file suite and `VarkaCoverageDifferentialSuite`, not here
+(section 7).
 
 ### 2.6 The record
 
@@ -257,7 +271,10 @@ otherwise compared with what the run found, failing with the regeneration comman
 run, and `HashExpressionsSuite`'s random rows and seeds too (`:1008-1035`), so a count or a set of
 batch statuses would move run to run; the compile verdict of a form does not depend on its
 values. The batch outcomes of each run go to `target/varka-suites/batches.tsv`, which CI keeps as
-an artifact. Each suite owns its lines, so the four can run in different jobs.
+an artifact, and feed the expected-declines check of 2.7. Each suite owns its lines, so the four
+can run in different jobs. The record's lines come from the fixed-value checks of the Build; the
+nightly's random checks add no line, and a form that only they reach is written to the run's
+artifact, not to the record.
 
 **The exclusions**, `sql/varka/spark_suites/expression_excluded.tsv`, take the golden suite's form
 (`VARKA-271.md` 3.4): test name, suite, kind (`read-path`, `lift`, `spark`) and reason. A listed
@@ -281,9 +298,22 @@ JVM:
 1. **A form `casts_fused.tsv` calls fused in a mode, which the suites exercise bare in that mode,
    is `fused` in `casts_suites.tsv`**; else the error names the form, the mode and the suites'
    reason. This is the row's done-when.
+   A batch that declines on a row Spark answers, in a fixed-value check of such a form, fails the
+   same way; this is checked by the subclasses, which see the batches, not by the census tool.
 2. **A pair whose `fused_forms` in `casts.tsv` is "all" for a mode has no form the suites find
-   declined in that mode**, so the 333 forms outside the matrix (item 0.5) can contradict the
-   claim the matrix's sample makes.
+   declined in that mode.** This is the only check of the 333 forms outside the matrix (item
+   0.5): they can contradict the claim the matrix's sample makes, and are otherwise a record.
+
+Everywhere else a decline is a record and not a failure: Spark computing the answer is correct.
+**The expected declines**, `sql/varka/spark_suites/expression_declines.tsv`, take the option
+matrix's rule (`sql/varka/matrix/skips.tsv`, "a declines test that fuses again, fails as a stale
+line"): suite, form, mode, kind (`compile` or `batch`) and reason, for a form `casts_fused.tsv`
+calls fused that is meant to decline in the suites, such as a TRY form on row 338's declining
+guard ("a correct answer computed slower", `VARKA-338.md` 0 item 4). A listed decline passes; a
+listed form whose checks ran and did not decline fails as stale, so row 481's `NULL` mode, which
+retires those guards, also retires their lines. A batch entry is judged stale only from the
+fixed-value checks, of which two loops draw random values (`CastSuiteBase.scala:131-133`,
+`:168`); an entry whose form only those loops reach is named so.
 
 And the reverse, as a warning: a form the suites find fused that `casts_fused.tsv` calls declined,
 which can only mean the two compiled different expressions. The nightly job (section 4)
@@ -303,7 +333,7 @@ through fails there.
 4. **The lift**: a unit test that a null literal becomes a nullable all-null column, a `TRY`
    cast is lifted, a non-lane literal stays, and an unresolvable lift is recorded `unresolved`.
 5. **`dev/varka_census.py`'s doctests** for the two rules and the warning, on fixtures as
-   `casts_fused` has.
+   `casts_fused` has; and a test that a stale line of `expression_declines.tsv` fails.
 6. **The option matrix and the Build** pass with the four subclasses in the sql jobs.
 
 ## 4. Time, and where it runs
@@ -311,67 +341,83 @@ through fails there.
 *An estimate, not a measurement; the arithmetic is in `m8/results/VARKA-368-probe-local.txt`.*
 A check of a shape not yet compiled costs about 36 ms on the laptop (row 509's
 `VarkaCoverageHarnessSuite`, 38.9 s over 1067 tests, `m8/results/VARKA-509-step4.txt`); a check
-whose shape is in the shape cache is assumed at 2 to 5 ms. Today the arm compiles 233 fused shapes
-and runs 1780 fused checks: about 15 to 20 s, and 20 s to 1 min at the calibration table's ratios
-of 1.3 to 2.9. When every one of the 1134 shapes fuses, 70 s to 3.3 min. With Spark's own 52.8 s,
-the four subclasses take **about 1.2 to 4.3 minutes on the laptop** (all in
-`m8/results/VARKA-368-probe-local.txt`).
+whose shape is in the shape cache is assumed at 2 to 5 ms. The fixed-value checks with a column
+number 2090, of which 130 fuse today; the random checks 4110, of which 1650 fuse. In the Build the
+arm runs the fixed-value checks only: about 8 to 17 s on the laptop at the calibration table's
+ratios of 1.3 to 2.9, beside Spark's own 52.8 s. All checks, as the nightly runs them, take about
+1.2 to 4.3 minutes on the laptop (all in `m8/results/VARKA-368-probe-local.txt`).
 
 **Where it runs.**
 
-- **The pull request's Build.** The subclasses are named `Varka...Suite`, so the Varka-scoped sql
-  jobs run them (item 0.9), each suite weighted in `suite-times.tsv` once it has run. There the
-  harness ran about 6 times its laptop time with the reach recording, so the estimate is **about
-  5 to 9 minutes today and 10 to 22 at full reach, summed over the three sql jobs**
-  (`m8/results/VARKA-368-probe-local.txt`), which take 14 to 24 minutes each now
-  (`m8/results/VARKA-509-step4.txt`). The same time lands in Spark's own sql module job for a
-  change outside Varka's files, and in the Sunday weekly matrix (`varka-weekly-matrix.yml`).
+- **The pull request's Build: the fixed-value checks.** The subclasses are named `Varka...Suite`,
+  so the Varka-scoped sql jobs run them (item 0.9), each suite weighted in `suite-times.tsv` once
+  it has run; the trait skips the Varka arm of `cmpInterpretWithCodegen` unless
+  `-Dvarka.suites.random=true`, while Spark's own random checks still run. There the harness ran
+  about 6 times its laptop time with the reach recording, so the estimate is **about 3.4 to 4.3
+  minutes summed over the three sql jobs**, Spark's own part about 2.6 of it
+  (`m8/results/VARKA-368-probe-local.txt`); the jobs took 14 to 24 minutes each before row 520's
+  compile restore (`m8/results/VARKA-509-step4.txt`). The same time lands in Spark's own sql
+  module job for a change outside Varka's files, and in the Sunday weekly matrix
+  (`varka-weekly-matrix.yml`).
   The new-tests step reads test names from the diff (`dev/varka_new_tests.py`); the subclasses
   add none, so it reruns nothing.
-- **A new nightly job.** No workflow runs a sql suite on a schedule. The plan adds a job to
-  `.github/workflows/varka-fuzz.yml`, "Spark's cast and hash suites under Varka", in the
-  workflow's 02:00 UTC run and in `report-failure`'s `needs`: it compiles sql's tests, runs the
-  four subclasses with the record regenerated into `target/` and ScalaCheck's `minSuccessful`
-  raised from 10 to 100 for the random properties (`-Dvarka.suites.minSuccessful`, read by the
-  trait), and runs `dev/varka_census.py --check` against the regenerated record. Estimated at
+- **A new nightly job: everything, the random checks included.** No workflow runs a sql suite on
+  a schedule. The plan adds a job to `.github/workflows/varka-fuzz.yml`, "Spark's cast and hash
+  suites under Varka", in the workflow's 02:00 UTC run and in `report-failure`'s `needs`: it
+  compiles sql's tests, runs the four subclasses with `-Dvarka.suites.random=true`, the record
+  regenerated into `target/` and ScalaCheck's `minSuccessful` raised from 10 to 100 for the random
+  properties (`-Dvarka.suites.minSuccessful`, read by the trait), and runs `dev/varka_census.py
+  --check` against the regenerated record. Estimated at
   **about 15 to 30 minutes** on a runner (the arithmetic file), under a 60-minute timeout.
 - **`dev/varka_nightly.sh`** gains the same step, skippable as its others are, for a laptop
   night.
 
-Section 8 point 3 asks whether the Build should run the whole arm or the nightly only.
-
 **Predictions**, registered before the build:
+
+0. **The Build's wall time grows by at most 2 minutes** over the 18 it takes since row 520's
+   compile restore (the lead's figure of 30 October 2026), the 3.4 to 4.3 job-minutes above being
+   split over three jobs that run side by side. Measured on 368a's pull request against the
+   Build of its base commit, from the Actions API, as row 509 step 4 measured its own.
 
 1. The four subclasses pass with no Varka finding today; any finding is a bug of a fused form
    (`TIME` to `TIME`, the year-month, day-time and `TIMESTAMP_NTZ` casts, `bigint` to `int`).
-2. The record holds about 600 cast lines (item 0.5's 594 keys, now counted exactly) and the
-   census check of 2.7 passes on it, as the probe found no disagreement.
+2. The record holds fewer than item 0.5's 594 keys, since it takes the fixed-value checks' bare
+   casts only, and the census check of 2.7 passes on it, as the probe found no disagreement.
+   The expected-declines list is empty on the first run: no fused form declines a batch in a
+   fixed-value check.
 3. Nothing is listed in the exclusions after the first run but `read-path` entries, if any.
 
 ## 5. Order, files and size
 
-1. **368a, the harness options and the arm**: the column-path Spark side and the evaluating
-   fallback in `VarkaExpressionHarness`, `VarkaSuiteCheck`, `VarkaSuiteArm`, the four subclasses,
-   the two record files and the exclusions file, the tests of section 3 items 1 to 4.
+1. **368a, the harness options and the cast arm**: the column-path Spark side and the evaluating
+   fallback in `VarkaExpressionHarness`, `VarkaSuiteCheck`, `VarkaSuiteArm`, the three cast
+   subclasses, `casts_suites.tsv`, the exclusions and expected-declines files, the tests of
+   section 3 items 1 to 4, and the Build's wall time measured (prediction 0).
 2. **368b, the diff and the nightly**: `dev/varka_census.py`'s two rules and `suites` column,
    `m8/casts.tsv` regenerated, the job in `varka-fuzz.yml`, the step in `dev/varka_nightly.sh`,
-   the docs bullet, the weights.
+   the docs bullet, the weights. The job is the same mechanism row 537 (the sweeps on CI, being
+   added now) needs - a scheduled job that compiles a module's tests and runs a long suite - so
+   the two land as one scheduled run, whichever row comes first building it and the other adding
+   its step.
+3. **368c, the hash half, after row 337**: `VarkaHashExpressionsSuite` and `hash_suites.tsv`.
+   Before 337 every hash declines (item 0.5), so the record would hold nothing but declines.
 
 | file | what |
 |---|---|
 | `VarkaExpressionHarness.java` (sql/core test) | the column-path Spark side, the fallback |
 | `VarkaSuiteCheck.java` (new, sql/core test) | the lift, the routing, the verdicts, the record |
 | `VarkaSuiteArm.scala` (new, sql/core test) | the overrides, the dedupe, `minSuccessful` |
-| four `Varka...Suite.scala` (new, sql/core test) | the subclasses |
+| four `Varka...Suite.scala` (new, sql/core test) | the subclasses (the hash one in 368c) |
 | `sql/varka/plans/m8/casts_suites.tsv`, `hash_suites.tsv` | the record |
-| `sql/varka/spark_suites/expression_excluded.tsv` | the exclusions |
+| `sql/varka/spark_suites/expression_excluded.tsv`, `expression_declines.tsv` | the lists |
 | `dev/varka_census.py`, `sql/varka/plans/m8/casts.tsv` | the rules, the `suites` column |
 | `.github/workflows/varka-fuzz.yml`, `dev/varka_nightly.sh` | the nightly job and step |
 | `docs/sql-varka.md`, `sql/varka/ci/suite-times.tsv` | the bullet, the weights |
 
-**Size: medium, in two pull requests**, about three days and one: the harness's two options and
-the arm are most of it. It depends on nothing unmerged; each cast row that lands regenerates the
-record in its own pull request, as it regenerates `casts_fused.tsv`.
+**Size: medium, in three pull requests**, about three days, one and half a day: the harness's two
+options and the arm are most of it. 368a and 368b depend on nothing unmerged, 368c on row 337;
+each cast row that lands regenerates the record in its own pull request, as it regenerates
+`casts_fused.tsv`.
 
 ## 6. What it unlocks in the census
 
@@ -385,50 +431,40 @@ fuse, and the cast rows 332, 343 and 350 the dry run their plans name (`VARKA-33
 
 Out: Spark's other expression suites (the same trait serves them as subclasses, Gluten's way, as
 `VARKA-271.md` 3.6 left for later); the 41 `.eval()` calls of `HashExpressionsSuite`; a session
-route (section 8 point 5); a boolean value output (27); the 128-bit width, where row 503 declines
+route: the error a query raises end to end, through the planner and the cache, is the golden-file
+suite's and `VarkaCoverageDifferentialSuite`'s to compare, and this row stays below the session
+with the harness alone; a boolean value output (27); the 128-bit width, where row 503 declines
 long-lane conditions at two lanes, since the record is at the host's default width.
 
 What stays declined is every cast and hash no row has built, each with the reason the compiler
 gives, in the record: today 4420 of the 6200 checks with a column, and every hash.
 
-## 8. Open points for the lead
+## 8. Questions for the owner
 
-1. **Rows per lifted literal.** (a) `LiftedRows` (17) equal rows, as `VarkaArrowSource` has it, so
-   the kernel runs a lane group and its epilogue at every width. (b) One row, the brief's wording
-   and row 332's ("a one-row input column"), which runs the epilogue alone. *Plan as written: (a)*;
-   the cost is the same (one batch either way).
-2. **Does a batch decline on a row Spark answers fail the diff?** 332's plan (2.3) says its TRY
-   forms null in the kernel so that 368 does not record a declined batch where the matrix says
-   fused; row 338 chose a declining guard for its TRY forms, "a correct answer computed slower"
-   (`VARKA-338.md` 0 item 4). (a) Only compile declines fail (the plan as written). (b) A batch
-   decline on a row Spark answers also fails, except for forms in an expected-declines list with
-   a reason each, which fails as stale when the form stops declining (the rule of
-   `skills/testing-and-debugging.md`, "A skip list without reasons rots"). (b) needs the batch
-   outcomes from deterministic checks only, since the random literals move them.
-3. **Where the whole arm runs.** (a) The Build runs all of it and the nightly the volume arm and
-   the diff (the plan as written; about 5 to 9 minutes added to the Build today, up to 22 at full
-   reach, by the estimate of section 4). (b) The Build runs the deterministic helpers' checks and
-   only the compile verdict of the random properties, and the nightly the rest. (c) The nightly
-   alone, with the Build skipping the four subclasses, which then need a name the suite search
-   does not match.
-4. **The 333 forms outside the matrix.** (a) Record and check them through 2.7 rule 2 (the plan as
-   written). (b) Also widen the registry's forms so that `casts_fused.tsv` holds the decimal
-   precisions and `TIME` precisions the suites use, which moves `VarkaTypes`' entries and every
-   test that reads them.
-5. **The session route beside the harness.** (a) The harness alone (the brief's route, the plan as
-   written): no Varka error exists below the session, and 2.5's third check is equal by
-   construction. (b) Also a session subclass on `VarkaArrowSource`'s pattern, Gluten's way, which
-   would compare the error a query raises end to end, through the planner and the cache, at a
-   session per suite and with the lift's `try_` exclusion to revisit.
+The lead decided the plan's five open points on 30 October 2026 (the note under "What differs").
+One question is the owner's, a scope choice:
+
+1. **The forms the suites reach and the registry does not hold.** The probe found 333 keys of
+   (source form, target form, mode) between census types whose forms `casts_fused.tsv` does not
+   hold, 81 of them a form cast to itself; the rest are `TIME(1)`, `(2)`, `(4)`, `(5)`, `(7)`,
+   `(8)` and `(9)` beside the registry's `TIME(0)`, `(3)` and `(6)`, and decimal precisions beside
+   its `(10, 2)` and `(30, 4)` (`m8/results/VARKA-368-probe-local.txt`). (a) Leave the registry's
+   forms as they are: this row records those forms and checks them against `casts.tsv`'s "all"
+   claims (2.7 rule 2), which is the plan as written. (b) Widen `VarkaTypes`' forms so the matrix
+   compiles them too, which moves every test that reads the forms and grows `casts_fused.tsv`;
+   a row of its own.
 
 ## 9. Done when
 
-Row 368's text holds, with the corrections above: the four subclasses pass Spark's assertions and
-Varka's at the defaults, with no finding, in the Build and in the nightly job; `casts_suites.tsv`
-and `hash_suites.tsv` are committed and regenerated by the subclasses; `dev/varka_census.py
---check` fails when a form `casts_fused.tsv` calls fused is declined in the record, in the docs job
-and in the nightly; the planted kernel and the planted decline of section 3 are caught; and the
-exclusions list holds only entries with a reason, none stale.
+Row 368's text holds, with the corrections above: the three cast subclasses pass Spark's
+assertions and Varka's at the defaults, with no finding, their fixed-value checks in the Build
+and all checks in the nightly job; `casts_suites.tsv` is committed and regenerated by them;
+`dev/varka_census.py --check` fails when a form `casts_fused.tsv` calls fused is declined in the
+record, in the docs job and in the nightly, and a subclass fails on an unlisted batch decline of
+such a form; the planted kernel and the planted decline of section 3 are caught; the exclusions
+and expected-declines lists hold only entries with a reason, none stale; the Build's wall time is
+measured against prediction 0 and the prediction scored; and, after row 337, the hash subclass
+and `hash_suites.tsv` the same.
 
 ## 10. Outcome
 

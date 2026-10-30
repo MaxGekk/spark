@@ -72,3 +72,142 @@ not a measurement:
     suites without the reach recording, Spark's 2.6 min and the arm at 3 times, 1 to 10 min; the
     random arm at minSuccessful 100, 41100 cached checks at 2 to 5 ms and 3 times, 4 to 10 min;
     about 15 to 30 minutes
+
+The Build's share, the fixed-value checks only (the lead's decision of 30 October 2026), by the
+same arithmetic, not a measurement:
+  the fixed-value checks with a column: 2090 (checkEvaluation 1891, the error helpers 199), 130
+    of them fused today
+  the arm: at most 130 fused shapes x 36 ms, about 5 s, and the compile verdict of the 2090,
+    about 1 s; about 6 s, and 8 to 17 s at the calibration table's ratios of 1.3 to 2.9
+  in the Build: the arm at 6 times, 0.8 to 1.7 min; Spark's own 52.8 s at 3 times, about 2.6
+    min; about 3.4 to 4.3 minutes summed over the three sql jobs, which run side by side
+
+The probe's source, as it ran (sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/
+expressions/Varka368Probe.scala, deleted after the run; Apache license header left out). To
+reproduce: put it back, then
+  build/sbt "set LocalProject(\"catalyst\") / Test / javaOptions += \"-Dvarka368.out=<file>\"" \
+    'catalyst/testOnly *Varka368AnsiOffProbe *Varka368AnsiOnProbe *Varka368TryProbe
+    *Varka368HashProbe'
+and count <file>'s lines (tab separated: suite, hook, result, bare=<fused with no column>,
+milliseconds, the cast and hash nodes).
+
+    package org.apache.spark.sql.catalyst.expressions
+    
+    import java.io.{FileWriter, PrintWriter}
+    
+    import scala.reflect.ClassTag
+    
+    import org.apache.spark.SparkThrowable
+    import org.apache.spark.sql.catalyst.InternalRow
+    import org.apache.spark.sql.catalyst.analysis.ResolveTimeZone
+    import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
+    import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes
+    import org.apache.spark.sql.types.{BooleanType, DataType}
+    
+    // A throwaway probe for the row 368 plan (not committed): per check, which casts and hashes it
+    // holds and whether the compiler fuses the check with each lane-typed literal as a column.
+    trait Varka368Probe extends ExpressionEvalHelper { self: org.apache.spark.SparkFunSuite =>
+      private def out: PrintWriter = Varka368Probe.writer
+    
+      private def census(t: DataType): String = {
+        val id = VarkaTypes.of(t)
+        if (id.isPresent) {
+          Option(VarkaTypes.info(id.get).census()).getOrElse("-")
+        } else {
+          "-"
+        }
+      }
+    
+      private def probe(hook: String, expression: => Expression): Unit = {
+        val start = System.nanoTime()
+        val e = try replace(ResolveTimeZone.resolveTimeZones(expression)) catch {
+          case _: Throwable => return
+        }
+        var n = 0
+        val cols = scala.collection.mutable.ArrayBuffer.empty[AttributeReference]
+        val lifted = e.transformUp {
+          case l: Literal if VarkaTypes.lane(l.dataType).isPresent =>
+            n += 1
+            val a = AttributeReference(s"l$n", l.dataType, nullable = l.value == null)()
+            cols += a
+            a
+        }
+        val nodes = e.collect {
+          case c: Cast => s"cast:${c.child.dataType.simpleString}>${c.dataType.simpleString}" +
+            s":${c.evalMode}:${census(c.child.dataType)}>${census(c.dataType)}"
+          case h: Murmur3Hash => "hash:" + h.children.map(_.dataType.simpleString).mkString(",")
+          case h: XxHash64 => "xxhash64:" + h.children.map(_.dataType.simpleString).mkString(",")
+          case h: HiveHash => "hivehash:" + h.children.map(_.dataType.simpleString).mkString(",")
+        }
+        val result = if (cols.isEmpty) {
+          "nocolumn"
+        } else if (!lifted.resolved) {
+          "unresolved"
+        } else {
+          try {
+            val fused = if (lifted.dataType == BooleanType) {
+              VarkaExpressionCompiler.compilePredicate(lifted, cols.toSeq).isPresent
+            } else {
+              VarkaExpressionCompiler.compile(Seq(Alias(lifted, "c")()), cols.toSeq).isPresent
+            }
+            if (fused) "fused" else "declined"
+          } catch {
+            case t: Throwable => "threw:" + t.getClass.getSimpleName
+          }
+        }
+        val bare = try {
+          if (e.dataType == BooleanType) {
+            VarkaExpressionCompiler.compilePredicate(e, Seq.empty).isPresent
+          } else {
+            VarkaExpressionCompiler.compile(Seq(Alias(e, "c")()), Seq.empty).isPresent
+          }
+        } catch {
+          case _: Throwable => false
+        }
+        val ms = (System.nanoTime() - start) / 1e6
+        Varka368Probe.synchronized {
+          out.println(Seq(getClass.getSimpleName, hook, result, s"bare=$bare", f"$ms%.2f",
+            nodes.mkString(" ")).mkString("\t"))
+          out.flush()
+        }
+      }
+    
+      override protected def checkEvaluation(
+          expression: => Expression, expected: Any, inputRow: InternalRow = EmptyRow): Unit = {
+        super.checkEvaluation(expression, expected, inputRow)
+        probe("value", expression)
+      }
+    
+      override def checkErrorInExpression[T <: SparkThrowable : ClassTag](
+          expression: => Expression,
+          inputRow: InternalRow,
+          condition: String,
+          parameters: Map[String, String]): Unit = {
+        super.checkErrorInExpression[T](expression, inputRow, condition, parameters)
+        probe("error", expression)
+      }
+    
+      override def checkExceptionInExpression[T <: Throwable : ClassTag](
+          expression: => Expression,
+          inputRow: InternalRow,
+          expectedErrMsg: String): Unit = {
+        super.checkExceptionInExpression[T](expression, inputRow, expectedErrMsg)
+        probe("exception", expression)
+      }
+    
+      override def cmpInterpretWithCodegen(
+          inputRow: InternalRow, expr: Expression, exceptionAllowed: Boolean = false): Unit = {
+        super.cmpInterpretWithCodegen(inputRow, expr, exceptionAllowed)
+        probe("consistency", expr)
+      }
+    }
+    
+    object Varka368Probe {
+      lazy val writer: PrintWriter =
+        new PrintWriter(new FileWriter(sys.props.getOrElse("varka368.out", "/dev/null"), true))
+    }
+    
+    class Varka368AnsiOffProbe extends CastWithAnsiOffSuite with Varka368Probe
+    class Varka368AnsiOnProbe extends CastWithAnsiOnSuite with Varka368Probe
+    class Varka368TryProbe extends TryCastSuite with Varka368Probe
+    class Varka368HashProbe extends HashExpressionsSuite with Varka368Probe
