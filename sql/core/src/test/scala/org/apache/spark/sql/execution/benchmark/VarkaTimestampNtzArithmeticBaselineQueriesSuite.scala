@@ -27,7 +27,8 @@ import org.apache.spark.sql.types.{DayTimeIntervalType, IntegerType, TimestampNT
 /**
  * The TIMESTAMP_NTZ arithmetic baseline's sections, run at a small scale on both sessions in every
  * build, so a section that no longer parses, that raises, that the two sessions answer
- * differently, or that fuses fails a pull request rather than the runner dispatch that times it
+ * differently, or that fuses unlisted fails a pull request rather than the runner dispatch that
+ * times it
  * (VARKA-339 5, step 1).
  *
  * Two further checks keep the table what the benchmark claims: every column has the declared
@@ -35,9 +36,10 @@ import org.apache.spark.sql.types.{DayTimeIntervalType, IntegerType, TimestampNT
  * on both sessions, so one whose values left the range Spark computes in would raise here
  * (DATETIME_OVERFLOW or ARITHMETIC_OVERFLOW) rather than in the timed run.
  *
- * The fuse check is the benchmark's own, made here too: no section fuses while the class is a
- * baseline. A step of VARKA-339 that makes sections fuse turns this check around for them, as
- * the benchmark's after-run property does; with that property set to false the check is skipped.
+ * The fuse check is the benchmark's own, made here too: a section fuses exactly when its class
+ * lists it as fusing, and none is listed while the class is a baseline. A step of VARKA-339 that
+ * fuses a section lists it, and this check follows the list; with the benchmark's fuse check
+ * property set to false it is skipped, as the benchmark's plan check is.
  */
 class VarkaTimestampNtzArithmeticBaselineQueriesSuite extends QueryTest with VarkaSharedSessions {
 
@@ -81,7 +83,7 @@ class VarkaTimestampNtzArithmeticBaselineQueriesSuite extends QueryTest with Var
     }
   }
 
-  test("no section of the TIMESTAMP_NTZ arithmetic baseline fuses") {
+  test("a section of the TIMESTAMP_NTZ arithmetic baseline fuses only when it is listed") {
     import VarkaTimestampNtzArithmeticBaselineBenchmark._
     assume(VarkaSqlBenchmarkBase.fuseCheck(),
       s"-D${VarkaSqlBenchmarkBase.FUSE_CHECK_PROPERTY}=false times the sections fused")
@@ -92,7 +94,7 @@ class VarkaTimestampNtzArithmeticBaselineQueriesSuite extends QueryTest with Var
         "SELECT ntz FROM varka_ntz_arith WHERE ntz < ntz2").isPresent)
       for (s <- sections().asScala) {
         withClue(s.title) {
-          assert(VarkaSqlBenchmarkBase.fusedPlan(varkaSpark, s.query).isEmpty)
+          assert(VarkaSqlBenchmarkBase.fusedPlan(varkaSpark, s.query).isPresent === s.fuses)
         }
       }
     }

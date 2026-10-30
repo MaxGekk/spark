@@ -1655,17 +1655,19 @@ never deleted.
 
 **In code and tests**
 
-* **Not every baseline class can time its sections fused.** `VarkaSqlBenchmarkBase.requireBaseline`
-  refuses a section that fuses, and under `-Dvarka.baseline.fuseCheck=false` requires it to run
-  fused instead, so a baseline class's after-run reruns the same class under the same labels.
-  Two gaps stay. `VarkaBooleanOutputBenchmark` keeps a check of its own, since its filter controls
-  must fuse in both runs, and has no such property, so it fails outright once its row lands. And
-  the reversed check is `VarkaSizeLadder.varkaFused`, which finds only a projection's Varka node:
-  a section whose kernel is a filter, such as `VarkaTimestampNtzBaselineBenchmark`'s comparison,
-  fails the after-run although it fused. Closing it: a reversed check that reads a filter node's
-  kernel batches and fallbacks as `varkaFused` reads a projection's, and the Boolean class's
-  sections routed through `requireBaseline` with its controls kept apart; then a dispatch of each
-  class with the property set, on code where its sections fuse, to show the check passes.
+* **Three baseline classes cannot list a fused section.** `VarkaSqlBenchmarkBase.requireBaseline`
+  has a form that takes each section's `fuses` flag, so a class's after-run reruns it under the
+  same labels with the fused sections listed; the two floating baselines and
+  `VarkaTimestampNtzArithmeticBaselineBenchmark` use it. `VarkaTimestampNtzBaselineBenchmark` and
+  `VarkaDecimalBaselineBenchmark` call the form without the flag, which refuses any section that
+  fuses, and `VarkaBooleanOutputBenchmark` keeps a check of its own for its filter controls. The
+  NTZ baseline already refuses to run: its comparison section fuses since row 338 (a dry run of
+  the class on 30 October 2026 failed on it). Separately, the check that a listed section runs
+  every batch as a kernel, `VarkaSizeLadder.varkaFused`, is made only by the arithmetic class and
+  finds only a projection's Varka node, so it cannot serve a filter section. Closing it: a
+  `fuses` flag on the three classes' sections, the NTZ comparison listed, and a kernel-batch and
+  fallback check in the base that reads a filter node as well as a projection, called for every
+  listed section.
 * **Two baseline classes title a section alike.** `VarkaTimestampNtzBaselineBenchmark` and
   `VarkaTimestampNtzArithmeticBaselineBenchmark` both hold "TIMESTAMP_NTZ arithmetic chain, no
   nulls" and its null twin, over the same query on different tables. The results files are per
