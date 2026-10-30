@@ -39,8 +39,10 @@ text is the milestone plan's 2.8 ("360, add and subtract") and waves F3 and G3 o
      operand can pass `2^127` while the exact sum fits: Trino's `17015` vector, a `(38, 0)` plus a
      `(38, 1)`, answers in Spark (`READING_TRINO_DECIMAL.md` 9, item 3).
    - **C, capped with the scale cut (`P > 38`, `S > 6`, precision loss allowed)**: the result is
-     the exact sum rounded `HALF_UP` to a smaller scale, a division of a value of up to 129 bits:
-     363's.
+     the exact sum rounded `HALF_UP` to a smaller scale: 363's. Rescaling the coarser operand
+     first takes the exact sum past 129 bits, up to 253, at most such type pairs (found by row
+     363's plan, which measures its type pairs), so 363 measures a 256-bit sum against a whole-and-fraction
+     split.
    The row's worked case, `DECIMAL(38, 10) + DECIMAL(38, 10)`, is `P = 39`, `S = 10`: class C
    (`(38, 9)`) with precision loss allowed and class K (`(38, 10)`) without.
 5. **The wrapped sum fails the check (class K's lemma).** For `|a|, |b| <= 10^38 - 1` the 128-bit
