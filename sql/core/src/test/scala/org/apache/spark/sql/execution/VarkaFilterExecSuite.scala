@@ -445,7 +445,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
       GreaterThan(dec, Literal.create(new java.math.BigDecimal("1.00"), DecimalType(10, 2)))
     val lines = VarkaFusionReport.predicateLines(And(doubleResidual, decimalConjunct),
       withDouble :+ dec)
-    assert(lines(1) === "(dec > 1.00): fused", lines)
+    assert(lines(1) === "(dec > 1.00BD): fused", lines)
     assert(lines.head.contains("in a filter that also reads integral columns"), lines)
   }
 

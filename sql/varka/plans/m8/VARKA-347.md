@@ -718,3 +718,34 @@ reaches the row path and raises `NUMERIC_VALUE_OUT_OF_RANGE` there, is built in 
 nor this one; the slot table and the condition table are its oracles at the IR level until it
 is. It needs an Arrow source that writes a slot Spark's writer never writes, and is step 6's,
 beside the measurement's own fixtures.
+
+**Correction, 30 October 2026: the coverage answers run below the session.** The paragraph on
+tests above says the coverage differential runs the 17 rows end to end under both consumers on
+every fixture. That was so when it was written; row 509, which reached this branch with the
+merge `27511683ac9`, moved those checks below the session. At `1c75953cab8`
+`VarkaCoverageHarnessSuite` runs each of the 17 rows four ways with no session - the answer
+under both consumers, the null tests as `CASE` conditions, the partition oracle's true, false
+and unknown rows, and the ANSI form - 68 tests, over fixtures the Arrow cache's own iterators
+write from `VarkaCoverageDifferentialSuite.fixtureView`, which still derives `d9`, `d9b`, `d18`
+and `d18b`. The session suite keeps one decimal row, `d9 < d9b` under both consumers, as the
+family's end-to-end path.
+
+**The second review's findings** (30 October 2026, fixed on `varka-347-leaf` and merged here):
+
+1. **The registry separates the lane from the reader.** `UpToPrecision` carries `readerRow`, the
+   row that owes the first operator over the column, and `VarkaTypes.lane(DataType)` answers
+   empty while it is set; every consumer asks that one question. The leaf sets it to 348, which
+   kept `dbl > 1.5 AND dec > 1.0` fusing its double conjunct there (the filter's integral-read
+   test had counted the unread decimal); this branch empties it, and here the decimal conjunct
+   fuses and the double one goes to the row filter, as beside a bigint. The time compiler's
+   decimal arm declines any decimal column by type, the registry's reason first.
+2. **The digit check is one unsigned compare**, `(lo + B) UGT 2B`, proven in
+   `proofs/decimal_slot.smt2` at every precision and for any non-negative long bound. It moves
+   the 17 decimal rows' bytes and 128-bit refusal lists and the option arms' digests, nothing
+   else; the leaf's weight stays 7.
+3. **The decimal segment takes the mapping fault injector**, held by `VarkaDecimalLoadSuite`
+   over a condition root and by `VarkaReproductionEndToEndSuite` over a decimal filter, whose
+   file carries sixteen bytes a row and replays.
+4. `VarkaWithChildrenSuite` names `DecimalColumn` as drawn by no grammar, with the reason; the
+   bound reads Spark's `Decimal.POW_10` and `MAX_LONG_DIGITS`; the stride check runs once after
+   the walk.
