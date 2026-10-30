@@ -5697,6 +5697,31 @@ interpreter, C1 and C2, at row 408's shapes and both widths, from one committed 
 when** the paper's claims are recorded with their pages, the split is committed per shape and
 width, and the record says which of items 60, 92 and 105 the numbers favour, or that none pays.
 
+### Item 125. `TryEval` over a fused subtree
+
+*Added 30 October 2026 from `m8/VARKA-103.md` 8 (open point 3).* Every `try_` function whose operand
+is not one of the arithmetic forms Spark rewrites into a `NULL`-returning node becomes
+`TryEval(child)` (`expressions/TryEval.scala:90-97`, `:135-141`, `:229-235`, `:268-274`), which
+turns any exception raised in its subtree into a null. Rows 342 and 340 decline it by name, and row
+481's `NULL` guard serves a `GuardedRange` only, not a caught exception, so `try_add`,
+`try_subtract`, `try_multiply` and `try_divide` over an interval have no builder, nor `try_eval`
+over a subtree whose nodes raise (349's plan suggests 350 for a decimal one). A kernel can answer it
+where every raising site of the subtree is a guard whose rejection is exact: those guards switch to
+`NULL` mode and the subtree's null mask absorbs them; a subtree with a conservative guard or a site
+no guard covers declines. **Done when** the rule is built over 481's mode, each `try_` entry over an
+interval fuses with a coverage row, and a subtree with an inexact guard is shown to decline.
+
+### Item 126. `d + dt` over a stored `INTERVAL DAY` column
+
+*Added 30 October 2026 from `m8/VARKA-103.md` 8 (open point 4, its option (a)).* The date arm reads
+a stored `INTERVAL DAY` column as its day offset: row 103's day quotient, narrowed to an int under
+the date arm's day guard (`m8/VARKA-103.md` 2.3; `VarkaChronoCompiler.java:527`'s decline today,
+where `ExtractANSIIntervalDays` fuses only inside `d + CAST(i AS INTERVAL DAY)`). The form is not in
+`m5/PLAN.md` 2.38's list, so it is a scope item rather than a milestone 8 row, by the rule that a
+finding becomes a row only when it serves the milestone's done-when. **Done when** `d + dt` over a
+stored `INTERVAL DAY` column fuses with a coverage row, a day beyond the date arm's guard declining
+to the row engine's error.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
