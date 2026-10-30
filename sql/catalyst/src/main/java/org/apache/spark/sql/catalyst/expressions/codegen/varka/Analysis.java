@@ -1249,11 +1249,13 @@ final class Analysis {
   /**
    * Refuses a column read both as a {@link DecimalColumn} and as a {@link ColumnRef}: both are on
    * the long lane, so {@link #registerInput}'s lane rule admits them, but one maps the buffer at
-   * sixteen bytes a row and the other at eight.
+   * sixteen bytes a row and the other at eight. Run once, after every root is analyzed, since
+   * the two reads can sit in different roots; it names the lowest such column.
    */
-  private void requireOneStride(int ordinal) {
-    if ((decimalInputs & valueInputs & 1L << ordinal) != 0) {
-      throw VarkaErrors.illegalArgument("column " + ordinal
+  void requireOneStride() {
+    long both = decimalInputs & valueInputs;
+    if (both != 0) {
+      throw VarkaErrors.illegalArgument("column " + Long.numberOfTrailingZeros(both)
           + " is read both as a decimal and as a long column");
     }
   }
@@ -1295,12 +1297,10 @@ final class Analysis {
       case ColumnRef c -> {
         registerInput(node, c.ordinal(), c.lane());
         valueInputs |= 1L << c.ordinal();
-        requireOneStride(c.ordinal());
       }
       case DecimalColumn c -> {
         registerInput(node, c.ordinal(), c.lane());
         decimalInputs |= 1L << c.ordinal();
-        requireOneStride(c.ordinal());
       }
       case LiteralSlot l -> {
         if (l.index() < 0 || l.index() >= numLiterals) {

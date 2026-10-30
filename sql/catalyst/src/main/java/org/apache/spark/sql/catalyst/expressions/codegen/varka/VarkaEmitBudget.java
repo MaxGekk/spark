@@ -606,8 +606,9 @@ final class VarkaEmitBudget {
       // A boolean column and a constant are leaves: a data word read and a constant, no lane call.
       case ColumnRef _, LiteralSlot _, BoolColumn _, CondConst _ -> 0;
       // A column's load is paid as a leaf's, and the rest per node: the second of its two loads,
-      // the two shuffles that take the low and the high words, the sign shift and the three
-      // compares. The ORs that gather the compares are mask calls, not lane calls.
+      // the two shuffles that take the low and the high words, the sign shift and its compare,
+      // and the add and unsigned compare of the digit check. The OR that gathers the compares
+      // is a mask call, not a lane call.
       case DecimalColumn _ -> 7;
       // One lanewise op, plus the four the sign test costs where there is one. A wrapping narrow
       // node is the op and, at the int lane where it reduces (Analysis.wrapAt), the shift pair:

@@ -1569,7 +1569,11 @@ final class VarkaBodyEmitter {
     }
   }
 
-  /** A decimal column's data segment, {@code length * 16} bytes: one Arrow slot a row. */
+  /**
+   * A decimal column's data segment, {@code length * 16} bytes: one Arrow slot a row. The fault
+   * injector of a wrong mapping (VARKA-315) moves it as {@link #emitSizes} moves
+   * {@code dataBytes}, so a wrong decimal mapping is caught as any other one is.
+   */
   private static void loadDecimalSegment(
       CodeBuilder cb, Analysis analysis, int index, int destSlot) {
     cb.aload(P_SRC_DATA);
@@ -1579,6 +1583,12 @@ final class VarkaBodyEmitter {
     cb.i2l();
     cb.loadConstant(VarkaVectorWalk.DECIMAL_SLOT_BYTES);
     cb.lmul();
+    // At zero, the default, nothing is emitted.
+    int misdescribed = analysis.options.misdescribeDataBytes();
+    if (misdescribed != 0) {
+      cb.loadConstant((long) misdescribed);
+      cb.ladd();
+    }
     cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
     cb.astore(destSlot);
   }

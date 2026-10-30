@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -29,6 +30,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.apache.arrow.vector.types.FloatingPointPrecision;
@@ -182,16 +184,33 @@ public final class VarkaTypesSuite {
   }
 
   @Test
-  @DisplayName("a decimal is on the long lane up to precision 18 with a scale of zero or more, and "
-      + "declines naming row 359 above it and the decision for a negative scale")
+  @DisplayName("a decimal has the long lane up to precision 18 with a scale of zero or more, is "
+      + "read on it once its reader lands, and declines naming row 359 above it and the decision "
+      + "for a negative scale")
   void decimalLaneReadsThePrecision() {
+    var up = (Admission.UpToPrecision) VarkaTypes.info(VarkaTypeId.DECIMAL).admission();
+    // The same admission with its reader landed: the one component the reader empties.
+    var landed = new Admission.UpToPrecision(up.lane(), up.maxPrecision(), up.widerRow(),
+        Optional.empty());
     for (int p = 1; p <= 18; p++) {
       for (int s : new int[] {0, p / 2, p}) {
         DecimalType d = DataTypes.createDecimalType(p, s);
-        assertEquals(LaneType.LONG, VarkaTypes.lane(d).orElse(null), d.sql());
-        assertTrue(VarkaTypes.declineReason(d).isEmpty(), d.sql());
+        assertTrue(up.admits(d) && landed.reads(d), d.sql());
+        // While a row owes the reader, no kernel reads the column: every consumer asks
+        // `lane(DataType)`, which answers empty with the row named.
+        assertEquals(up.readerRow().isEmpty(), up.reads(d), d.sql());
+        if (up.readerRow().isPresent()) {
+          assertTrue(VarkaTypes.lane(d).isEmpty(), d.sql());
+          assertEquals("a " + d.simpleString() + " column: no operator over a decimal is built "
+              + "yet, row " + up.readerRow().get() + "'s",
+              VarkaTypes.declineReason(d).orElseThrow(), d.sql());
+        } else {
+          assertEquals(LaneType.LONG, VarkaTypes.lane(d).orElse(null), d.sql());
+          assertTrue(VarkaTypes.declineReason(d).isEmpty(), d.sql());
+        }
       }
     }
+    assertFalse(landed.reads(DataTypes.createDecimalType(19, 0)));
     DecimalType wide = DataTypes.createDecimalType(30, 4);
     assertTrue(VarkaTypes.lane(wide).isEmpty());
     assertTrue(VarkaTypes.lane(DataTypes.createDecimalType(19, 0)).isEmpty());
@@ -210,7 +229,8 @@ public final class VarkaTypesSuite {
     assertTrue(VarkaTypes.lane(negative).isEmpty());
     assertEquals("a decimal(10,-2) column: a negative scale is declined everywhere (the "
         + "milestone plan's 2.8)", VarkaTypes.declineReason(negative).orElseThrow());
-    // The id-level answer, which carries no precision, is the lane of the admitted ones.
+    // The id-level answer, which carries no precision and asks for no reader, is the lane the
+    // admitted ones have.
     assertEquals(LaneType.LONG, VarkaTypes.info(VarkaTypeId.DECIMAL).lane().orElse(null));
   }
 
