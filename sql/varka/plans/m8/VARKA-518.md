@@ -269,6 +269,12 @@ slots for every pull request, more for those of 2.3's rule.
 
 ## 8. Questions for the owner
 
+*Settled, the lead, 30 October 2026:* point 1, the tree suites are recorded in the master record
+only, off the Build's critical path, and the audit run checks them like the others; point 2, the
+threshold stays at 20; point 3, the audit run is dispatched by hand until row 522's weekly run
+exists, then runs weekly; point 4, a pull request's reuse of master's record is this row's, and
+row 508's wiring may share the lookup later; point 5, the hold is recorded as the cost estimate.
+
 1. **The tree suites.** `VarkaSmallTreeSuite`, `VarkaIrFuzzSuite` and
    `VarkaCoverageCompositionFuzzSuite` cost 423.3 laptop seconds to record against 4980 saved
    (`VARKA-518-replan.txt` 3), but the fuzzers draw options per case, and whether a test-level
