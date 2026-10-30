@@ -147,9 +147,13 @@ value)`, a constant the emitter materialises with `loadConstant` as `emitBitCoun
 mask or a shift count stays a constant in C2's graph and `vpmuludq` is kept (361's item 0.7). The
 emitter emits a composite by lowering it and walking the result with its ordinary per-node
 emission, the shared limb products parked once by the walk's shared-node rule; the printer
-renders the same result. The node keeps its place in the shape key, the budget and the
-evaluator, since the lowering runs inside the emitter, after the key. `faults` is a set of
-planted faults, empty everywhere but the planted tests (2.7). Three options were weighed:
+renders the same result. A `BitOp` shift whose right operand is a `WordConst` is emitted as
+`lanewise(op, int)` with the count a constant, and an `AND` with one as `and(long)`, the forms
+361's network is planned in; and the two words' lowerings share their limb products only if the
+walk's shared-node rule matches the lowered nodes by value, which records give. The node keeps
+its place in the shape key, the budget and the evaluator, since the lowering runs inside the
+emitter, after the key. `faults` is a set of planted faults, empty everywhere but the planted
+tests (2.7). Three options were weighed:
 
 - **(a) lower to primitive nodes**, as above. One source, the primitives' templates reused, and
   `VarkaReference` can evaluate the lowered graph against the composite's own answer.
@@ -234,8 +238,10 @@ The specification side is written by hand, once, and never from `VarkaVectorIR`:
   364, each with its Spark source line.
 - **`decimal_spec.smt2`**, a hand-written prelude of `spec.dec.*` definitions over exact integers
   stating that prose, inserted by `dev/varka_prove.sh` after `java.smt2` into a file whose header
-  asks for it; and **`decimal_spec_check.smt2`**, rendered by `VarkaProofFiles` from Spark's own
-  `Decimal` over boundary operands, as `java_check.smt2` holds `java.smt2` to the JVM. So the
+  asks for it, and left out of the script's run list as `java.smt2` is (`dev/varka_prove.sh:358`),
+  since a prelude has no checks; and **`decimal_spec_check.smt2`**, rendered by `VarkaProofFiles`
+  from Spark's own `Decimal` over boundary operands, as `java_check.smt2` holds `java.smt2` to the
+  JVM. So the
   specification is held to Spark and to nothing of Varka's.
 - **The lemmas that are not about the kernel** stay in their rows' files: the ring identities and
   ranges of 2.4 (hand), 363's magic constants per `(k, bound)` and 350's `5^k` divisions
@@ -303,7 +309,7 @@ the file prints.
 |---|---|---|
 | 350 | the rescale up multiplied before its `10^p2` check (Trino) | check 2 under ANSI, check 3 under LEGACY and TRY, at `184467440737095517` from `(18, 0)` to `(18, 2)` |
 | 360 | the same order at class K's guard | check 2 under ANSI, check 3 under LEGACY and TRY |
-| 361 | the middle column summed in one word (QuestDB) | check 4's carry layer, witnesses from `results/VARKA-361-planted-carry.txt` |
+| 361 | the middle column summed in one word (QuestDB) | check 4's carry layer, witnesses from `results/VARKA-361-planted-carry.txt` (branch `varka-360-361-plan` until it merges) |
 | 362 | column 1 summed in one word | check 4's carry layer, a witness of each sign class from `results/VARKA-362-planted-carry.txt` |
 | 363 | two products of one column of `N * c` in one word | check 4's carry layer at a `(k, bound)` where the sum can pass `2^64` |
 
