@@ -83,6 +83,8 @@ public final class VarkaReference {
     return switch (node) {
       case ColumnRef c -> isNull[c.ordinal()] ? OptionalInt.empty()
           : OptionalInt.of(row[c.ordinal()]);
+      case DecimalColumn c ->
+          throw new IllegalArgumentException("a decimal column is on the long lane: " + c);
       case LiteralSlot l -> OptionalInt.of(lits[l.index()]);
       case AddDays(var days, var offset) -> both(days, offset, row, isNull, lits, (d, o) -> d + o);
       case SubDays(var days, var offset) -> both(days, offset, row, isNull, lits, (d, o) -> d - o);
@@ -189,6 +191,10 @@ public final class VarkaReference {
         case FALSE -> OptionalInt.of(0);
         case UNKNOWN -> OptionalInt.empty();
       };
+      // Two bitmaps, not a lane value: a test answers it by cond(), its data bit the known-true
+      // and its validity bit the known.
+      case BoolOutput n -> throw new IllegalArgumentException(
+          "boolean output " + n + " evaluated as a value; answer its condition");
       case Cond c -> throw new IllegalArgumentException("condition " + c + " evaluated as a value");
     };
   }
@@ -434,6 +440,11 @@ public final class VarkaReference {
     return switch (node) {
       case ColumnRef c -> isNull[c.ordinal()] ? OptionalLong.empty()
           : OptionalLong.of(row[c.ordinal()]);
+      // The unscaled value, the slot's low word. Whether the slot holds a value of the type at
+      // all reads its high word, which a row of lane values does not carry; the slot table of
+      // VarkaDecimalLoadSuite checks that against Spark's column reader.
+      case DecimalColumn c -> isNull[c.ordinal()] ? OptionalLong.empty()
+          : OptionalLong.of(row[c.ordinal()]);
       case LiteralSlot l -> OptionalLong.of(lits[l.index()]);
       case IntArith n -> longArith(n, row, isNull, lits);
       case IntNeg n -> {
@@ -483,6 +494,8 @@ public final class VarkaReference {
         case FALSE -> OptionalLong.of(0);
         case UNKNOWN -> OptionalLong.empty();
       };
+      case BoolOutput n -> throw new IllegalArgumentException(
+          "boolean output " + n + " evaluated as a value; answer its condition");
       case BoundedDivide n -> throw new IllegalArgumentException(
           "a bounded division is an int-lane node: " + n);
       // Java's long operators: the shifts mask their count to six bits.

@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -45,6 +46,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -252,6 +254,9 @@ public final class VarkaIrGrammar {
   public static Bounds boundsOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef _ -> new Bounds(COLUMN_BOUND, 0L);
+      // The grammar draws no decimal column (VARKA-347's own sequence is a later step's).
+      case DecimalColumn _ ->
+          throw new IllegalArgumentException("the grammar draws no decimal column: " + node);
       case LiteralSlot _ -> new Bounds(LITERAL_BOUND, 0L);
       case AddDays n -> shift(n.days(), n.offset());
       case SubDays n -> shift(n.days(), n.offset());
@@ -316,6 +321,8 @@ public final class VarkaIrGrammar {
       case BitCount n -> new Bounds(Long.SIZE, guard(n.child()));
       // A condition as a value is 0 or 1; its condition's operands may hold producers.
       case CondValue n -> new Bounds(1L, guard(n.cond()));
+      // A root of two bitmaps: no magnitude, only the producers its condition may hold.
+      case BoolOutput n -> new Bounds(1L, guard(n.cond()));
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `guard` picks up.

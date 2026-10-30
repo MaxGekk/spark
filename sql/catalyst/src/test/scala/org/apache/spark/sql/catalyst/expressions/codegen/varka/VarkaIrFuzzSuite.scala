@@ -985,11 +985,17 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // (`VarkaEmitterNullSafeSuite`, both lanes, both bodies, three widths) and by the coverage
     // rows' composition fuzzer until a grammar production is taken with the next refit
     // (`VARKA-336.md` 6 and 11).
-    // The boolean-column nodes (VARKA-331) and the condition as a value (VARKA-460) are out for
-    // the same reason: they are covered by `VarkaEmitterBoolSuite` and the coverage rows, and a
-    // grammar production is a row of the refit that reprices the model.
+    // The boolean-column nodes (VARKA-331), the condition as a value (VARKA-460) and the
+    // boolean output (VARKA-27) are out for the same reason: they are covered by
+    // `VarkaEmitterBoolSuite` and the coverage rows, and a grammar production is a row of the
+    // refit that reprices the model (VARKA-352).
+    // The decimal column (VARKA-347) is out for the same reason, and because a row of lane values
+    // carries no high word for its check: its slot table is `VarkaDecimalLoadSuite`'s, and its
+    // fuzz sequence, on a seed of its own so that no shape here moves, is a later step of the row
+    // (`VARKA-347.md` 3 item 5).
     val missing = permitted -- seen - "NarrowLane" - "WidenLane" - "NullSafeEqual" -
-      "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue"
+      "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
+      "BoolOutput" - "DecimalColumn"
     assert(missing.isEmpty,
       s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +
         "state here why the node type is deliberately out of the fuzzer's reach")
@@ -1016,7 +1022,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
     // The null-safe equality is out of this corpus for the reason the int one gives above.
     val missing = laneGeneric.map(_.getSimpleName) -- seen - "NullSafeEqual" - "BoolColumn" -
-      "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue"
+      "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" - "BoolOutput"
     assert(missing.isEmpty,
       s"the long-lane generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an " +
         "arm to LongShapes, or state here why the node type is deliberately out of its reach")
