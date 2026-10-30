@@ -47,8 +47,8 @@ From the code (25 October 2026, re-checked 30 October 2026; paths under
 `sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/`):
 
 1. **The five special cases, and nothing else depends on them.**
-   - (a) `varka/VarkaKernelPlan.java:179-181` and its walk at `:226-258` (javadoc `:226-240`, the
-     two methods `:241-258`): `emissionLane` forces the int lane for a narrow non-`WRAP` `MUL`,
+   - (a) `varka/VarkaKernelPlan.java:179-181` and its walk at `:226-259` (javadoc `:226-240`, the
+     two methods `:241-259`): `emissionLane` forces the int lane for a narrow non-`WRAP` `MUL`,
      and `kernelLane` (`:203-210`) joins a native narrow root beside it at the int lane (989-9).
    - (b) `VarkaNodeCompiler.java:1119`: `&& !narrow` exempts it from the checked-multiply decline.
    - (c) `varka/Analysis.java:676-680`: the clause that gives a narrow multiply `INT_OVERFLOW`.
@@ -75,8 +75,8 @@ From the code (25 October 2026, re-checked 30 October 2026; paths under
    no `NULL` disposal - and in the scratch they park in (`intArithTmp`, three slots, against
    `guardTmp`, one).
 4. **`emitOverflowMask`'s `FAIL` arm is tied to `INT_OVERFLOW`.** It throws unless the node's
-   registered refusal is `INT_OVERFLOW` (`VarkaVectorWalk.java:903-905`, the check below the
-   comment at `:901-902`): a collect the refusal map does not declare would find no accumulator.
+   registered refusal is `INT_OVERFLOW` (`VarkaVectorWalk.java:902-906`, the comment at
+   `:902-903` and the check at `:904-906`): a collect the refusal map does not declare would find no accumulator.
    So a guard can hand its mask to that arm only when `Analysis` registered it as `INT_OVERFLOW`,
    which is what 3.2's emit-time lean does; an unregistered guard must collect through
    `emitGuardCollect` or emit no compare at all.
