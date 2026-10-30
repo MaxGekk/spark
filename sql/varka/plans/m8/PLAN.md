@@ -294,7 +294,11 @@ and with the scale a per-column constant Eisel and Lemire's algorithm needs a ta
 per kernel; their Theorem 1, Corollary 2 and Lemma 3 give an exact result for every unscaled long
 with no fallback while `s <= 27`, at about eight limb multiplies and forty lane operations, taken
 per batch when the guard mask is not all true, so the 64-bit form fuses every value for both
-targets; the abort case exists only for `s >= 28`, which must decline. Above precision 18 (364),
+targets; Varka declines `s >= 28` by choice; the papers show the algorithm's abort never fires
+(Mushtak and Lemire 2023, section 4; *30 October 2026, from row 366's plan on branch
+`varka-350-366-plan`, with which the papers' transcription lands*: this said "the abort case exists
+only for `s >= 28`, which must decline"; row 364, whose two-pass arm inherits the decline, is
+affected). Above precision 18 (364),
 the exact arm runs twice on the top 64 bits of `|u|`, as `w'` and `w' + 1`, accepts when both give
 one double and declines the lane otherwise, about one in a thousand by the reading's estimate.
 
