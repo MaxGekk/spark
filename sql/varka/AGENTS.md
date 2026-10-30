@@ -165,10 +165,10 @@ subject is the defaults' emitted structure takes the tag `PinsDefaults`; a test
 whose subject is what C2 makes of a kernel takes `C2Code`, which runs it only
 under a configuration that changes what C2 is given (`VarkaMatrixRuns.C2_OPTIONS`);
 and an answer test a configuration breaks by design gets a line in
-`sql/varka/matrix/skips.tsv` with its reason. A pull request's CI runs one
-configuration - an option its diff names, or one its branch name hashes to - and
-blames the pull request only for failures its merge base does not share; the
-weekly `varka-option-matrix` workflow runs all of them. There a configuration
+`sql/varka/matrix/skips.tsv` with its reason. A Varka pull request's Build runs
+the suites at the defaults only: its option configurations are checked by the
+`varka-option-matrix` workflow dispatched on its branch, which runs all of them,
+as the weekly run does. There a configuration
 runs a SQL test only where the Build of the same commit recorded that it moves
 something the test compiled or emitted (`VarkaTestReach`); a test the record
 lacks, or one `skips.tsv` names under the configuration, still runs. An option
