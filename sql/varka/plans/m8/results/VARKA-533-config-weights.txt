@@ -10,7 +10,8 @@
 == the per-configuration file
 dev/varka_matrix_bins.py times --reach <record> --per-configuration <file> on each run alone:
   run 40961304094: 5475 (configuration, suite) whole runs; its suite-seconds output is the same
-  file the run's own report job wrote
+  as the VARKA-508 replay's `times --reach` over this run (the file the run's own report job
+  wrote differs from it)
   run 40956699711: 5718 whole runs
 sql/varka/matrix/config-suite-seconds.tsv: 5718 pairs, 5475 in both runs, 243 in one. Where both
 runs have a pair it holds their mean, which with two values is the median; where one has it, that
