@@ -102,16 +102,28 @@ jobs:
         auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
         if ! git -c http.extraheader="AUTHORIZATION: basic $auth" \
             push "https://github.com/$FORK.git" "$upstream:refs/heads/master"; then
-          # A refusal over workflow files is GitHub's; any other is git's, said above.
+          # GitHub refuses GITHUB_TOKEN a push whose range changes workflow files; any other
+          # refusal is git's own, such as the fork's master moving since the fetch.
           cause="git's message above says why"
           if [ "$workflows" -gt 0 ]; then
-            cause="the range changes $workflows files under .github/workflows, which GitHub"
-            cause+=" refuses to GITHUB_TOKEN"
+            cause="most likely because the range changes $workflows files under"
+            cause+=" .github/workflows, which GitHub refuses to GITHUB_TOKEN; git's message"
+            cause+=" above says for certain"
           fi
-          echo "::error::the push of $upstream to the fork's master was refused: $cause." \
-            "To sync by hand: git fetch https://github.com/$UPSTREAM.git master &&" \
-            "git push git@github.com:$FORK.git FETCH_HEAD:refs/heads/master, then" \
-            "dispatch this workflow, which builds the new head."
+          echo "::error::the push of $upstream to the fork's master was refused, $cause." \
+            "Nothing was pushed. Sync by hand with the commands printed in this step's log."
+          echo "The push was refused, $cause. To sync by hand, in a clone of either"
+          echo "repository whose remote origin is $UPSTREAM and whose remote fork is $FORK:"
+          echo
+          echo "  git fetch origin master && git fetch fork master"
+          echo "  git merge-base --is-ancestor fork/master origin/master && echo fast-forward"
+          echo "  git push fork origin/master:refs/heads/master"
+          echo "  gh workflow run varka-master.yml --repo $FORK --ref master"
+          echo
+          echo "Push only after the second command prints fast-forward, and never with --force."
+          echo "The push needs your own credentials: SSH, or over HTTPS a token with the"
+          echo "workflow scope. The last command builds the new head; the next hourly run"
+          echo "dispatches that Build too, when the head has none yet."
           exit 1
         fi
         echo "the fork's master moved from $fork to $upstream"
