@@ -43,6 +43,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -586,12 +588,61 @@ public final class VarkaDecimalLoadSuite {
         () -> new DecimalColumn(0, LaneType.LONG, 0));
     var both = List.<VarkaVectorIR>of(new DecimalColumn(0, LaneType.LONG, 9),
         new ColumnRef(0, LaneType.LONG));
-    try {
-      VarkaEmitterFixtures.emit(both, 1, 0, VarkaMatrixRuns.BASE);
-      fail("one column read at two strides was emitted");
-    } catch (IllegalArgumentException e) {
-      assertTrue(e.getMessage().contains("both as a decimal and as a long column"),
-          e.getMessage());
+    // The check runs once after the walk and names the lowest column read at two strides, here
+    // column 1 although the walk meets column 2's second read first, and whether the two reads
+    // share a root or not.
+    var twoColumns = List.<VarkaVectorIR>of(new ColumnRef(2, LaneType.LONG),
+        new DecimalColumn(2, LaneType.LONG, 9),
+        new IntArith(IntOp.ADD, Overflow.WRAP, new DecimalColumn(1, LaneType.LONG, 18),
+            new ColumnRef(1, LaneType.LONG)));
+    for (var roots : List.of(both, twoColumns)) {
+      int inputs = roots == both ? 1 : 3;
+      String column = roots == both ? "column 0 " : "column 1 ";
+      try {
+        VarkaEmitterFixtures.emit(roots, inputs, 0, VarkaMatrixRuns.BASE);
+        fail("one column read at two strides was emitted");
+      } catch (IllegalArgumentException e) {
+        assertTrue(e.getMessage().contains(column + "is read both as a decimal and as a long "
+            + "column"), e.getMessage());
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("the mapping fault injector moves a decimal column's segment: mapped short the last "
+      + "group's load fails, mapped long the sanitizer names the column")
+  void misdescribedMapping() {
+    // A condition root writes its selection bitmap alone, so the decimal column's is the only
+    // data segment the kernel maps, and a failure can only be that segment's.
+    List<VarkaVectorIR> roots = List.of(new Compare(CompareOp.GT,
+        new DecimalColumn(0, LaneType.LONG, 9), new LiteralSlot(0, LaneType.LONG)));
+    // A whole number of lane groups at every width: the dense loop's last loads end at the
+    // batch's last byte, which a short mapping cuts.
+    int length = 64;
+    for (int lanes : WIDTHS) {
+      for (boolean masked : new boolean[] {false, true}) {
+        Batch b = batch(length, 9, masked, 31L * lanes + (masked ? 1 : 0));
+        var base = VarkaMatrixRuns.BASE.withLanesOverride(lanes);
+        try (BufferAllocator allocator =
+                 ArrowUtils.rootAllocator().newChildAllocator("dec-fault", 0, Long.MAX_VALUE);
+             DecimalVector v = vector(b, 9, allocator)) {
+          String at = lanes + " lanes, masked " + masked;
+          VarkaFusedKernel exact = kernel(roots, 1, 1, base).kernel();
+          assertEquals(0, run(exact, v, new long[] {0L}).status(), at);
+          VarkaFusedKernel shortMapped =
+              kernel(roots, 1, 1, base.withMisdescribeDataBytes(-4)).kernel();
+          assertThrows(IndexOutOfBoundsException.class,
+              () -> run(shortMapped, v, new long[] {0L}), at);
+          if (VarkaMemorySanitizer.ENABLED) {
+            VarkaFusedKernel longMapped =
+                kernel(roots, 1, 1, base.withMisdescribeDataBytes(4096)).kernel();
+            var violation = assertThrows(VarkaMemoryViolation.class,
+                () -> run(longMapped, v, new long[] {0L}), at);
+            assertTrue(violation.getMessage().contains("the nearest is input data 0"),
+                violation.getMessage());
+          }
+        }
+      }
     }
   }
 

@@ -531,10 +531,10 @@ final class VarkaVectorWalk {
    * to the {@code 2 * lanes} longs of the remaining rows, so neither reads past the batch.
    *
    * <p>The check condemns a lane whose high word is not {@code lo >> 63} or whose low word is
-   * outside {@code [-(10^p - 1), 10^p - 1]}: the odd shuffle, a shift and three compares, ORed
-   * into one mask, which {@link #emitGuardCollect} qualifies by the column's validity word in a
-   * masked body, so a null slot never declines, and folds into the body's accumulator, tested once
-   * the body is done.
+   * outside {@code [-(10^p - 1), 10^p - 1]}: the odd shuffle, a shift, an add and two compares,
+   * the second unsigned, ORed into one mask, which {@link #emitGuardCollect} qualifies by the
+   * column's validity word in a masked body, so a null slot never declines, and folds into the
+   * body's accumulator, tested once the body is done.
    */
   private static void emitDecimalLoad(CodeBuilder cb, DecimalColumn c, boolean dense,
       Analysis analysis, Slots s) {
@@ -597,16 +597,17 @@ final class VarkaVectorWalk {
     cb.loadConstant((long) (Long.SIZE - 1));
     cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
     cb.invokevirtual(lane.vector, "compare", lane.compareVV);
-    // | lo > 10^p - 1 | lo < -(10^p - 1)
+    // | (lo + B) UGT 2B, with B = 10^p - 1: lo outside [-B, B] in one unsigned compare. A lo
+    // inside moves to [0, 2B]; one above B lands past 2B, wrapping or not, and one below -B
+    // wraps to at least 2^63 + B, past 2B too. It holds for any bound that is a non-negative
+    // long (decimal_slot.smt2), and 2B fits one at precision 18 or less.
     long bound = c.bound();
     cb.aload(low);
-    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+    cb.getstatic(VECTOR_OPERATORS, "ADD", VO_ASSOCIATIVE);
     cb.loadConstant(bound);
-    cb.invokevirtual(lane.vector, "compare", lane.compareVI);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.aload(low);
-    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(-bound);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
+    cb.getstatic(VECTOR_OPERATORS, "UGT", VO_COMPARISON);
+    cb.loadConstant(2 * bound);
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     emitGuardCollect(cb, c, dense ? null : s.wordRef.get(c), dense, analysis, s);

@@ -25,6 +25,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.function.ToIntFunction;
 
+import org.apache.spark.sql.types.Decimal;
+
 /**
  * The vector IR a fused Varka loop is emitted from. A node is a value over
  * int32 lanes; {@link VarkaLoopEmitter} walks a tree of them post-order, leaving intermediates on
@@ -477,8 +479,12 @@ public sealed interface VarkaVectorIR
    * bounds are constants in the code, take two classes.
    */
   record DecimalColumn(int ordinal, LaneType lane, int precision) implements VarkaVectorIR {
-    /** The widest precision whose unscaled values fit a long: {@code 10^18 - 1 < 2^63}. */
-    public static final int MAX_LONG_PRECISION = 18;
+    /**
+     * The widest precision whose unscaled values fit a long, {@code 10^18 - 1 < 2^63}: Spark's own
+     * {@code Decimal.MAX_LONG_DIGITS}, the precision up to which its readers and writers keep an
+     * unscaled long.
+     */
+    public static final int MAX_LONG_PRECISION = Decimal.MAX_LONG_DIGITS();
 
     public DecimalColumn {
       Objects.requireNonNull(lane, "lane");
@@ -493,15 +499,11 @@ public sealed interface VarkaVectorIR
     }
 
     /**
-     * The largest unscaled value of the precision, {@code 10^precision - 1}; its negation is the
-     * smallest.
+     * The largest unscaled value of the precision, {@code 10^precision - 1}, from Spark's own
+     * table of powers; its negation is the smallest.
      */
     public long bound() {
-      long power = 1L;
-      for (int i = 0; i < precision; i++) {
-        power *= 10L;
-      }
-      return power - 1L;
+      return Decimal.POW_10()[precision] - 1L;
     }
   }
 
