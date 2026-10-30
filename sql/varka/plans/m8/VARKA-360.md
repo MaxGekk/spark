@@ -98,27 +98,37 @@ text is the milestone plan's 2.8 ("360, add and subtract") and waves F3 and G3 o
 
 - **The uncapped shapes need no check and no lemma** (item 4): the type proves the exact result
   fits, so they are mode-free like row 349's arithmetic. The lemma of 2.8 belongs to class K.
-- **Class K needs no division** and can land here (item 5), after row 481's `NULL` mode, with a
-  guard on a rescaled operand; class C is 363's. The row text puts all capped shapes with 363; the
-  lead decides (section 8).
+- **The capped shapes are split, departing from the row's text.** The row lands "the capped
+  shapes with 363 (the 129th bit feeding its unsigned division, or the whole-and-fraction split)".
+  This plan splits them: class K, capped with the scale kept, lands here as 360c after row 481's
+  `NULL` mode, with no 129th bit and no division, since a wrapped sum fails the `10^38` check
+  (item 5), reusing 359's check and 481's `NULL` mode for the null, with a guard on a rescaled
+  operand; class C, capped with the scale cut, stays 363's, the only capped shapes that need the
+  129th bit and the division. Decided by the lead on 30 October 2026.
 - **The worked test is class K without precision loss and class C with it** (item 4): it lands
   here under `allowPrecisionLoss = false` and with 363 under the default.
-- **The rescale-up is a widening multiply** (item 6): `x * 10^k` into 128 bits is row 361's
-  `WideMul` with constant limbs (`VARKA-361.md` 2.2), so every unequal-scale shape and every
-  `BIGINT` with a scaled decimal depends on it. Who lands it is section 8's first point.
-- **The infallible decimal widening casts** (item 7) are claimed here; 364's text also covers
-  them. **The integral casts to `(3, 0)`, `(5, 0)` and `(10, 0)`** are 64-bit and also in row
-  350's text, as row 349's plan flagged (its section 7).
+- **The rescale-up is a widening multiply** (item 6): `x * 10^k` into 128 bits is the node
+  `WideMul` of `VARKA-361.md` 2.2 with a constant multiplier, so every unequal-scale shape and
+  every `BIGINT` with a scaled decimal depends on it. This row lands the node with constant
+  multipliers (360b) and row 361 adds the column-by-column product; row 104's option C takes the
+  same node (section 5).
+- **The infallible decimal widening casts** (item 7) are this row's: the F3 wave row's own words
+  are "360's uncapped add and widening casts". 364 keeps the casts that round or can fail.
+- **The integral casts to `(3, 0)`, `(5, 0)` and `(10, 0)` are row 350's**: they are 64-bit
+  values, and this row declines them naming 350 until 350 builds them; only `(20, 0)` is this
+  row's (section 7 records the overlap in the owner's text).
 
 ## 1. Goal and non-goal
 
 `+`, `-`, `try_add` and `try_subtract` over two decimals with a result above precision 18 and the
 scale kept (classes U and K), as the lane pair, with the carry or borrow from an unsigned compare
 or its arithmetic equal, the coarser operand rescaled up with a named overflow defence, class K's
-`10^38` check nulling or declining by mode; and the widening casts that feed them: an integral to
-its coercion type, a decimal to a wider one by sign extension and an infallible rescale up. Not
-this row: class C (363), a pair times a pair (362), the casts down or fallible (364, 350), the
-pair's store and load (359), division (out of the milestone).
+`10^38` check nulling or declining by mode; the constant-multiplier `WideMul` the rescale needs;
+and the widening casts that feed them: a `BIGINT` to `DECIMAL(20, 0)`, a decimal to a wider one by
+sign extension and an infallible rescale up. Not this row: class C (363), a pair times a pair
+(362), the column product (361), the integral casts to `(3, 0)`, `(5, 0)` and `(10, 0)` (350),
+the casts down or fallible (364, 350), the pair's store and load (359), division (out of the
+milestone).
 
 ## 2. Design
 
@@ -157,6 +167,9 @@ From the node's resolved type `(Pr, Sr)` and the operands' `(p_i, s_i)`, with `S
 | `19 <= P <= 38` | U | built, mode-free |
 | `P > 38`, `Sr = S` | K | built, the check by mode (2.5) |
 | `P > 38`, `Sr < S` | C | declines naming 363 |
+
+The split of the capped shapes into K here and C with 363 departs from the row's text, which
+lands every capped shape with 363; section 0's "What differs" states it.
 
 The operands are values of the compiler's decimal kinds: row 348's 64-bit `Scaled`, an integral
 under its coercion cast (a 64-bit value whatever its declared precision), or 359's `Pair`. A
@@ -217,9 +230,10 @@ internals, is the same pair: its guard-the-inputs form over a pair, then this re
 
 ### 2.6 The widening casts
 
-- **An integral to its coercion type**: `(3, 0)`, `(5, 0)` and `(10, 0)` are row 348's `Scaled`
-  over the integral, `WidenLane` from the int and narrow lanes; `(20, 0)` is the long as a 64-bit
-  value of a precision-20 type, a pair only at a pair operator's use. No check (item 0.6).
+- **An integral to its coercion type**: `(20, 0)` is the long as a 64-bit value of a
+  precision-20 type, a pair only at a pair operator's use, with no check (item 0.6). `(3, 0)`,
+  `(5, 0)` and `(10, 0)` are row 350's 64-bit casts: an operator here that meets one declines
+  naming 350 until 350 lands, then consumes 350's value as a 64-bit operand.
 - **A decimal to a wider one**, `s' >= s` and `p + (s' - s) <= p'`, with `p' >= 19`: the rescale of
   2.4's class U form, then the pair; with `s' = s` the sign extension alone. A fallible or
   narrowing cast declines naming 364 (above 18) or 350.
@@ -281,6 +295,16 @@ warm-up's long block gains the carry forms, held by `VarkaWarmupReachSuite`.
 8. **The differential, the matrix, the fuzzers** (the IR fuzzer's decimal sequence gains the two
    carry forms), and the generated files in `ADDING_A_TYPE.md`'s order, no existing shape's bytes
    moving.
+9. **`WideMul` with constant multipliers (360b)**: `VARKA-361.md` 3's product table and random
+   `BigInteger` cross-check restricted to a constant operand, `10^k` for `k = 0..18` and a limb of
+   exactly `0xFFFFFFFF`, over operands of both signs, and the constant-limb section of its SMT
+   proofs. Its planted carry fault (`VARKA-361.md` 3.1) runs under the test flag with the
+   one-negative case included: a negative operand times a positive constant is one negative
+   operand, which `results/VARKA-361-planted-carry.txt` finds the planted order also gets wrong
+   for column products. The powers of ten have a small high limb and may never reach the wrapped
+   middle column, so the planted test drives the node at the IR level with a constant whose two
+   limbs are both large, `Long.MAX_VALUE`, against negative operands. Rows 361 and 362's text
+   names "two negative operands" only; that text is the owner's and is flagged here, not edited.
 
 ## 4. The baseline, and predictions
 
@@ -307,13 +331,17 @@ Predictions, registered before the spike and the build:
 
 1. **The baseline addition** (4), with 361's.
 2. **The spike loops** (2.1), with 359's spike and 361's loops; the verdict in section 10.
-3. **360a**: class U at one scale, the integral casts and the scale-keeping widening casts,
+3. **360a**: class U at one scale, the `(20, 0)` cast and the scale-keeping widening casts,
    `decimalCarry`, the proofs of the carry, the borrow, the bounds and the sign extension, tests 1,
    3 and 4, the filter coverage rows. Needs 359a.
-4. **360b**: the rescale-up shapes of class U and the infallible rescaling casts, with `WideMul`
-   by section 8's first answer.
-5. **360c, after row 481's `NULL` mode**: class K, its guard and check, test 2, if section 8's
-   second point keeps it here.
+4. **360b, `WideMul` with constant multipliers**: the node (`VARKA-361.md` 2.2 and 2.3) with one
+   and two constant limbs, its reference arm, grammar and parse arm, `decimalSignWord`, the
+   constant-limb proofs and tests 9, then the rescale-up shapes of class U and the infallible
+   rescaling casts. Row 361 adds the column-by-column product to the same node, and row 104's
+   option C takes the same node for its checked `BIGINT` multiply, so there is one helper, as
+   `VARKA-104.md` 3.3 asks.
+5. **360c, after row 481's `NULL` mode**: class K, its guard, 359's `10^38` check and 481's `NULL`
+   mode for the null, test 2.
 6. **360d, after 359b's store**: the projections, the measurement against the baseline at both
    widths and 512 bits on the laptop, the predictions scored.
 
@@ -321,7 +349,7 @@ Predictions, registered before the spike and the build:
 |---|---|
 | `VarkaDecimalCompiler.java` (rows 348 and 349's) | the arms of 2.2 to 2.6 |
 | `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | `decimalCarry` |
-| `varka/VarkaVectorWalk.java` | nothing but what `WideMul` brings |
+| `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java`, `varka/Slots.java` | `WideMul` (360b) |
 | `sql/varka/proofs/decimal128.smt2`, `VarkaProofFiles.java` | 3 item 5 |
 | tests | edges, class K table, type sweep, one-kernel test, coverage rows, fuzz forms |
 | benchmark | the baseline sections, the spike loops, their results files |
@@ -333,7 +361,7 @@ the baseline: the spike loops a day with 361's, 360a about three days, 360b one 
 calls, under a second; the edges are of the slot table's size; the proof section is priced from
 its spiked form at VARKA-245's observed ratio in the calibration table, under ten seconds per
 solver. It rests on 347, 348 and 349, 359 (the pair, the compares, the check, the proof file and
-the store), 361 or this row for `WideMul`, 481 for 360c and 503 for the 128-bit rule.
+the store), 481 for 360c and 503 for the 128-bit rule.
 
 ## 6. What it unlocks in the census
 
@@ -349,46 +377,42 @@ Out: class C (363); the casts down, fallible or to integral types (364, 350); a 
 `%`, `mod` and `pmod` (row 349's plan names their homes); the pair's load and store (359).
 
 Declines that stay, each naming its row: class C (363), a fallible or narrowing decimal cast (364,
-350), a decimal in an int-driven kernel, a negative scale, and at two long lanes on x86 a
-condition root (503) and any projection the measurement shows losing there.
+350), an integral cast to `(3, 0)`, `(5, 0)` or `(10, 0)` until 350 builds it, a decimal in an
+int-driven kernel, a negative scale, and at two long lanes on x86 a condition root (503) and any
+projection the measurement shows losing there.
+
+**Flagged, not resolved.** Rows 350 and 360 both claim the integral casts to `(3, 0)`, `(5, 0)`
+and `(10, 0)` in the owner's text; the lead gave them to 350 (30 October 2026) and this plan
+declines them naming 350, but the two rows' text is the owner's and is left as it is.
+
+**A possible follow-up to row 481, not built here.** Class K's disposal is composed from 481's
+`GuardedRange` (2.5), about six lane calls on the eleven of the check. A `GuardedRange` constructor
+taking a condition would save the `CondValue` and the guard's two compares. It would be row 481's,
+owned and made there, and only if 360c's measurement shows the six calls matter.
 
 ## 8. Open points for the lead
 
-1. **Who lands `WideMul`.** Every unequal-scale class U shape and every `BIGINT` with a scaled
-   decimal rescales by `x * 10^k` into 128 bits (2.4). (a) This row lands `WideMul` with constant
-   limbs in 360b and row 361 adds the column product; (b) 360b waits for 361a. *Recommended: (a)*,
-   the helper `VARKA-104.md` 3.3 asks to exist once; `VARKA-361.md` 8 asks the same from its side.
-   Under (b) 360a still lands first and serves 351's precision-19 results, which need only the
-   sign extension.
-2. **Class K here or with 363.** The row text lands every capped shape with 363. (a) Class K lands
-   here as 360c, after 481, since it needs no division (item 0.5); (b) it waits for 363 as written.
-   *Recommended: (a)*: under `allowPrecisionLoss = false` every capped add is class K, and with the
-   default every capped add of scale 6 or less, which leaves 363 only the shapes that round, as
-   Trino's reading suggested (`READING_TRINO_DECIMAL.md` 11, row 360 (c)).
-3. **The infallible decimal widening casts, here or 364.** (a) Here (2.6), since they are the
-   rescale of 2.4 and the baseline's javadoc names this row for one; (b) 364's, as its text "to and
-   from other decimals" reads. *Recommended: (a)*, 364 keeping the casts that round or can fail.
-4. **The integral casts to `(3, 0)`, `(5, 0)` and `(10, 0)`**, in both this row's and 350's texts.
-   (a) This row, where they feed a sum above 18; 350 where the result stays within 18; (b) all
-   350's, this row consuming them. *Recommended: (b)*: they are 64-bit values with no pair in them,
-   and only `(20, 0)` reaches a type above 18 on its own.
-5. **The class K disposal's cost.** (a) As 2.5 composes it from row 481's node, about six lane
-   calls on the eleven of the check; (b) a constructor on 481's `GuardedRange` taking a condition,
-   saving the `CondValue` and the guard's two compares. *Recommended: (a)*, (b) only if 360c's
-   measurement shows the six calls matter.
+All answered by the lead on 30 October 2026, and folded in above: `WideMul` lands here with
+constant multipliers and row 361 adds the column product (section 5); class K lands here after
+row 481 (0, "What differs"); the infallible widening casts are this row's by the F3 wave row's
+words; the integral casts to `(3, 0)`, `(5, 0)` and `(10, 0)` are 350's (section 7); the disposal
+is composed from 481's node, its condition variant a possible 481 follow-up (section 7); and the
+options' defaults come from the runner's verdict on the spike.
 
 ## 9. Done when
 
 Row 360's text holds, with the corrections above: the spike's verdict is committed per width before
-the build; classes U and K (by point 2's answer) fuse in the three modes, class U with one kernel
-and class K's `10^38` check nulling through row 481's mode and declining under ANSI, and class C
-declines naming 363; the rescale-up sites name their defences with tests at the first rejected
-value, and the planted multiply-then-check order is refuted and failed; `DECIMAL(38, 10) +
-DECIMAL(38, 10)` at `10^38 - 1` is a test in the class each setting gives; the integral and widening
-casts fuse as point 3 and 4 answer, so a `BIGINT` with a decimal fuses; the carry, the borrow, the
-sign extension, the bounds and item 0.5's lemma proven by SMT over integers at full width under
-both solvers; rapids' overflow vectors named tests; the measurement against the baseline committed
-at both widths with its predictions scored; and the PR build and the option matrix pass.
+the build; classes U and K fuse in the three modes, class U with one kernel and class K's `10^38`
+check nulling through row 481's mode and declining under ANSI, and class C declines naming 363;
+the rescale-up sites name their defences with tests at the first rejected value, and the planted
+multiply-then-check order is refuted and failed; `DECIMAL(38, 10) + DECIMAL(38, 10)` at
+`10^38 - 1` is a test in the class each setting gives; the `(20, 0)` cast and the infallible
+decimal widening casts fuse, so a `BIGINT` with a decimal fuses, and the casts to `(3, 0)`,
+`(5, 0)` and `(10, 0)` decline naming 350; `WideMul` with constant multipliers lands with its
+planted-carry test over a negative operand; the carry, the borrow, the sign extension, the bounds
+and item 0.5's lemma proven by SMT over integers at full width under both solvers; rapids'
+overflow vectors named tests; the measurement against the baseline committed at both widths with
+its predictions scored; and the PR build and the option matrix pass.
 
 ## 10. Outcome
 
