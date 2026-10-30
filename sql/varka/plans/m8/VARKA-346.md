@@ -128,7 +128,8 @@ against the calls Spark makes:
   is not built (open point 2).
 - **Scale 0 has no declined band** (2.3): there every boundary is a multiple of the ulp up to
   `2^52`, which the admission program confirms (item 14), and the keep bound is `2^52`. The band of
-  `s >= 1` is `[2^E, 10^(16 - s))`, three and a half to four and a half binades (2.2).
+  `s >= 1` is the non-integral values of `[2^E, 10^(16 - s))`, three and a half to four and a half
+  binades: an integral value there is its own shortest decimal and answers itself (2.2).
 - **The exact shortest-digits path is the row engine**, through the declined batch: no kernel can
   select the shortest decimal in a lane today, which is `m9/SCOPE.md` item 97 (open point 3).
 - **The FMA node is built here** (open point 1), for the remainder and the `FLOAT` result's
@@ -174,7 +175,8 @@ is `T` rounded to `s` places by the mode, times `10^s`, a non-negative integer. 
 `L_s = 2^E`, `E` the largest integer with `2^(E - 53) < 10^-(s + 1)`, so every `a < L_s` has
 `ulp(a) < 10^-(s + 1)`; `K_s = 10^(16 - s)` for `s >= 1`, as a double rounded up, and `2^52` for
 `s = 0`. Below `L_s` the tie test computes `n` (2.3); from `K_s` up the answer is `d`; between them
-the batch declines. At `s = 0`, `L_0 = K_0 = 2^52`. The bounds, from the admission program **[A]**:
+an integral `a` answers `d` and a non-integral one declines the batch. At `s = 0`, `L_0 = K_0 =
+2^52`. The bounds, from the admission program **[A]**:
 
 | `s` | `L_s` | `K_s` | band, binades |
 |---|---|---|---|
@@ -202,12 +204,20 @@ the batch declines. At `s = 0`, `L_0 = K_0 = 2^52`. The bounds, from the admissi
 | 21 | `2^-21` | `10^-5` | 4.39 |
 | 22 | `2^-24` | `10^-6` | 4.07 |
 
-**The keep region.** For `s >= 1` and `a >= 10^(16 - s)`, `a` has at least `17 - s` integer
-digits and `T` at most 17 significant digits, so `T` has at most `s` fractional digits, the rounding
-leaves it unchanged, and `RN(T) = a`. For `s = 0` and `a >= 2^52`, `a` is an integer, so its own
-digits are a decimal in `R` with no fractional digit; `T` is no longer and, within one of `a`, has
-as many integer digits, so it is an integer too, rounds to itself and gives `a`. NaN and the
-infinities take the same arm: it is written `not (a < K_s)`, which a NaN satisfies.
+**The keep region.** For `s >= 1` and `a >= 10^(16 - s)`, `T` is no smaller than `10^(16 - s)`, so
+it has its leading digit at `10^(16 - s)` or above and at most 17 significant digits, so its last
+digit is at `10^-s` or above: the rounding leaves it unchanged, and `RN(T) = a`. For `s = 0` and
+`a >= 2^52`, `a` is an integer, so its own digits are a decimal in `R` with no fractional digit;
+`T` is no longer and, within one of `a`, has as many integer digits, so it is an integer too,
+rounds to itself and gives `a`. NaN and the infinities take the same arm: it is written
+`not (a < K_s)`, which a NaN satisfies. A `FLOAT` `f` in the keep region answers `f`: `T` lies
+within half a double ulp of `(double) f`, a float, so `RN32(T) = f`.
+
+**The integer arm in the band.** An integral `a < 2^53` is its own shortest decimal: `R` holds no
+other integer, and a decimal with a fractional digit near `a` is longer than `a`'s digits (the
+admission program confirms it through `2^53`, item 0.16). So it rounds to itself at every scale and
+the answer is `d`. Every band value is below `K_1 = 10^15`, so the test `RINT(a) == a` (344's
+`RINT`) keeps every integral lane of the band fused, and only the non-integral ones decline.
 
 ### 2.3 The tie test, and why it is exact
 
@@ -267,7 +277,8 @@ guard and the keep blend.
 - **below `L_s`**: `n` by the `HALF_UP` formula, converted to a long (343's `D2L`; `n < 2^50`, so
   the AVX2 magic form is exact with no guard), with `d`'s sign;
 - **an integral `a < 2^53`** (`RINT(a) == a`): `n = D2L(a) * 10^s`, since `a` is its own shortest
-  decimal (item 0.16);
+  decimal (2.2); `D2L` is whole under 343's default AVX2 assembly, while its `MAGIC` arm declines
+  a lane in `[2^51, 2^53)`;
 - **`a >= 10^(p - s)`**: an overflow, decided without the digits: `10^(p - s)` is an exact double
   for `p - s <= 18`, so `T >= 10^(p - s)` as well;
 - **otherwise** the batch declines: a non-integral `a` in `[L_s, 2^52)`, and any `a` in `[2^53,
@@ -332,10 +343,11 @@ condition **[I]**, checked in 3.6).
 ### 2.7 Modes and declines
 
 Two new refusals, collected by `emitGuardCollect` as 347's slot check is, each with a status bit:
-`ROUNDING_BAND` (a live lane in 2.2's band, or 2.4's) and `REMAINDER_BAND` (2.5's window). Neither
-is narrowed by a choice arm unless `guardUnderArm` qualifies it. The zero divisor is `IntDivide`'s,
-null under LEGACY and TRY and `FAIL` under ANSI; a literal non-zero divisor drops it, as Spark does.
-No form of `round` has a mode. The cast's three modes differ only in the overflow's disposal.
+`ROUNDING_BAND` (a live non-integral lane in 2.2's band, or a lane in 2.4's) and `REMAINDER_BAND`
+(2.5's window). Neither is narrowed by a choice arm unless `guardUnderArm` qualifies it. The zero
+divisor is `IntDivide`'s, null under LEGACY and TRY and `FAIL` under ANSI; a literal non-zero
+divisor drops it, as Spark does. No form of `round` has a mode. The cast's three modes differ only
+in the overflow's disposal.
 
 ### 2.8 Compiler, reference, cost, census, warm-up
 
@@ -375,7 +387,8 @@ exactly when one of its live lanes is in a band or Spark raises on it.
    3527.6195313, `10.3` at scale 1 gives 103 as the cast's unscaled value - through the cast and
    `round`, and `9.95f` giving 9.9; `2.675`, `1.005` and `0.125` at scale 2 in the three modes;
    `-0.0`, `-0.004` and `-0.5`, giving `+0.0`; `truncate(0.7, 1)` giving 0.7; `2.5` and `-2.5` at
-   scale 0; each band's ends and their neighbours at every scale; NaN payloads and both infinities
+   scale 0; each band's ends and their neighbours at every scale, and an integral value inside
+   each band, which answers itself; NaN payloads and both infinities
    passing through bit for bit. The remainder's: `5.0 % -inf` is 5.0, `inf % 2.0` NaN, exact
    multiples, `MIN_VALUE` and `MAX_VALUE` operands, the window's edge; `pmod(-0.0, 3.0)` and
    `pmod(-3.0, 3.0)` `-0.0`, `pmod(-1e-300, 1.0)` `0.0`, `pmod(-1.0, -3.0)` -1.0. The cast: the
@@ -495,11 +508,11 @@ Out: Schubfach's selection in lanes, which would fuse the band (`m9/SCOPE.md` 97
 `2^24`; a scale above 22, where `10^s` is not exact, though values from `K_s` up could keep `d`
 there with no division; `CEIL` and `TRUNC` to `DOUBLE`, which nothing reads.
 
-Declines that stay: a batch with a live lane in its band - for the rounding functions `[L_s, K_s)`
-at `s >= 1`, for the cast a non-integral value in `[L_s, 2^52)` or any value in `[2^53, 10^(p -
-s))`, for the remainder `|x / y| >= 2^53` with `x` finite; a negative, non-literal or null scale or
-one above 22; an ANSI batch with a zero divisor or a cast overflow, which the row engine raises; at
-two lanes on x86, the conditions 503's rule declines.
+Declines that stay: a batch with a live lane in its band - for the rounding functions a non-integral
+value in `[L_s, K_s)` at `s >= 1`, for the cast a non-integral value in `[L_s, 2^52)` or any value
+in `[2^53, 10^(p - s))`, for the remainder `|x / y| >= 2^53` with `x` finite; a negative,
+non-literal or null scale or one above 22; an ANSI batch with a zero divisor or a cast overflow,
+which the row engine raises; at two lanes on x86, the conditions 503's rule declines.
 
 ## 8. Open points for the lead
 
@@ -528,10 +541,14 @@ two lanes on x86, the conditions 503's rule declines.
    names (Boost Software License, with its notice), beside `BigDecimal`'s exact remainder; (b) the
    exact remainder alone, which checks every answer against the true value. *Recommended: (a)*: it
    is the owner's text and costs a day at most.
-6. **The row's citation, as context.** The milestone plan's 2.7 cites Schubfach's R5 for "the
-   shortest decimal is `T` when `ulp(d) < 10^-(s + 1)`"; the paper is not in the repository and R5
-   was not checked. The proof here (2.3, step 2) rests on `Double.toString`'s specification, which
-   is what Spark calls. The text is the owner's and is left as written.
+6. **The row's text, flagged, as context.** (i) The milestone plan's 2.7 cites Schubfach's R5 for
+   "the shortest decimal is `T` when `ulp(d) < 10^-(s + 1)`"; the paper is not in the repository and
+   R5 was not checked. The proof here (2.3, step 2) rests on `Double.toString`'s specification,
+   which is what Spark calls. (ii) The row's done-when calls the rapids vectors "float-to-decimal
+   vectors" with "`9.95` at scale 1 gives `10.0`": that holds for a `DOUBLE` 9.95; a `FLOAT`
+   `9.95f` widens to 9.949999809265137 and gives 9.9 (item 0.3), so the named tests take the
+   vectors as doubles and add the `FLOAT` answer as its own cell. (iii) 2.7's keep bound
+   `10^(16 - s)` is `2^52` at scale 0 here (2.2). The text is the owner's and is left as written.
 
 Settled without a question: the baseline first, in the families' classes (the house rule); the
 remainder reuses row 30's node, whichever lands first; `FLOAT` widens for the remainder and the
