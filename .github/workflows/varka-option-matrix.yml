@@ -37,8 +37,13 @@ on:
 jobs:
   build:
     name: "Option matrix: build and plan"
-    # Never on apache/spark, whose tree has no Varka; on this project's repositories always.
-    if: github.repository != 'apache/spark'
+    # Never on apache/spark, whose tree has no Varka. The Sunday schedule runs on vecbricks/varka
+    # only: the fork's master follows this project's (varka-fork-sync.yml) and carries this file,
+    # and a schedule there does nothing. A dispatch runs on either repository. The jobs after
+    # this one need it, so they are skipped with it.
+    if: >-
+      github.repository != 'apache/spark'
+      && (github.event_name != 'schedule' || github.repository == 'vecbricks/varka')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:

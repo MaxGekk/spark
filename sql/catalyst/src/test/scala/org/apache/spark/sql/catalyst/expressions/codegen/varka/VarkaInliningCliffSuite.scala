@@ -60,6 +60,8 @@ class VarkaInliningCliffSuite extends SparkFunSuite with VarkaTestWatchdog {
       outputs.toString, ceiling.toString, seconds.toString) ++
       budget.toSeq.flatMap(b => Seq("1024", "c1on", "cheap", "none", b.toString)))
       .foreach(command.add)
+    // The child JVM's code runs where the class-use record cannot see it (VarkaTestUse).
+    VarkaTestUse.childJvm()
     val process = new ProcessBuilder(command).redirectErrorStream(true).start()
     val reader = new BufferedReader(
       new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))

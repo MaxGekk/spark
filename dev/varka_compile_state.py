@@ -16,15 +16,18 @@
 # limitations under the License.
 #
 """
-Finds the newest Build run of the repository that saved its compile state, so a Varka job can
-start from it and let sbt compile only what differs (VARKA-520).
+Finds the Build run whose saved compile state a Varka job should start from, so that sbt
+compiles only what differs (VARKA-520).
 
 A Varka-scoped Build's first sql job archives every module's `target/scala-2.13` - the class
 directories and Zinc's analysis of what each source produced - as `varka-compile-state` once its
 suites have passed. Zinc decides what to recompile by the sources' hashes against that analysis,
-so the state need not come from this branch or from master: the newest one any branch saved is
-the closest to most pull requests, and whatever differs is compiled again. A run with no usable
-state compiles clean, as every run did before.
+so the state need not come from this branch or from master, and whatever differs is compiled
+again. The newest state a Build of master saved (varka-master.yml, which the fork runs on each
+sync of its master, VARKA-525) comes first: a pull request is cut from master, so master's state
+differs from it by the pull request's own change. Where master has none, the newest state any
+branch's Build saved (build_main.yml) is the closest to most pull requests. A run with no usable
+state compiles clean.
 
 This prints `run=<id>` of that Build run, or `run=` when no recent run has an unexpired state.
 
@@ -38,7 +41,12 @@ import sys
 import unittest
 
 ARTIFACT = "varka-compile-state"
-WORKFLOW = "build_main.yml"
+# The workflows whose runs are searched, in order of preference, each with the query that
+# selects its runs: master's Builds first, then any branch's.
+WORKFLOWS = (
+    ("varka-master.yml", "&branch=master"),
+    ("build_main.yml", ""),
+)
 # How many of the newest completed Build runs to look through: a state is kept three days, and
 # the fork completes a few dozen Builds on a busy day.
 RUNS = 40
@@ -63,6 +71,17 @@ def newest(runs, artifacts_of):
     return None
 
 
+def first_found(workflows, runs_of, artifacts_of):
+    """The run `newest` picks from the first of `workflows` that has one, or None. `runs_of`
+    gives a workflow's runs, or None when the repository has no such workflow."""
+    for workflow in workflows:
+        runs = runs_of(workflow)
+        run = newest(runs, artifacts_of) if runs is not None else None
+        if run is not None:
+            return run
+    return None
+
+
 def main(argv):
     if argv == ["--selftest"]:
         result = unittest.main(argv=["selftest"], exit=False).result
@@ -72,11 +91,19 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     repository = argv[0]
-    runs = gh(
-        f"repos/{repository}/actions/workflows/{WORKFLOW}/runs?status=completed&per_page={RUNS}"
-    )
-    run = newest(
-        runs["workflow_runs"],
+
+    def runs_of(workflow):
+        name, query = workflow
+        path = f"repos/{repository}/actions/workflows/{name}/runs"
+        try:
+            return gh(f"{path}?status=completed&per_page={RUNS}{query}")["workflow_runs"]
+        except subprocess.CalledProcessError:
+            # A repository without this workflow on its default branch answers 404.
+            return None
+
+    run = first_found(
+        WORKFLOWS,
+        runs_of,
         lambda i: gh(f"repos/{repository}/actions/runs/{i}/artifacts")["artifacts"],
     )
     print(f"run={run if run is not None else ''}")
@@ -101,6 +128,24 @@ class SelfTest(unittest.TestCase):
         runs = [{"id": 2, "status": "completed"}, {"id": 1, "status": "completed"}]
         arts = {1: [{"name": ARTIFACT, "expired": True}], 2: [{"name": "other"}]}
         self.assertIsNone(newest(runs, arts.get))
+
+    def test_master_state_comes_before_a_newer_one_of_another_branch(self):
+        runs = {
+            "master": [{"id": 5, "status": "completed"}],
+            "any": [{"id": 9, "status": "completed"}],
+        }
+        arts = {5: [{"name": ARTIFACT}], 9: [{"name": ARTIFACT}]}
+        self.assertEqual(first_found(("master", "any"), runs.get, arts.get), 5)
+
+    def test_no_master_state_or_no_master_workflow_falls_back(self):
+        runs = {
+            "master": [{"id": 5, "status": "completed"}],
+            "any": [{"id": 9, "status": "completed"}],
+        }
+        arts = {5: [{"name": "other"}], 9: [{"name": ARTIFACT}]}
+        self.assertEqual(first_found(("master", "any"), runs.get, arts.get), 9)
+        self.assertEqual(first_found(("absent", "any"), runs.get, arts.get), 9)
+        self.assertIsNone(first_found(("absent",), runs.get, arts.get))
 
 
 if __name__ == "__main__":

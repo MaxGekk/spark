@@ -208,6 +208,6 @@ check_overflow|CheckOverflow|decimal internals|dec|dec||semantics|349,359,363|nu
 make_decimal|MakeDecimal|decimal internals|bigint|dec||plumbing|349|a relabel of an unscaled long
 unscaled_value|UnscaledValue|decimal internals|dec|bigint||plumbing|349|a relabel to the unscaled long
 known_not_null|KnownNotNull|internals|ALL|same||plumbing|333|a relabel the optimizer adds
-known_fp_normalized|KnownFloatingPointNormalized|internals|FLOAT|same||plumbing|341|a relabel around NaN and -0.0 normalization
-normalize_nan_and_zero|NormalizeNaNAndZero|internals|FLOAT|same||plumbing|341,337|the optimizer's canonical NaN and +0.0 before a key or a hash: one node, shared with the hash input (m8/PLAN.md 2.7)
+known_fp_normalized|KnownFloatingPointNormalized|internals|FLOAT|same||plumbing|337|a relabel around NaN and -0.0 normalization
+normalize_nan_and_zero|NormalizeNaNAndZero|internals|FLOAT|same||plumbing|337|the optimizer's canonical NaN and +0.0 before a key or a hash: one node, shared with the hash input (m8/PLAN.md 2.7)
 try_eval|TryEval|internals|ALL|same||semantics|330,342,349|the try_ functions' wrapper: every error raised anywhere in its subtree becomes null
