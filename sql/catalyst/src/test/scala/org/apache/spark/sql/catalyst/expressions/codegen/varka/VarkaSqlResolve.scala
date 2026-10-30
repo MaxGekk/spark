@@ -19,10 +19,10 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.apache.spark.sql.catalyst.analysis.{SimpleAnalyzer, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference,
-  BindReferences, Expression, NamedExpression}
+  BindReferences, Cast, Expression, Literal, NamedExpression}
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
-import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.types.{DataType, DoubleType, FloatType, StringType}
 
 /**
  * One resolver for the SQL-to-expression tools in this package (`VarkaEmitDump`,
@@ -67,6 +67,10 @@ object VarkaSqlResolve {
    * `ExtractWindowExpressions` lifts a window function out - because those are not expressions
    * this emitter can take, and a caller that reports declines should report them rather than
    * die of a `ClassCastException`.
+   *
+   * A string literal cast to `DOUBLE` or `FLOAT` is folded to its value, as Spark's optimizer
+   * folds it before Varka sees a plan: it is how SQL writes NaN and the infinities, which have
+   * no literal of their own, and the compiler declines a floating cast.
    */
   def resolve(e: Expression, columns: Seq[Attribute]): Expression = {
     val byName = columns.map(a => a.name -> a).toMap
@@ -79,7 +83,10 @@ object VarkaSqlResolve {
     // runs would hand `hour(t + dt)` its argument still uncoerced, and the builder-backed
     // functions assert that their arguments are resolved.
     SimpleAnalyzer.execute(Project(Seq(Alias(bound, "a")()), LocalRelation(columns))) match {
-      case Project(Seq(a: Alias), _) => a.child
+      case Project(Seq(a: Alias), _) => a.child.transformUp {
+        case c @ Cast(Literal(_, StringType), DoubleType | FloatType, _, _) =>
+          Literal.create(c.eval(), c.dataType)
+      }
       case other =>
         throw new IllegalArgumentException(
           s"the analyzer rewrote this into ${other.nodeName}; the emitter takes projections of "

@@ -3098,6 +3098,16 @@ owner chose the first option on 14 October 2026 (`m8/PLAN.md` 2.7.1); the emitte
 stays this item's, beside item 98's SLEEF-shaped route, and must be costed without FMA, since
 `StrictMath` is pure Java and FMA changes the bits.*
 
+*30 October 2026, by the owner's word: the family is bit-exact to vanilla Spark by default, and the
+first option, the ULP contract, is an opt-in mode, off by default (`m8/PLAN.md` 2.7.1,
+`m8/VARKA-345.md` 2.1). The default takes this item's emitted-fdlibm option in milestone 8: the
+thirteen functions whose row-engine bits are fdlibm's on every host fuse first as a per-lane
+`StrictMath` call, with a lane-wise port of fdlibm 5.3, emitted as IR and held to `StrictMath` bit
+for bit, as a measured option arm, the default only where it measures faster; the host-dependent
+`sin`, `cos`, `tan`, `tanh` and `cbrt` take a per-lane `Math` call. Whether an exact form faster
+than that call exists for the host-dependent five is open, the owner's, licence first
+(`m8/VARKA-345.md` 8 point 11).*
+
 ### Item 37. A third AVX2 lowering for the 64-bit divide, from 32-bit converts
 
 *Opened 19 September 2026, from reading SLEEF for
@@ -5193,6 +5203,11 @@ option, costed without FMA (`StrictMath` is pure Java and FMA changes the bits).
 emitted `exp` or `log` gives one bit pattern on the three CI hosts at a measured cost against the
 bound library, with its contract (fdlibm's bits, or correct rounding) stated.
 
+*30 October 2026, by the owner's word: milestone 8 fuses the family exact by default, Spark's own
+bits on each host, and the ULP contract is an opt-in mode, off by default (`m8/PLAN.md` 2.7.1,
+`m8/VARKA-345.md` 2.1); this item's first sentence describes that mode. The item stays the route to
+one bit pattern on every host.*
+
 ### Item 99. The NULL-mode masked loop that C2 cannot settle
 
 *Added 16 October 2026 from `m7/VARKA-326.md` 9.4.* A kernel with a null-propagating `int` add or
@@ -5228,6 +5243,14 @@ carried as a long, blends as arithmetic), or the compiler declines a kernel with
 where the species has two lanes, with the reason in `EXPLAIN`. **Done when** one of the two is
 built and the 128-bit warm-up arm releases no kernel for this cause, or the record says why
 neither is worth it on the hosts that have it.
+
+*27 October 2026, the first measurement against Spark:* row 27's baseline
+(`sql/core/benchmarks/VarkaBooleanOutputBenchmark-jdk25-runner-epyc7763-128bit-results.txt`, its
+filter controls, EPYC 7763 at `-XX:MaxVectorSize=16`) has the fused filter
+`(d < d2) AND (l < l2)` at 0.8X of Spark's row path with no nulls and 1.3X with nulls, and
+`l < l2` at 1.1X, against 3.0X to 3.4X and 1.7X to 1.9X at 256 bits. So a shape Varka fuses today
+is slower than the row engine on this host, and rows 27 and 347 decided to fuse long kernels at two
+lanes only where they lose nothing the filters do not: this item's verdict decides those too.
 
 ### Item 102. A date column's bound per shape, not the calendar's 0001 to 9999
 
@@ -5583,8 +5606,121 @@ floating ordering is a finite claim SMT decides; exhaustive sweeps over every fl
 serve the math rows), the per-shape checks of emitted kernels, which the rendered SMT files keep
 in step with the code, and the compiler as a whole.
 
+*A concrete case for the spike, noted 27 October 2026 from row 496 (`m8/PLAN.md`).* The int
+lane's divisors are open: `ym / d` divides by the query's own literal, so no corpus bounds them
+and row 496's check, which holds the long lane's closed set to `long_divide.smt2`, cannot close
+the int lane. The coverage rows already build -7, which `VarkaProofFiles.INT_DIVISORS` lacks, so
+`int_mulhi_divide.smt2` does not state that division; it is exact only by the theorem
+`MulHiMagic` asserts when it builds the constants. The spike's 32-bit form closes it for every divisor.
+
 **Done when** the spike's theorem is checked in CI with its pin to the code, its cost is recorded,
 and the owner has decided from it whether steps 2 and 3 use Lean.
+
+### Item 117. A year-month `time_bucket` over `TIMESTAMP_NTZ`
+
+*Added 27 October 2026 on the owner's word, from row 339's plan (`m8/VARKA-339.md` 8).* Row 339
+fuses `time_bucket` over a day-time width and declines a year-month width by name: the milestone
+plan names only the day-time form, and no coverage row, TPC query or fuzz grammar uses a month
+width. The form needs the year and month of the NTZ's day and two `AddMonths` over the origin's
+day, so it rests on row 339's `ntzDay` and the month forms' whole-range sweep.
+
+**Done when** `time_bucket(INTERVAL 'n' MONTH, ntz[, origin])` fuses with Spark's answer at every
+origin, proven over the sweep row 339 builds, or the record says why it stays declined.
+
+### Item 120. Never slower than Spark: a gate per width
+
+*Added 27 October 2026 on the owner's word, from the day's review of what Varka should improve.*
+The rule that a fused shape is not slower than Spark's row path lives only in reviewers' heads:
+row 27's baseline found `(d < d2) AND (l < l2)` at 0.8X on the EPYC 7763 at 128 bits only because
+its filter control happened to time it, and m8 row 503 then declined that case. Run every coverage
+row's kernel against the row path, nightly, at 128 and 256 bits on the runners and at the laptop's
+widths, from one committed benchmark class driven by `coverage.json`, and fail where a row is below
+1.0X by more than the noise band the benchmark's own reruns give. **Done when** the nightly runs,
+its results are committed per width, and a shape below 1.0X fails it with its row named or is
+declined by a recorded refusal (as row 503 does); items 101 and 119 are its remedies.
+
+### Item 121. Generated files that concurrent pull requests do not hand-merge
+
+*Added 27 October 2026 on the owner's word.* `coverage.json`, `emitted_bytes.json`,
+`width_audit.json`, `types.tsv`, `census.tsv`, `casts_fused.tsv` and the docs table are each one
+file every type row regenerates, so nearly every merge of master into an open pull request
+conflicts in them, and the resolution is to take a side and regenerate by hand. Either regenerate
+them in CI on the merge result (a job that commits the regenerated files, or that fails a pull
+request whose files are stale with the command to run), or shard each by family or row so that two
+rows touch different files. **Done when** two pull requests that each add coverage rows merge with
+master in either order without a conflict in a generated file, and a stale file fails CI with its
+regeneration command.
+
+### Item 122. The option matrix only where a change can move it
+
+*Added 27 October 2026 on the owner's word.* A pull request's option matrix is twelve jobs of
+about three hours whatever it changes, and with the PR build's sixteen it fills the fork's 40 slots
+with two pull requests in flight. Select the matrix's suites from the changed files, as the
+`Varka suites` jobs already split by module: a plan-only change runs none, a test-harness change
+the whole matrix, an emitter change the emitter and differential suites under every
+configuration. **Done when** the selection is a committed rule with a test, a plan-only pull
+request dispatches no matrix, and the nightly still runs the whole matrix so a selection gap shows
+within a day.
+
+### Item 123. A register of the upstream behaviours Varka depends on or works around
+
+*Added 27 October 2026 on the owner's word.* Varka's answers and tests rest on facts of Spark and
+the JDK that a version change can move: SPARK-58482's batch pruning, which leaves NaN out of a
+cached batch's statistics (the floating suites run with pruning off because of it); the JIT's
+messageless `ArithmeticException` once a `Math.*Exact` site has trapped enough (the error
+comparison's tolerance); JDK-8378968's mask miscompile behind `VarkaMaskGuard`; Spark's type
+coercion that wraps division and the math functions in casts to double. Keep one register, each
+entry with the version that has it, the upstream issue, the Varka code that depends on it and the
+test that pins it, so an upgrade of Spark or the JDK has a list to recheck. Row 504 covers the
+entries its checks work around; this item is the register as a whole. **Done when** the register
+exists, each entry names its pinning test, and the JDK and Spark upgrade checklists read it.
+
+### Item 124. The compile latency of the emitted kernels, read against Umbra's two back-ends
+
+*Added 27 October 2026 on the owner's word, from the audit of the reading notes
+(`m8/READING_TRACE.md`).* Kersten, Leis and Neumann, "Tidy Tuples and Flying Start: Fast
+Compilation and Fast Execution of Relational Queries in Umbra" (VLDB Journal 2021), is the known
+case for a query engine with two back-ends: one that compiles fast so that a query starts at once,
+and an optimizing one the engine switches to adaptively when the query runs long enough to pay for
+it. The record has never cited it, and it is unread here: nothing below rests on its numbers or its
+design beyond that idea. Varka has the same split, but it is HotSpot's: a kernel is emitted in
+microseconds (item 92), and the latency is the interpreter and C1 until C2 compiles the loop. Row
+408 measured it on a real session in fresh JVMs (`m8/results/VARKA-408-first-query.txt`, merged
+with row 441 in #978): C1 refuses the large masked loop methods, so they run in the interpreter
+until C2's on-stack replacement lands, about 8 s at 64 entries; splitting the loops below the size
+C1 refuses made it worse (14 s at 64 entries, the first ten queries 13 to 19 percent slower); a
+warm-up of the loop's shape and a lower OSR threshold were not tried. Items 60, 92 and 105 are three
+answers - the warm-up's policy, a per-operation baseline tier, a code generator of our own - and
+no measurement sets them against each other. Read the paper first and record what it measured and
+how it decides to switch; then time a fresh shape's first queries split into emission, class load,
+interpreter, C1 and C2, at row 408's shapes and both widths, from one committed benchmark. **Done
+when** the paper's claims are recorded with their pages, the split is committed per shape and
+width, and the record says which of items 60, 92 and 105 the numbers favour, or that none pays.
+
+### Item 125. `TryEval` over a fused subtree
+
+*Added 30 October 2026 from `m8/VARKA-103.md` 8 (open point 3).* Every `try_` function whose operand
+is not one of the arithmetic forms Spark rewrites into a `NULL`-returning node becomes
+`TryEval(child)` (`expressions/TryEval.scala:90-97`, `:135-141`, `:229-235`, `:268-274`), which
+turns any exception raised in its subtree into a null. Rows 342 and 340 decline it by name, and row
+481's `NULL` guard serves a `GuardedRange` only, not a caught exception, so `try_add`,
+`try_subtract`, `try_multiply` and `try_divide` over an interval have no builder, nor `try_eval`
+over a subtree whose nodes raise (349's plan suggests 350 for a decimal one). A kernel can answer it
+where every raising site of the subtree is a guard whose rejection is exact: those guards switch to
+`NULL` mode and the subtree's null mask absorbs them; a subtree with a conservative guard or a site
+no guard covers declines. **Done when** the rule is built over 481's mode, each `try_` entry over an
+interval fuses with a coverage row, and a subtree with an inexact guard is shown to decline.
+
+### Item 126. `d + dt` over a stored `INTERVAL DAY` column
+
+*Added 30 October 2026 from `m8/VARKA-103.md` 8 (open point 4, its option (a)).* The date arm reads
+a stored `INTERVAL DAY` column as its day offset: row 103's day quotient, narrowed to an int under
+the date arm's day guard (`m8/VARKA-103.md` 2.3; `VarkaChronoCompiler.java:527`'s decline today,
+where `ExtractANSIIntervalDays` fuses only inside `d + CAST(i AS INTERVAL DAY)`). The form is not in
+`m5/PLAN.md` 2.38's list, so it is a scope item rather than a milestone 8 row, by the rule that a
+finding becomes a row only when it serves the milestone's done-when. **Done when** `d + dt` over a
+stored `INTERVAL DAY` column fuses with a coverage row, a day beyond the date arm's guard declining
+to the row engine's error.
 
 ## 5. Ordering
 

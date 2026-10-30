@@ -547,6 +547,13 @@ final class VarkaEmitBudget {
   static final int GUARD_WEIGHT = 2;
 
   /**
+   * What a floating compare or pick weighs: Spark's order from the lane's IEEE compares and NaN
+   * tests - two NaN tests, a compare and the masks' joins - and a pick's blend, about five lane
+   * calls (VarkaVectorWalk.emitFloatingCompare).
+   */
+  static final int FLOATING_ORDER_WEIGHT = 5;
+
+  /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
    * way as a calendar node: its own {@code w = k - d} subtract and the final
    * {@code d + r + 1} (two ops) plus {@code emitFloorMod7}'s twelve vector ops under the
@@ -609,6 +616,12 @@ final class VarkaEmitBudget {
       // The negation or abs, plus one compare where the mode checks, plus the shift pair a
       // wrapping narrow one may reduce with.
       case IntNeg n -> n.mode() != Overflow.WRAP ? 2 : n.laneType().isNarrow() ? 3 : 1;
+      // At a floating lane a compare is Spark's order built from IEEE compares and NaN tests,
+      // and a pick is that compare and its blend: about five lane calls each.
+      case Compare n when n.left().laneType().isFloating() -> FLOATING_ORDER_WEIGHT;
+      case NullSafeEqual n when n.left().laneType().isFloating() -> FLOATING_ORDER_WEIGHT;
+      case Greatest n when n.laneType().isFloating() -> FLOATING_ORDER_WEIGHT;
+      case Least n when n.laneType().isFloating() -> FLOATING_ORDER_WEIGHT;
       // One lanewise op each: the add or subtract, the min or max, the blend (its condition is a
       // node of its own), the narrowing conversion, the compare.
       case AddDays _, SubDays _, DateDiff _, Greatest _, Least _, WidenLane _,

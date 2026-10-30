@@ -102,7 +102,7 @@ final class VarkaTimeCompiler {
    * {@code DateTimeUtils.getNanosPerTimeUnit} and {@code parseTimeTruncLevel} spell them - the
    * same five names, and nothing coarser than an hour, because a {@code TIME} has no day.
    */
-  private static final Map<String, Long> NANOS_PER_TIME_UNIT = Map.of(
+  static final Map<String, Long> NANOS_PER_TIME_UNIT = Map.of(
       "MICROSECOND", DateTimeConstants.NANOS_PER_MICROS,
       "MILLISECOND", DateTimeConstants.NANOS_PER_MILLIS,
       "SECOND", DateTimeConstants.NANOS_PER_SECOND,

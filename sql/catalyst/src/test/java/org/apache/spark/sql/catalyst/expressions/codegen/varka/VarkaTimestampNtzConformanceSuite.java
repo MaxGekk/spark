@@ -28,7 +28,9 @@ import org.apache.spark.sql.types.DataTypes;
  * {@link VarkaTypeConformance} over microseconds since the epoch at the long lane. The values are
  * the long range's extremes and their neighbours, zero and one each way, and the edges of the
  * days a {@code DATE} converts to without overflow, {@code +-106,751,991} days, with the first
- * microsecond past each.
+ * microsecond past each. Two timestamps subtract to a day-time interval, which the null handling
+ * check takes as its pair, as {@code TIME}'s does, over half the long range: the difference
+ * raises on overflow, and over the extremes nearly every batch would.
  *
  * <p>In its own JVM: a cast to {@code DATE} runs a kernel of both lanes, whose int species is the
  * long species' width beside the int lane's own.
@@ -51,7 +53,8 @@ public final class VarkaTimestampNtzConformanceSuite extends VarkaTypeConformanc
         LongStream.of(integralValues(Long.MIN_VALUE, Long.MAX_VALUE)),
         LongStream.of(-edge, -edge - 1, edge, edge + 1)).toArray();
     return new ConformanceType("ntz", DataTypes.TimestampNTZType, "TIMESTAMP_NTZ",
-        VarkaTimestampNtzConformanceSuite::literal, values);
+        VarkaTimestampNtzConformanceSuite::literal, values, new long[] {1, -1},
+        new PairForm("x - y", "ntz_minus_ntz", halfRange(Long.MIN_VALUE, Long.MAX_VALUE)));
   }
 
   /** An NTZ literal for {@code micros}: the UTC wall clock it counts to, to the microsecond. */

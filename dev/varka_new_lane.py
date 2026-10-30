@@ -70,18 +70,10 @@ BENCHMARKS = [
 OWED = {
     ("fuzz grammar", "BYTE"): "row 352 (the fuzzers across types)",
     ("fuzz grammar", "SHORT"): "row 352 (the fuzzers across types)",
-    ("template warm-up", "FLOAT"): "row 341 (the floating lanes, after their split)",
     ("fuzz grammar", "FLOAT"): "row 341 (the floating lanes, after their split)",
     ("benchmark", "FLOAT"): "row 341 (the floating lanes, after their split)",
-    ("template warm-up", "DOUBLE"): "row 341 (the floating lanes, after their split)",
     ("fuzz grammar", "DOUBLE"): "row 341 (the floating lanes, after their split)",
     ("benchmark", "DOUBLE"): "row 341 (the floating lanes, after their split)",
-    ("coverage table", "FloatType"): "row 341 (the floating lanes' coverage rows)",
-    ("width audit", "FloatType"): "row 341 (the floating lanes' coverage rows)",
-    ("census", "FloatType"): "row 341 (the floating lanes' coverage rows)",
-    ("coverage table", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
-    ("width audit", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
-    ("census", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
     # A decimal pair counts fused only when it fuses at every precision up to 38 (m8/PLAN.md 2.8),
     # so the comparisons and null tests row 347 fuses up to precision 18 are a note, not a claim.
     ("census", "DecimalType"): "row 359 (a decimal pair fused at every precision, PLAN.md 2.8)",

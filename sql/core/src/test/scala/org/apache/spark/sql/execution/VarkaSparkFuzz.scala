@@ -94,8 +94,10 @@ object VarkaSparkFuzz {
    * largest ones that still fit, so the interval operations of a composition are what overflow.
    * The TIMESTAMP_NTZ columns are derived, `ntz` from `d` at the time `t` and `ntz2` from `d2` at
    * `t2`, as the differential suite derives them; every date drawn here converts without
-   * overflow. The cells drawn are what they were; which coverage rows a seed's compositions take
-   * follows the table, and a stored reproducer replays its own text.
+   * overflow. The floating columns are the differential suite's (VARKA-341), each picked by
+   * the value of `l`, `l2`, `i` or `d2` modulo the lists' length. The cells drawn are what they
+   * were; which coverage rows a seed's compositions take follows the table, and a stored
+   * reproducer replays its own text.
    */
   def fixtureSql(data: Seq[Seq[String]]): String =
     fixtureRows(data.map(_.mkString("(", ", ", ")")))
@@ -104,7 +106,11 @@ object VarkaSparkFuzz {
   def rowText(row: Seq[String]): String = row.mkString("(", ", ", ")")
 
   /** The fixture over `VALUES` rows already written as text. */
-  def fixtureRows(valueRows: Seq[String]): String =
+  def fixtureRows(valueRows: Seq[String]): String = {
+    val floating = VarkaCoverageDifferentialSuite.floatingColumns(
+      Seq("CAST(pmod(l, %d) AS INT)", "CAST(pmod(l2, %d) AS INT)", "pmod(i, %d)",
+        "pmod(unix_date(d2), %d)")
+        .map(_.format(VarkaCoverageDifferentialSuite.floatingPicks)))
     s"""SELECT d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CASE WHEN 12L * y BETWEEN -2147483648L AND 2147483647L
@@ -113,9 +119,11 @@ object VarkaSparkFuzz {
        |            THEN make_ym_interval(y, mm) END AS ym,
        |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2,
        |       CAST(d AS TIMESTAMP_NTZ) + (t - TIME'00:00:00') AS ntz,
-       |       CAST(d2 AS TIMESTAMP_NTZ) + (t2 - TIME'00:00:00') AS ntz2
+       |       CAST(d2 AS TIMESTAMP_NTZ) + (t2 - TIME'00:00:00') AS ntz2,
+       |       $floating
        |FROM VALUES ${valueRows.mkString(",\n  ")}
        |AS v(d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)""".stripMargin
+  }
 
   /**
    * The coverage table's rows, except those that read a BOOLEAN column: the fixture's batches and
