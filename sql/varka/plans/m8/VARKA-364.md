@@ -50,8 +50,9 @@ The sources of each cell, and the facts the design rests on:
    two rules agree (item 6's argument with no fraction to cross), and a long-backed value of a
    fractional function type such as `second`'s `DECIMAL(8, 6)` holds `|u| < 10^16`, below which they
    agree too (row 350's plan, its item 0.14). The kernel therefore follows the double rule over
-   every child and declines the three casts over a child whose producer it cannot classify (open
-   point 3).
+   every child, classifies the long-backed producers it can see by this argument, and declines the
+   three casts over a child whose producer it cannot classify (settled by the lead, 30 October
+   2026).
 3. **LEGACY to an integral type.** `Decimal.toLong` is `decimalVal.longValue` for a `BigDecimal`
    (`types/Decimal.scala:251-257`), which JDK 25 computes as `toBigInteger().longValue()`,
    truncation toward zero and then the low 64 bits, its zero and fraction-only fast paths giving the
@@ -169,21 +170,25 @@ The sources of each cell, and the facts the design rests on:
 
 ### What differs from the row text and the milestone plan
 
-- **"Declined otherwise" declines nearly every batch of a wide `DOUBLE` cast** (item 21). The plan
-  builds the exact correction 2.4 calls `MIDPOINT` - one pass over `w'` and an integer test against
-  the midpoint above it - as the proposed default, and the row's two passes with the decline as the
-  `DECLINE` arm, measured against it (open point 1).
+- **"Declined otherwise" declines nearly every batch of a wide `DOUBLE` cast** (item 21). The
+  default is the exact correction 2.4 calls `MIDPOINT` - one pass over `w'` and an integer test
+  against the midpoint above it - and the row's two passes with the decline are the `DECLINE` arm,
+  measured against it (settled by the lead, 30 October 2026). This departs from the owner's text
+  twice: wave F3's "364's two-pass arm", which the default no longer is, and 2.2's "about one in a
+  thousand" with its decline of the lane, which item 21 measures as a decline of nearly every batch.
+  Both are flagged in section 8.
 - **Lanes with `|u| < 2^64` take one exact pass** (2.4), so a `DECIMAL(20, 2)` column of ordinary
   values reaches neither the second pass nor the correction.
 - **The double rule is computed as the exact rule below scale 7, 12 and 14** (item 6), a refinement
   of the answer to question 3 in the shape of row 350's question 1, put to the owner (section 8).
 - **`BIGINT` raises above 18 under ANSI** (item 4): an integer check on the truncated pair, by SMT.
-- **`s >= 28`, 66 of the 590 types above 18 [A]**, declines by row 366's choice unless open point 2
-  lifts it; it is a gap, recorded with a scope item, and it keeps five of the census's cast entries
-  from counting (section 6).
+- **`s >= 28`, 66 of the 590 types above 18 [A]**, declines by Varka's choice, as row 366's does (PR
+  #1183's wording of 2.2; settled by the lead): a gap, recorded with one `m9/SCOPE.md` item shared
+  with 366, which keeps five of the census's cast entries from counting (section 6).
 - **The ownership is enumerated, not described** (2.1): of the 606841 ordered decimal-to-decimal
-  type pairs, 467095 are this row's [A], and the classes no row text names - a rescale down into a
-  wider type, a fallible rescale up into the lane pair, every 128-to-64-bit cast - are among them.
+  type pairs, 467095 are this row's [A], every pair having exactly one owner. Three classes no row
+  text names fall to this row: a rescale down into a wider type (row 360's widening casts need `s'
+  >= s`), a fallible rescale up into the lane pair, and every cast from 128 bits down to 64.
 - **No `(long) (double) u == u` guard is emitted**, so the row's `Long.MAX_VALUE` exclusion has
   nothing to apply to: above 18 the arm runs on every lane, and the guard form row 350's plan uses
   below 19 is `abs(u) <= 2^53`. `Long.MAX_VALUE` at `(19, 0)` is a named test; the wording is the
@@ -312,16 +317,16 @@ neighbour: `x_hi - x_lo` is below `2^-63` of `x`, less than an ulp, and `RN64` i
 cannot pass the midpoint above that neighbour. Option `decimalWideFloatResolve` (`MIDPOINT`,
 `DECLINE`, `Reason.MACHINE`) decides which:
 
-- **`MIDPOINT`, proposed as the default (open point 1).** With `d1 = M * 2^E`, `M` its 53-bit
-  significand, the midpoint above it is `mu = (2M + 1) * 2^(E - 1)`, and `|x|` against `mu` is `m`
-  against `(2M + 1) * 5^s * 2^K` with `K = E - 1 + s`. `(2M + 1) * 5^s` is one 360b `WideMul` by the
-  constant `5^s`, a single word for `s <= 27`; the per-lane `K` shifts that product left (`K >= 0`)
-  or `m` left (`K < 0`), each side within two words, and one 128-bit unsigned compare and an `EQ`
-  give the outcome: above `mu` the upper neighbour (`d1`'s bits plus one, a binade crossing
-  included, since `M = 2^53 - 1` gives `mu` exactly between `d1` and `2^53 * 2^E`), at `mu` the even
-  one of the two (`BigDecimal.doubleValue`'s ties-to-even), below it `d1`. `FLOAT` takes the same
-  test with `f1`'s 24-bit significand. No lane declines, and the second pass is not computed. The
-  one binary32 subnormal of item 0.7 is an exact lane.
+- **`MIDPOINT`, the default.** With `d1 = M * 2^E`, `M` its 53-bit significand, the midpoint above
+  it is `mu = (2M + 1) * 2^(E - 1)`, and `|x|` against `mu` is `m` against `(2M + 1) * 5^s * 2^K`
+  with `K = E - 1 + s`. `(2M + 1) * 5^s` is one 360b `WideMul` by the constant `5^s`, a single word
+  for `s <= 27`; the per-lane `K` shifts that product left (`K >= 0`) or `m` left (`K < 0`), each
+  side within two words, and one 128-bit unsigned compare and an `EQ` give the outcome: above `mu`
+  the upper neighbour (`d1`'s bits plus one, a binade crossing included, since `M = 2^53 - 1` gives
+  `mu` exactly between `d1` and `2^53 * 2^E`), at `mu` the even one of the two
+  (`BigDecimal.doubleValue`'s ties-to-even), below it `d1`. `FLOAT` takes the same test with `f1`'s
+  24-bit significand. No lane declines, and the second pass is not computed. The one binary32
+  subnormal of item 0.7 is an exact lane.
 - **`DECLINE`, the row's text.** A second pass on `w' + 1`, which at `w' = 2^64 - 1` is renormalised
   to `2^63` with the offset plus one; a wide lane is accepted where the two passes give one double
   (one float for `FLOAT`, one outcome for 2.3's narrow casts) and otherwise declines its batch by
@@ -329,9 +334,10 @@ cannot pass the midpoint above that neighbour. Option `decimalWideFloatResolve` 
   value lies between the passes' inputs and both roundings are monotone, so equal ends force the
   answer between them; the row engine computes a declined batch.
 
-Both arms are built, measured on the runner against each other and the row path (section 4), and the
-default is set from that measurement; at the measured disagreement rate (item 0.21) `DECLINE` serves
-a wide `DOUBLE` column's batches only rarely, which is the reason `MIDPOINT` is proposed.
+Both arms are built and measured on the runner against each other and the row path (section 4).
+`MIDPOINT` is the default by the lead's settlement of 30 October 2026: at the measured disagreement
+rate (item 0.21) `DECLINE` serves a wide `DOUBLE` column's batches only rarely. The arm stays, as
+the owner's rule on losing option arms asks, and the measurement scores both.
 
 ### 2.5 Scales 28 to 38
 
@@ -339,10 +345,12 @@ Lemire's window and row 366's table stop at `s = 27`, and Varka declines `s >= 2
 366's plan, its 2.5; PR #1183's wording of 2.2). Under that choice every floating cast and the three
 narrow ANSI and TRY casts of a `DECIMAL(p, s >= 28)` decline at compile time with the reason "the
 exact decimal-to-floating arm stops at scale 27", a recorded decline with a scope item in
-`m9/SCOPE.md`, as the owner's standing rule for declines asks. The integer casts at these scales are
-unaffected. What serving the band would take is open point 2: the table rows for `s = 28..38` from
-Lemire's section 9.2, `5^s` as a two-word constant in `MIDPOINT`'s product, and either Mushtak and
-Lemire's no-fallback proof or Lemire's own fallback condition kept as a decline that never fires.
+`m9/SCOPE.md`, as the owner's standing rule for declines asks: one item covering rows 366 and 364
+together, added with 364b. The integer casts at these scales are unaffected. Serving the band is a
+follow-up to both rows, not this row's alone (settled by the lead): the table rows for `s = 28..38`
+from Lemire's section 9.2, `5^s` as a two-word constant in `MIDPOINT`'s product, and Mushtak and
+Lemire's Proposition 4 for the no-fallback claim, or Lemire's own fallback condition kept as a
+decline that never fires.
 
 ### 2.6 At 128 bits, compiler, reference, cost, warm-up
 
@@ -398,18 +406,29 @@ gains the funnel shift, held by `VarkaWarmupReachSuite`.
    and tested by name; each integral bound at each threshold scale; against `Cast.eval` and
    `BigDecimal`. **No vacuous pass**: the suite counts exact lanes, wide lanes, each `MIDPOINT`
    outcome (below, above, the tie) and `DECLINE`'s disagreements, and fails if any count is zero.
-6. **Coverage rows** in 350's "DECIMAL casts" family over 359's fixtures (`d19`, `d38`, `d38b`,
+6. **`MIDPOINT`'s exactness, and how each half is proven.** The one pass gives `q = RN(x_lo)` (or
+   `RN32`), and the true answer is `q` or its upper neighbour, since `x_lo <= |x| < x_hi` and the
+   gap `x_hi - x_lo` is at most `2^-63` of `x`, under a tenth of an ulp. Which one is decided by
+   comparing the magnitude `m` with the midpoint `mu = (2M + 1) * 2^(E - 1)` between `q = M * 2^E`
+   and its neighbour, scaled by `10^s`: `|x| > mu` exactly when `m > (2M + 1) * 5^s * 2^(E - 1 +
+   s)`, an integer inequality, its equality the tie that goes to the even significand. The test
+   therefore uses no floating arithmetic; `M` and `E` are read from `q`'s bits. **The proof route**:
+   the integer compare - the product by the constant `5^s`, the per-lane shift of either side and
+   the two-word unsigned compare and tie - is proven by SMT over integers in `decimal128_casts.smt2`
+   (item 4); the one pass is row 366's sequence on a normalised input, exact by Lemire's theorems
+   that row cites, and is held by the sampled arm (item 5), not SMT.
+7. **Coverage rows** in 350's "DECIMAL casts" family over 359's fixtures (`d19`, `d38`, `d38b`,
    `d3810`) and one more, `d38s20` (`DECIMAL(38, 20)`, so the double rule's scale is reached): each
    form of 2.2's table in each legal mode, the `BOOLEAN` target as a filter, each naming its
    verification for row 490's check. `VarkaCastMatrixSuite` regenerates `casts_fused.tsv`, whose
    `DECIMAL(30, 4)` forms then fuse in every mode, and `dev/varka_census.py` the `fused_today`
    column.
-7. **Conformance**: 359's decimal conformance suite (its answered question 4) gets this row's cast
+8. **Conformance**: 359's decimal conformance suite (its answered question 4) gets this row's cast
    rows, the ANSI forms over an in-range value set.
-8. **The fuzzers**: the IR grammar draws 2.2's shapes with each guard mode and both resolve arms in
+9. **The fuzzers**: the IR grammar draws 2.2's shapes with each guard mode and both resolve arms in
    the decimal sequence; the Spark-level fuzzer's decimal columns above 18 cast to every target in
    each mode. Spark's cast suites through row 368's harness for these pairs.
-9. **The bytes oracle**: `emitted_bytes.json` adds rows and moves no existing shape.
+10. **The bytes oracle**: `emitted_bytes.json` adds rows and moves no existing shape.
 
 The sweeps - the cast table over the 606841 pairs, the sampled arm in full, the twin's search - run
 by hand in the gate's sweep step (`-Dvarka.sweep=true`), their times stated in the pull request,
@@ -470,8 +489,8 @@ Predictions, registered before the build:
 4. **364b, the floating targets and the double rule**, after 366a, 343 and 350c: the normalisation,
    both resolve arms, `DOUBLE` and `FLOAT` at `s <= 27`, the narrow double rule at and above the
    threshold scales, the sampled arm, the remaining planted faults, the measurement against the
-   baseline at both widths and 512 bits on the laptop, scored; the band of 2.5 as open point 2
-   decides.
+   baseline at both widths and 512 bits on the laptop, scored; the band of 2.5 declined with its
+   shared scope item.
 
 | file | what |
 |---|---|
@@ -500,11 +519,11 @@ A decimal pair counts fused only when it fuses at every precision up to 38 (the 
 2.8; 359's answered question 2), so this row is where the census's cast entries over a decimal input
 count, given 350 and 366. Of the ten - `cast`, `try_cast`, `boolean`, `tinyint`, `smallint`, `int`,
 `bigint`, `float`, `double`, `decimal` - `boolean` (as a projection given row 27's boolean output),
-`bigint` and `decimal` count when 364a lands, and `float`, `double`, `int`, `smallint` and `tinyint`
-with 364b if the band of 2.5 is served, otherwise they wait on it. `cast` and `try_cast` wait on the
-six unclaimed pairs of item 0.20. The 22 comparison and choice pairs `VARKA-359.md` 6 parks on "360
-and 363" count with 360b's rescale up and this row's coercion casts through 363's division, as 363's
-plan has it.
+`bigint` and `decimal` count when 364a lands, while `float`, `double`, `int`, `smallint` and
+`tinyint` cannot count while the band of 2.5 declines (section 8, item 5). `cast` and `try_cast`
+wait on the six unclaimed pairs of item 0.20. The 22 comparison and choice pairs `VARKA-359.md` 6
+parks on "360 and 363" count with 360b's rescale up and this row's coercion casts through 363's
+division, as 363's plan has it.
 
 ## 7. Out of this row, and declines that stay
 
@@ -517,9 +536,9 @@ next integer - would avoid the floating lane for the narrow casts at and above t
 `MIDPOINT` already makes the double exact there, so it is not built.
 
 Declines that stay, each with its reason: an ANSI batch holding a value Spark raises on (the row
-engine raises it); the floating casts and the narrow double rule at `s >= 28` until open point 2 is
-answered (2.5, a scope item); under `DECLINE`, a batch with a disagreeing lane; a child whose
-backing the compiler cannot classify, for the three narrow casts (item 0.2); a decimal in an
+engine raises it); the floating casts and the narrow double rule at `s >= 28`, by Varka's choice
+(2.5, one scope item shared with 366); under `DECLINE`, a batch with a disagreeing lane; a child
+whose backing the compiler cannot classify, for the three narrow casts (item 0.2); a decimal in an
 int-driven kernel (347's leaf rule); a negative scale; at two long lanes on x86 a condition root
 (503) and any projection whose measurement loses there.
 
@@ -541,55 +560,46 @@ int-driven kernel (347's leaf rule); a negative scale; at two long lanes on x86 
    the milestone plan's 2.2 ("declines the lane otherwise, about one in a thousand by the reading's
    estimate") treat the decline as rare; in Varka a decline is per batch, and the admission's draws
    put one disagreeing lane in two to four thousand, so a wide `DOUBLE` column's batches decline
-   nearly always (item 0.21). This plan proposes `MIDPOINT` as the default, both arms built (open
-   point 1).
+   nearly always (item 0.21). Wave F3's "364's two-pass arm" names the same form. This plan makes
+   `MIDPOINT` the default, by the lead's settlement, and keeps the two passes as the measured
+   `DECLINE` arm; both phrases are the owner's and are left as they are.
 3. **Flagged, the owner's text: the `Long.MAX_VALUE` exclusion** applies to a guard this plan does
    not emit (0, "What differs"); the value is a named test.
 4. **Flagged, the owner's text: 2.2's abort wording**, which PR #1183 rewords to Varka's choice;
-   this row inherits the decline at `s >= 28` (2.5) unless open point 2 lifts it.
+   this row inherits the decline at `s >= 28` (2.5), with one scope item shared with 366.
+5. **For information: the census cost of the band.** While `s >= 28` declines, five of the ten cast
+   entries over a decimal input - `float`, `double`, `int`, `smallint` and `tinyint` - cannot count
+   fused, since a pair counts only at every precision and scale (section 6). Serving the band, by
+   extending the table to scale 38 on Mushtak and Lemire's Proposition 4, would be a follow-up to
+   rows 366 and 364 together.
 
 ### Open points for the lead
 
-1. **The resolution of a wide `DOUBLE` lane.** (a) `MIDPOINT` the default and `DECLINE` the measured
-   arm; (b) `DECLINE` the default, as the row's text reads, `MIDPOINT` the arm; (c) `DECLINE` only.
-   Evidence: item 0.21 - 0.00027 to 0.00053 of a lane disagree, leaving 0.004821 to 0.069459 of
-   10000-row batches and 0.1125 to 0.3354 of 4096-row ones served, over six uniform types and the
-   baseline's own column; `MIDPOINT` costs one `WideMul`, two pair shifts and a 128-bit compare in
-   place of `DECLINE`'s whole second pass, so it is likely cheaper as well as exact. Proposed: (a).
-2. **The band `s >= 28`**, 66 of the 590 types above 18. (a) Decline it by row 366's choice, with a
-   scope item, five census entries waiting on it (section 6). (b) Extend the table to `s = 38` from
-   Lemire's section 9.2 (`b = 64 + ceiling(log2 5^s)`, the top 128 bits of `ceiling(2^(2b) / 5^s)`)
-   and rest exactness on Mushtak and Lemire's Proposition 4 for every 64-bit significand; the
-   paper's checking script is not printed, so Varka would re-run the convergent check for its eleven
-   entries in the proof renderer. (c) The same table with Lemire's own fallback condition (section
-   9.2: the second word after the second product all ones) kept as a batch decline, correct on
-   Lemire's argument alone, which Mushtak and Lemire say never fires; its vacuity check is then an
-   IR-level test that drives the condition, since no input reaches it. Not decided here.
-3. **A computed child's backing** (item 0.2). (a) The double rule over every child, by the argument
-   of item 0.2, the three narrow casts declining over a child whose producer the compiler cannot
-   classify; (b) the compiler's decimal kind carries the backing Spark would give the value, and the
-   narrow casts pick the rule by it. (a) is smaller and answers as Spark on every producer the
-   argument covers. The same question reaches row 350 at precision 17 and 18, where the rules differ
-   too; that plan does not raise it.
-4. **The ownership of 2.1, for confirmation.** The classes sum to 606841 with 350 and 360 as their
-   plans now stand; this row claims every rescale down above 18, into a wider type included (360's
-   widening casts need `s' >= s`), every fallible rescale up into or out of the pair, and every
-   integral source into `p >= 19` but `BIGINT` to `DECIMAL(20, 0)`.
+Settled by the lead on 30 October 2026, kept as the record: (1) `MIDPOINT` is the default and
+`DECLINE` the measured arm, with the exactness argument and its proof route stated (3 item 6) and
+the two departures from the owner's text flagged (section 8, item 2); (2) `s >= 28` declines by
+Varka's choice, as row 366's does, under one `m9/SCOPE.md` item for both rows, the census cost put
+to the owner as information (section 8, item 5), and extending the table a follow-up to both rows;
+(3) the double rule over every child, the long-backed producers Varka can see classified by item
+0.2's argument and the rest declined; (4) the ownership of 2.1 as counted, one owner per pair, the
+three classes no row text names recorded in "What differs". None is open. Outside this row: the
+backing question reaches row 350 at precision 17 and 18, where the rules differ too, and that plan
+does not raise it.
 
 ## 9. Done when
 
-Row 364's text holds, with the corrections above and the answers to section 8 and the open points:
-every decimal pair of `m8/casts.tsv` that section 1 names fuses in the three modes at every `(p, s)`
-with `p >= 19`, or carries its recorded reason (the band of 2.5 under open point 2 (a)); the three
-narrow ANSI and TRY casts follow the double rule, computed as section 8's question 1 is answered;
-both resolve arms of 2.4 are built and measured and the default is set from the runner; the integer
-rules are proven in `decimal128_casts.smt2` under Z3 and cvc5 at full width, item 0.6's lemma
-re-checked by its unit test, and the floating targets' and the double rule's sampled arm pass with
-non-zero vacuity counts; the table test, the named cases and the planted faults (failing with their
-flags) pass; each rescale site names its defence with a test at the first value its guard rejects;
-`casts_fused.tsv`, `casts.tsv` and the census agree with the compiler; no existing shape's bytes
-move; the measurement against the baseline is committed at both widths with its predictions scored;
-and the PR build and the option matrix pass.
+Row 364's text holds, with the corrections above and the answers to section 8: every decimal pair of
+`m8/casts.tsv` that section 1 names fuses in the three modes at every `(p, s)` with `p >= 19`, or
+carries its recorded reason (the band of 2.5, with its shared scope item); the three narrow ANSI and
+TRY casts follow the double rule, computed as section 8's question 1 is answered; both resolve arms
+of 2.4 are built and measured, `MIDPOINT` the default; the integer rules are proven in
+`decimal128_casts.smt2` under Z3 and cvc5 at full width, item 0.6's lemma re-checked by its unit
+test, and the floating targets' and the double rule's sampled arm pass with non-zero vacuity counts;
+the table test, the named cases and the planted faults (failing with their flags) pass; each rescale
+site names its defence with a test at the first value its guard rejects; `casts_fused.tsv`,
+`casts.tsv` and the census agree with the compiler; no existing shape's bytes move; the measurement
+against the baseline is committed at both widths with its predictions scored; and the PR build and
+the option matrix pass.
 
 ## 10. Outcome
 
