@@ -451,6 +451,12 @@ garbage bit under a null and a nonzero offset, which the cache cannot produce (2
 
 ## 8. Questions for the owner
 
+*Settled, the lead, 30 October 2026, as each point recommends:* 1 (a), 352's drawer becomes value-
+first with the text rendered from the value; 2 (a), a step of the scheduled sql job of 368b and
+537 with that job's timeout raised; 3 (a), the LEGACY-only hostile fixture after 369c; 4 (b),
+follow what 499(a) settles for session suites, annotating the suite in 369a if 499(a) has not
+landed by then; 5 (a), the value form kept beside the boolean output as a third path.
+
 None. Open points for the lead, each with the options and the evidence:
 
 1. **Who bridges 352's descriptor to a typed fixture.** The arm needs a value per cell (item
