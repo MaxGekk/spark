@@ -61,10 +61,11 @@ named. The four traps were met on row 338's matrix runs (fork run 40294304006, `
    test to the warm-up handover test (`be047e59673`), row 485 moved it back (`959447c69df`), and
    row 507 removed it as stale (`b68f3de5459`); master has none. Each time the previous line failed
    the matrix: a `fails` line whose test passes is a stale entry (`VarkaMatrixRuns.java:430-441`).
-9. **Two kinds, hard-coded in six places.** `VarkaMatrixRuns.Kind` (`:273-298`), `expectedFailure`
+9. **Two kinds, hard-coded in seven places.** `VarkaMatrixRuns.Kind` (`:273-298`), `expectedFailure`
    (`:353-358`), `around` (`:410-443`), the lint's skips rule (`dev/varka_lint.py:327-366`, the
    kind at `:361-362`), the report (`dev/varka_matrix_report.py:88-89`, `:144-148`) and the CI
-   ledger's report line (`dev/varka_ci_ledger.py:526-532`).
+   ledger's report line (`dev/varka_ci_ledger.py:526-532`), and `VarkaTestReach.skips`, which takes
+   whether a `fails` line exists (`VarkaMatrixRuns.java:415`) to decide if a test runs at all.
 
 ### (d) The conformance cast check, cancelled as a whole
 
@@ -111,21 +112,29 @@ whether any exists, and the exemption is built only if one does.
 The predicate is a claim about which classes conflict, so it is established before it is
 enforced: step 1 runs the catalyst suites in the shared JVM with `-Dvarka.speciesGuard=report`
 under each of the three lane configurations, and the classes the report lists must be the ones
-the predicate selects at the defaults. If they are not, the rule is the report's set, and the
-predicate becomes "re-emit the kernel's IR under each lane configuration and admit it to a
-scratch registry seeded with that configuration's species", which `VarkaKernelChecks` can do,
-since it holds the roots and the options where it loads.
+the predicate selects at the defaults. The disagreement to expect is a kernel driven at the int
+lane that widens into long lanes inside (a 64-bit overflow check, a magic-multiply division): it
+names both classes, yet its long species is the size the long kernels establish, so it does not
+conflict; only a long-driven kernel holding int values does. If the sets differ, the rule is the
+report's set, and the predicate becomes "re-emit the kernel's IR under each lane configuration
+and admit it to a scratch registry seeded with that configuration's species", which
+`VarkaKernelChecks` can do, since it holds the roots and the options where it loads.
 
-The row's other reading, "the harness forks for such a kernel", is not this: a fork happens a
-suite at a time, before the first test (`VarkaOwnJvm`), and a kernel is met inside a test.
+This is the row's "a lint requires the annotation", implemented at run time rather than over the
+sources: no reading of a suite's source can tell which lanes its kernels hold, and its bytes at the
+defaults can. The row's other option, "the harness forks for such a kernel", does not fit the
+harness: a fork happens a suite at a time, before the first test (`VarkaOwnJvm`), and a kernel is
+met inside a test.
 
 ### 2.2 (b): a session-run predicate row must select a row
 
 `VarkaCoverageDifferentialSuite` fails a session-run predicate row whose answer is empty on every
 fixture, naming the row and the cause ("at one row a batch the cache prunes every batch, and no
-kernel runs"), in place of the exemption at `:124-131`. A predicate the cache cannot prune
-(`InSet`, a predicate on no literal) passes the same rule, since a row it selects is a batch it
-cannot prune. The check runs at the defaults on the answers the suite computes already.
+kernel runs"), beside the exemption at `:124-131`, which stays: that one is per fixture, where
+an all-null fixture under a null-rejecting predicate is one pruned batch at the defaults too. A
+predicate the cache cannot prune (`InSet`, a predicate on no literal) passes the same rule, since
+a row it selects is a batch it cannot prune. The check runs at the defaults on the answers the
+suite computes already.
 
 ### 2.3 (c): a kind for a seeded draw
 
@@ -134,8 +143,11 @@ the line's reason, a pass passes, and the line is never stale. It is legal only 
 draws from a seed, a set `VarkaMatrixRuns` names (the two `VarkaSparkFuzzSuite` tests and
 `VarkaCoverageCompositionFuzzSuite`'s), which the lint enforces so that the stale rule keeps its
 force everywhere else. The two by-design `checkIntOverflow=false` lines go back as `draws` lines
-on both tests. Each of the six consumers in 0.9 learns the kind: the report counts a `draws` test
-as listed for "fuses nothing" and never as stale.
+on both tests. The kind is a new value of the fourth field, not a sixth field, so the three
+readers that split a line into five fields (`VarkaMatrixRuns.parseSkips`, `:310-323`; the lint,
+`dev/varka_lint.py:342-344`; the report, `dev/varka_matrix_report.py:88`) still parse every line.
+Each of the seven consumers in 0.9 learns the kind: the report counts a `draws` test as listed for
+"fuses nothing" and never as stale.
 
 ### 2.4 (d): one test per cast target
 
@@ -144,7 +156,9 @@ named for its target ("the cast to DATE, in LEGACY, ANSI and TRY") and running t
 through `run`, which is unchanged. A target with no pair from the type, its identity cast or one
 `casts.tsv` lacks, is cancelled saying so. The thirteen targets are the registry's census types
 (`CAST_TARGETS`, `:794-805`), so a new type is a new test with its line. An owed cast then cancels
-its own test only.
+its own test only. Plain tests rather than one test with a fuller cancellation message, because
+a test is the unit row 508's test selection keys on: one cast's change then selects that cast's
+test, and its verdict is its own.
 
 ## 3. Tests
 
@@ -177,8 +191,9 @@ Each fix with a test that fails without it:
 1. (d) and (b): each about the size of its section here, a change of tens of lines with its test;
    for these two the plan and the change are nearly the same size.
 2. (a): the report census first, then the predicate, its test and the gate.
-3. (c): the kind across the six consumers and its tests. It lands before or with row 497, whose
-   coverage rows move the seeded draws again.
+3. (c): the kind across the seven consumers and its tests. **It lands with row 497 or before
+   it**: 497's coverage rows move the seeded draws again, and only a `draws` line can hold the
+   by-design `checkIntOverflow=false` failure wherever the draw puts it.
 
 | file | what |
 |---|---|
@@ -191,10 +206,15 @@ Each fix with a test that fails without it:
 
 **Size: medium**, as the row says: about two days, half of it (a)'s census and (c)'s consumers.
 
-## 6. Out of this row
+## 7. Out of this row, and the row text
 
-The choice and overflow checks' whole-test cancellation (the same shape as (d), met by no row
-yet), the species guard for sql/core sessions, and a fixed-seed fuzzer's skip lines.
+- **Kernels in sql/core sessions.** Only the two catalyst helpers call the species guard (0.3), so
+  a session's kernels are not checked; guarding them is not this row's.
+- **(b)'s module.** The row text names `VarkaCoverageSuite` (catalyst) for the check, but the
+  fixtures it must read are sql/core's, so the check is sql/core's (2.2). Moving the fixtures where
+  catalyst can read them would be a row of its own.
+- The choice and overflow checks' whole-test cancellation (the same shape as (d), met by no row
+  yet), and a fixed-seed fuzzer's skip lines.
 
 ## 8. Questions for the owner
 
