@@ -52,7 +52,7 @@ or `x <= 0`; `log(x)` alone is `StrictMath.log` | `:1634-1673` | | `cbrt` | `Cbr
    HotSpot replaces some of them by stubs, and the interpreter, C1 and C2 call the same stub:
    on x86 the template interpreter calls `StubRoutines::dexp`, `dlog`, `dlog10`, `dsin`, `dcos`,
    `dpow`, `dtan`, `dtanh` and `dcbrt` (`src/hotspot/cpu/x86/templateInterpreterGenerator_x86_64.
-   cpp:419-474`), C1 the same (`cpu/x86/c1_LIRGenerator_x86.cpp:818-821` for `dsin`); on aarch64
+   cpp:419-474`), C1 the same nine (`cpu/x86/c1_LIRGenerator_x86.cpp:790-847`); on aarch64
    only `dsin` and `dcos` exist (`cpu/aarch64/stubGenerator_aarch64.cpp:11688-11693`), called
    by C1 the same way (`cpu/aarch64/c1_LIRGenerator_aarch64.cpp:850-853`). So `Math.<fn>`,
    called anywhere in one JVM, is the row engine's own routine on that host **[V]**, and:
@@ -383,14 +383,14 @@ binding is bound and has a contract entry; elsewhere it keeps its exact form, wi
 the verbose `EXPLAIN` ("no contracted bound for `SIN` on `__jsvml_sin4_ha_l9`, JDK 25").
 
 **The binding check.** `VarkaMathBindingSuite` forks one JVM with
-`-Djdk.incubator.vector.DEBUG=true`, touches each operator at each species the host runs, and
-holds the DEBUG lines to the resolver: a symbol wherever the resolver says bound, none where
-`UNBOUND`. It runs in the PR build on each runner, so each JDK build CI uses is checked. The call
+`-Djdk.incubator.vector.DEBUG=true`, touches each operator at each species the host runs, and holds
+the DEBUG lines to the resolver: a symbol wherever the resolver says bound, none where `UNBOUND`. It
+runs in the PR build, which is x86 (`ubuntu-latest`), and in the census workflow on the Arm runner
+(`varka-canary.yml`'s host), so each JDK build CI uses is checked on both architectures. The call
 itself, which DEBUG does not prove (item 0.8), is checked by `dev/varka_emit.sh --asm` over a
-`LIBRARY` form run with the DEBUG flag: the `call` in `loopDense0`'s assembly targets the
-address the DEBUG line printed. `varka_emit.sh` gains `--jvm-arg` for the flag; the check runs by
-hand once per JDK build in the gate and its output is committed (`results/VARKA-345-binding-
-<host>.txt`).
+`LIBRARY` form run with the DEBUG flag: the `call` in `loopDense0`'s assembly targets the address
+the DEBUG line printed. `varka_emit.sh` gains `--jvm-arg` for the flag; the check runs by hand once
+per JDK build in the gate and its output is committed (`results/VARKA-345-binding- <host>.txt`).
 
 ### 2.6 The configuration
 
@@ -538,8 +538,8 @@ The coverage rows say which form served them, and `docs/sql-varka.md` says it pe
    `-0.0` against `+0.0` and `-Double.MIN_VALUE` against `+Double.MIN_VALUE` fail; two NaN
    payloads pass; through an oracle, a planted kernel lane two steps beyond the bound fails the
    coverage differential's math row.
-6. **The binding check** (2.5): `VarkaMathBindingSuite` on every runner; the `--asm` check by
-   hand in the gate.
+6. **The binding check** (2.5): `VarkaMathBindingSuite` in the PR build (x86) and the census
+   workflow (Arm); the `--asm` check by hand in the gate.
 7. **The dead-lane blend**: a `LIBRARY` kernel over a batch with nulls holding `1e300` and NaN in
    their slots computes the live lanes as the dense kernel does, and its time is within the
    dense time's band (laptop, from item 0.9's measurement; the gate's run only).
@@ -763,13 +763,13 @@ setting is an emit option because it changes a node's form (2.6).
 With the configuration off, the default, no kernel holds a library call and every math form admitted
 through the hook is bit-identical to Spark by 2.3's three tests; with it on, `LIBRARY` appears only
 on a binding with a contract entry; a within-bound comparison catches a lane two steps further out
-than the bound (3.5); the binding check passes on every runner and the `--asm` check is committed
-for the laptop; the contract table's suite holds; the dated corrections of `SCOPE_FUNCTIONS.md` 3,
-item 36 and `SCOPE_STANDARD_MODE.md` 3.4 record the exact default; no existing shape's bytes move;
-the PR build and the option matrix with `mathUlpContract=true` pass; the baseline is committed with
-this row's predictions scored where they can be; and, after the owner's yes on step 0, the library's
-`exp` matches `StrictMath.exp` by 2.3's tests 1 and 2 with its speed against `StrictMath` and
-`LANE_CALL` recorded.
+than the bound (3.5); the binding check passes on the x86 and Arm runners and the `--asm` check is
+committed for the laptop; the contract table's suite holds; the dated corrections of
+`SCOPE_FUNCTIONS.md` 3, item 36 and `SCOPE_STANDARD_MODE.md` 3.4 record the exact default; no
+existing shape's bytes move; the PR build and the option matrix with `mathUlpContract=true` pass;
+the baseline is committed with this row's predictions scored where they can be; and, after the
+owner's yes on step 0, the library's `exp` matches `StrictMath.exp` by 2.3's tests 1 and 2 with its
+speed against `StrictMath` and `LANE_CALL` recorded.
 
 ## 10. Outcome
 
