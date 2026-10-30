@@ -4,13 +4,11 @@ preferred 512-bit species and with -XX:MaxVectorSize=32; both outputs follow.
   java --add-modules jdk.incubator.vector -XX:CompileCommand=quiet \
     -XX:CompileCommand=inline,Varka345Exact::exp [-XX:MaxVectorSize=32] Varka345Exact.java
 
-The program is not committed. Its part 1 was a hand translation of JDK 25's
-java/lang/FdLibm.java Exp.compute into Vector API lanes, and that file is GPLv2 with the
-Classpath exception, which does not cover a translation, so the program cannot be part of this
-Apache-2.0 repository. It was a feasibility check only: does a lane-wise copy of fdlibm's
-operation sequence reproduce StrictMath.exp bit for bit, and what does it cost. The plan's port
-is written from Sun's fdlibm 5.3 C sources (netlib), and this check is to be rerun from that
-port once those sources are fetched with the owner's approval (VARKA-345.md 5).
+The program is not kept, for licence reasons. It was a feasibility check only: does a lane-wise
+copy of fdlibm's operation sequence reproduce StrictMath.exp bit for bit, and what does it cost.
+The plan's port is written from Sun's fdlibm 5.3 C sources (netlib) and emitted by Varka as IR
+nodes in its own kernels, and this check is to be rerun on that port once those sources are
+fetched with the owner's approval (VARKA-345.md 5).
 
 What the program did:
 1. The port, every branch computed and blended, against StrictMath.exp by raw bits, after a
@@ -27,11 +25,27 @@ What the program did:
    Math.sin per lane and reloads, and the lanewise SIN operator; and the per-lane loop's
    answers against Math.sin by raw bits.
 
-Part 3's timings are laptop numbers of a hand-written Java loop, not Varka's emitter. The port
-is not faster than the scalar loop there, for a reason not diagnosed: a first run without the
-inline command logged the port (601 bytecodes) as "failed to inline: hot method too big" under
--XX:+PrintIntrinsics, and forcing the inline did not change the time. Nothing in the plan
-rests on part 3's port numbers beyond "not shown faster yet".
+Part 3's timings are provisional, laptop-only numbers of a hand-written Java loop, not Varka's
+emitter. Part 1's bit-identity counts stand; part 3's timing of the port does not show what a
+lane-wise fdlibm exp costs. The port measured slower than the scalar loop at 256 bits and only
+slightly faster at 512, and the observed cause is that the port's method was mostly not inlined:
+a diagnostic run by the lead on the laptop at 512 bits, 30 October 2026, under
+-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining, printed
+  Varka345Exact::exp (601 bytes)   failed to inline: hot method too big
+at three call sites, and one other site late-inlined it through Double512Vector::blend. A
+Vector API value crossing a call C2 did not inline is boxed, an allocation per call, so the
+timing measured boxed vectors and allocation rather than the port's arithmetic. One
+observation is not reconciled with that: the timed runs' command line above carries
+-XX:CompileCommand=inline for the method, which HotSpot honours before any size limit
+(src/hotspot/share/opto/bytecodeInfo.cpp:120-124), and a first run without it timed the same;
+whether the command took effect in the timed runs was not recorded. The timing is to be
+re-established on the IR-emitted port from the fdlibm 5.3 C sources, which has no call boundary.
+
+The port's size, counted (not copied), 30 October 2026: non-blank, non-comment lines of each
+function's class in JDK 25's src/java.base/share/classes/java/lang/FdLibm.java, read only to
+count, for the thirteen functions the plan ports (VARKA-345.md 2.1): Asin 59, Acos 61, Atan 81,
+Atan2 68, Hypot 74, Pow 208, Exp 73, Log 81, Log10 36, Log1p 89, Expm1 102, Sinh 40, Cosh 37;
+1009 in all. fdlibm 5.3's C sources are not on the laptop, so their own count is not taken.
 
 ---- output, 512-bit preferred species ----
 WARNING: Using incubator modules: jdk.incubator.vector
