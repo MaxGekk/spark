@@ -221,19 +221,22 @@ With `w` each of the three parts `p`, `NOT (p)` and `(p) IS NULL`:
 - **Fr**, the row boundary's bit walk, on `varkaSpark`: `SELECT COUNT(*) FROM fzc WHERE w`, three
   queries.
 - **Fc**, the compaction's `countSet` and copy, on `varkaSpark`: `SELECT COUNT(z) FROM (SELECT
-  rid + 1 AS z FROM fzc WHERE w)`, three queries.
+  pk + 1 AS z FROM fzc WHERE w)`, three queries.
 - **Pv**, a value over the condition, on `varkaSpark`: three `COUNT_IF`s and `COUNT(*)` over
   `SELECT CASE WHEN (p) THEN 1 WHEN NOT (p) THEN 0 END AS v FROM fzc`.
 - **Pb**, the boolean output, after 27, on `varkaSpark`: three `COUNT_IF`s and `COUNT(*)` over
   `SELECT (p) AS c FROM fzc`.
 
 Pv's counts are `COUNT_IF(v = 1)`, `COUNT_IF(v = 0)` and `COUNT_IF(v IS NULL)`, Pb's `COUNT_IF(c)`,
-`COUNT_IF(NOT c)` and `COUNT_IF(c IS NULL)`, each with `COUNT(*)`. Fc's `rid + 1` is a fused long
-projection, so the plan is `VarkaColumnarToRowExec` over the compacting `VarkaFilterExec` (item
-0.4); `rid` is never null, so `COUNT(z)` counts the rows. S is one query because an aggregate's
-input is the row engine's on either session (item 0.3); Spark's own filter counts are taken on
-one draw in eight (2.4, check 6). That is eight queries on `varkaSpark` and one on `spark` before
-27, nine after.
+`COUNT_IF(NOT c)` and `COUNT_IF(c IS NULL)`, each with `COUNT(*)`. Fc's `pk + 1` is the coverage
+table's `i + 1` over an int column, a fused projection, so the plan is `VarkaColumnarToRowExec`
+over the compacting `VarkaFilterExec` (item 0.4); a bare column there would be the forwarded
+narrowing that the post stage folds back into the row-boundary node, and Fc would be a second Fr.
+`pk` is never null, so `COUNT(z)` counts the rows; an int keeps Fc's projection on the int lane.
+The coverage table holds no `BIGINT` addition, so `rid + 1` is not a form it shows fused. S is
+one query because an aggregate's input is the row engine's on either session (item 0.3); Spark's
+own filter counts are taken on one draw in eight (2.4, check 6). That is eight queries on
+`varkaSpark` and one on `spark` before 27, nine after.
 
 ### 2.4 The checks
 
@@ -241,8 +244,10 @@ Each query's plan is read before its answer is compared:
 
 1. **Both sides read the cache.** `sameCacheReads(..., mustRead = true)` between each Varka query
    and S (row 501's check).
-2. **The Varka node is there and saw every batch.** Fr, Fc, Pv and Pb each carry their Varka node,
-   whose `numInputBatches` equals the planned batch count (127, 128, 129 or the axis's), and whose
+2. **The Varka node is there and saw every batch.** Fr, Fc, Pv and Pb each carry their Varka node
+   (for Fc, the compacting filter, which reads the cache scan, and the projection above it, which
+   meets fewer or empty batches where the filter selects none), the node over the scan's
+   `numInputBatches` equals the planned batch count (127, 128, 129 or the axis's), and whose
    kernel-served batches (`numVarkaBatches`) and declined or fallen-back ones add up to it. A
    query whose node is missing is counted unfused for that plumbing; one that saw fewer batches
    fails as "batches pruned or lost" (item 0.7). On the safe pool a declined batch is reported
@@ -274,17 +279,22 @@ A failed draw's counts decide where it points:
 | check 1, 2, 3 or 7 | the harness or the fixture: the comparison did not test what it says |
 | Fr against S, Fc agrees | the row boundary's bit walk |
 | Fc against S, Fr agrees | the compaction: `countSet`, the forwarding, or the copy |
-| Fr and Fc against S, alike, the projections agree | the filter evaluator above the kernel |
+| Fr and Fc against S, alike, the projections agree | the filter's mask: its root or `filterMask` |
 | Pv or Pb against S, the filters agree | that projection's plumbing: the output's write |
 | every Varka count alike, all against S | the condition all of them compile (`compileCond`) |
 | anything else | more than one; every count is reported |
 
-A Varka-only failure of check 4 is reported with the same table. Then the drill-down, run only
-on a failure: the keys `pk, pb, pj` of the rows the disagreeing plumbing selects in the part that
-differs (for a filter) or of every row with its `c` or `v` (for a projection), collected from that
-query and from the same query on `spark` with pruning off, and the two sets diffed on the driver.
-The keys are bare columns, forwarded rather than computed by a kernel, and a quarter of a million
-rows of four ints is a few megabytes. The report names the first ten differing rows by partition,
+The filters' row reads two plumbings sharing one mask: the condition under a filter root and the
+same condition under a value or boolean root are different emitted roots, so it points at the
+filter root's emission or the evaluator, not at the condition's lowering. A Varka-only failure of
+check 4 is reported with the same table. Then the drill-down, run only on a failure: the keys `pk,
+pb, pj` of the rows the disagreeing plumbing selects in the part that differs (for a filter) or of
+every row with its `c` or `v` (for a projection), collected from that plumbing's own plan and from
+the same query on `spark` with pruning off, and the two sets diffed on the driver. For Fr the keys
+alone keep the row-boundary node; for Fc they are collected beside `pk + 1 AS z`, so the plan
+stays the compacting one rather than folding into the row boundary. The keys are bare columns,
+forwarded rather than computed by a kernel, and a quarter of a million rows of four ints is a few
+megabytes. The report names the first ten differing rows by partition,
 batch, the batch's length, the position and the lane at each lane count, so a count's disagreement
 is reported as rows, the strength item 0.14 says counts give up.
 
@@ -460,8 +470,8 @@ None. Open points for the lead, each with the options and the evidence:
    twelve-row fuzzer's full pool. *Recommended: (a) as a later pull request after 369c*: the
    handover between a served and a declined batch in one task is a plumbing no check reaches at
    scale, but it doubles the cache and the arm's first version should be trusted first.
-4. **`ownJvm` for a session suite.** The fixture holds every lane, so a draw such as `i < l` or
-   Fc's long projection over an int filter makes kernels of two lanes, the shape of 499(a). No
+4. **`ownJvm` for a session suite.** The fixture holds every lane, so a draw such as `i < l`, or
+   Fc's int projection over a long-lane filter, makes kernels of two lanes, the shape of 499(a). No
    sql/core Scala suite is own-JVM today, `VarkaSparkFuzzSuite` included (item 0.13). (a) Annotate
    the suite `@VarkaSuite(ownJvm = true)` from 369a. (b) Follow whatever 499(a) settles for
    session suites. *Recommended: (b), with (a) if 499(a) has not landed by 369a*.
