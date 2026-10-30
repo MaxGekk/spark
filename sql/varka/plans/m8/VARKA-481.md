@@ -75,11 +75,11 @@ From the code (25 October 2026, re-checked 30 October 2026; paths under
    no `NULL` disposal - and in the scratch they park in (`intArithTmp`, three slots, against
    `guardTmp`, one).
 4. **`emitOverflowMask`'s `FAIL` arm is tied to `INT_OVERFLOW`.** It throws unless the node's
-   registered refusal is `INT_OVERFLOW` (`VarkaVectorWalk.java:902-906`, the comment at
-   `:902-903` and the check at `:904-906`): a collect the refusal map does not declare would find
-   no accumulator. So a guard can hand its mask to that arm only when `Analysis` registered it as `INT_OVERFLOW`,
-   which is what 3.2's emit-time lean does; an unregistered guard must collect through
-   `emitGuardCollect` or emit no compare at all.
+   registered refusal is `INT_OVERFLOW` (`VarkaVectorWalk.java:902-906`, the comment at `:902-903`
+   and the check at `:904-906`): a collect the refusal map does not declare would find no
+   accumulator. So a guard can hand its mask to that arm only when `Analysis` registered it as
+   `INT_OVERFLOW`, which is what 3.2's emit-time lean does; an unregistered guard must collect
+   through `emitGuardCollect` or emit no compare at all.
 5. **Why the inner multiply is built as `WRAP` directly.** The range analysis gives a type range
    to a narrow column only and `UNKNOWN` to every other node off the int lane
    (`VarkaRangeAnalysis.java:216-236`), and `WidenLane` passes its child's range up (`:282-283`).
