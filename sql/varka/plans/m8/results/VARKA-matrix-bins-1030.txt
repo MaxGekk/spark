@@ -249,3 +249,74 @@ minutes needs option 2 (slots) as well as option 1 (the record).
   (106 bins, 50394 s, 1749 reach tests) is known.
 - Lane imbalance and setup were split by sampling 12 bins of 41035158315 for step times, not
   every bin.
+
+## 5. The Varka jobs beside a full run: slots and timing
+
+Read with gh api "repos/MaxGekk/spark/actions/runs/<run>/jobs?per_page=100" (started_at,
+completed_at), for the Build's Varka jobs gated on `admit` beside Spark's module matrix.
+
+Jobs running at once in full-Spark Build 41032415239 (skipped jobs left out), every 2 minutes
+from 09:22 UTC; admit 09:22:50 to 09:22:57, Precompile Spark 09:23:51 to 09:42:17 (18.4 min):
+  09:22 1  09:24 9  09:26 4  09:28 3  09:30 5  09:32 4 ... 09:42 4  09:44 10  09:46 10
+  09:48 14  09:50 20 ... 09:58 20  10:00 19  10:02 18  10:04 18  10:06 17  10:08 17
+So a full run holds 3 to 5 slots while Spark precompiles and 20 at its widest, from 09:50.
+
+The Varka jobs, started together right after the precondition, minutes to completion:
+  Build         classes  sql 1/3  sql 2/3  sql 3/3  catalyst (3)
+  41022383513   4.0      10.2     8.2      9.3      9.6 15.2 12.4
+  41062626402   3.9      8.7      8.4      9.3      12.0 14.2 11.3
+Both started from a saved compile state. Started at admit, the classes job and sql's three add 4
+slots to the precompile phase (3 to 5 slots) and finish before the fan-out at 18.4 minutes, so
+the widest point stays at 20. A Build without a compile state compiles clean and runs longer;
+none was read here, so how far such a Build's sql jobs reach into the fan-out is not measured.
+Should they reach it, the run holds up to 24 slots until they finish.
+
+The sql jobs finished 4.2 to 6.2 minutes after the classes job uploaded in 41022383513 and 4.5
+to 5.4 minutes after in 41062626402. A matrix that takes the classes the moment they are uploaded
+thus finds the reach record still being written; waiting up to 10 minutes for it covers both
+Builds, and the record saves about 136 bin-minutes (section 1), 4.5 minutes of bins at 30 slots.
+
+## 6. The rule the fix settled on
+
+The first version of the fix ran the classes job and sql's three Varka jobs beside Spark's
+module matrix when the change held "Varka code", a file test (modules.has_varka_code). A second
+review of that fix found the test wrong both ways:
+- Spark-only edits of the shared hooks (CodeGenerator, SQLConf, the Arrow serializer) change the
+  kernels the suites emit, yet left no record.
+- Files the suites read (sql/varka/coverage.json, plans/m8/casts.tsv, the census tables,
+  plans/figures/*.py, dev/varka_matrix_shards.py) were classed as documents.
+- CI tooling and fixtures (dev/varka_ci_ledger_fixtures/*, dev/varka_matrix_bins.py, ...) were
+  classed as code.
+
+The rule now: when the scope is "spark" and the change builds catalyst or sql
+(dev/is-changed.py -m catalyst,sql, which follows the module graph, so a core change counts),
+the Build runs the classes job and sql's three Varka jobs beside the module matrix, and not
+catalyst's three. A Spark change that builds neither (Python, docs/ pages, another module) runs
+none. has_varka_code and its list of record files are gone. In such a Build:
+- The four jobs need `admit`, so a run labelled ci-hold holds them, and they start when the run
+  is admitted. A run that skips `admit` (Varka-scoped, documents only) runs them at once.
+- They save no dependency cache, no per-run `varka-scoped-times-...-<run_id>` cache entry and
+  no `varka-compile-state` artifact: a Spark branch would add its own entries to the fork's
+  cache quota, and its compile state must never become another pull request's base.
+- The admit job admits runs as before (--concurrent 2). A later review proposed admitting a run
+  with the Varka jobs alone, since one that compiles clean may hold about 24 slots at its fan-out
+  (section 5) and two of them would pass the fork's 40; that rule was dropped to keep the fix
+  small, and the overlap is left unmeasured.
+
+The option matrix's lookup (dev/varka_matrix_reuse.py) waits for such a Build: up to 30 minutes
+while it is still queued in its admit job, two minutes for a classes job not yet listed after
+the precondition and the admit (succeeded or skipped), and up to 10 minutes for the reach record,
+ending that wait as soon as one sql job has failed and retrying a failed API poll three times.
+Each way it ends without the record names the reason and what to do in a warning.
+
+The cost it leaves: both the module matrix's sql shards and the Varka sql jobs run the sql Varka
+suites in such a Build. Spark's build has no suite-name filter to drop them from the module
+matrix, and the module matrix splits sql by ScalaTest tags while the Varka jobs pick suites by
+name (plus ArrowCachedBatchSerializerSuite), so a name filter could miss or over-cut. Its cost is
+the Varka jobs themselves, from the two Builds in section 5: sql's three took 8.2 to 10.2 minutes
+each and the classes job 3.9 to 4.0, about 31 duplicate job-minutes per spark-scope Build.
+
+A later row could remove them: make the module matrix's sql shards write the reach record and
+the harness store themselves (VARKA_REACH_RECORD, VARKA_HARNESS_STORE) and upload them as the
+Varka sql jobs do, so the option matrix reads those and the extra sql jobs go away; the classes
+job stays.
