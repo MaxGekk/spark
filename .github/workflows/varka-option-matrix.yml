@@ -368,12 +368,14 @@ jobs:
       with:
         name: varka-option-matrix-reach
         path: target/varka-run-reach
-    # Each suite's seconds run whole, its median over the configurations that ran all of it, from
-    # this run's JUnit reports, for the next plan's weights (sql/varka/matrix/suite-seconds.tsv).
+    # Each suite's seconds run whole, its median over the configurations that ran all of it, and
+    # its seconds under each of them, from this run's JUnit reports, for the next plan's weights
+    # (sql/varka/matrix/suite-seconds.tsv and config-suite-seconds.tsv).
     - name: Suite seconds
       if: always()
       run: |
         python3 dev/varka_matrix_bins.py times --reach target/varka-run-reach/reach.tsv \
+          --per-configuration target/config-suite-seconds.tsv \
           target/varka-merged/runs > target/suite-seconds.tsv
     - name: Upload the report
       if: always()
@@ -383,6 +385,7 @@ jobs:
         path: |
           target/varka-matrix-report.txt
           target/suite-seconds.tsv
+          target/config-suite-seconds.tsv
         if-no-files-found: ignore
         retention-days: 30
 
