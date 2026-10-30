@@ -89,9 +89,21 @@ public final class VarkaOperatorCensusSuite {
   private static final Pattern INLINE_LINE = Pattern.compile(
       "^(\\s*)@ (\\d+)\\s+(\\S+)::(\\S+) \\(\\d+ bytes\\)(.*)$");
 
-  /** A call site C2 re-targeted to another species' class: the second species' footprint. */
+  /**
+   * A call site C2 re-targeted to another species' class, such as {@code Byte128Vector}: the
+   * second species' footprint. Only a shape's own class counts. C2's printer keys a call site by
+   * its chain of bcis, so two inline paths with equal bcis print "callee changed to" for a method
+   * of a shared class such as {@code LongVector}, which the segment loads do with one species.
+   * The narrowing leaves a gap: a second species whose calls reach only a method of a shared
+   * superclass ({@code LongVector}, {@code AbstractMask}) prints no species class and is not
+   * caught. And the printer says "callee changed to" only when one chain of bcis meets two
+   * callees ({@code printinlining.cpp}, {@code at_bci}), so two species at separate call sites
+   * print nothing: no two-species cell of the catalog trips the tell at any width, which is why
+   * the census asserts only its absence in the one-species cells, not its presence.
+   */
   private static final Pattern BIMORPHIC = Pattern.compile(
-      "callee changed to\\s+jdk\\.incubator\\.vector\\.");
+      "callee changed to\\s+jdk\\.incubator\\.vector\\.[A-Z][a-z]+(64|128|256|512|Max)"
+          + "(Vector|Mask|Shuffle)\\b");
 
   private static final String VECTOR_SUPPORT = "jdk.internal.vm.vector.VectorSupport";
 
@@ -258,6 +270,8 @@ public final class VarkaOperatorCensusSuite {
   }
 
   private static List<String> run(List<String> command) throws IOException, InterruptedException {
+    // The child JVM's code runs where the class-use record cannot see it (VarkaTestUse).
+    VarkaTestUse.childJvm();
     var process = new ProcessBuilder(command).redirectErrorStream(true).start();
     var output = new ArrayList<String>();
     // The output is drained on a thread so that the timeout can fire on a fork that hangs.
@@ -424,6 +438,23 @@ public final class VarkaOperatorCensusSuite {
       assertFalse(e.loop().isEmpty() || e.anchor().isEmpty(), e.name() + " has no loop or anchor");
     }
     assertTrue(cells().size() >= 80, "the census asks about " + cells().size() + " cells");
+  }
+
+  @Test
+  @DisplayName("the second-species tell matches a species class and not a shared superclass")
+  void bimorphicTellMatchesOnlyASpeciesClass() {
+    String prefix = "  @ 12   jdk.incubator.vector.LongVector::lanewise (25 bytes)   "
+        + "callee changed to ";
+    for (String callee : List.of("jdk.incubator.vector.Byte128Vector::lanewise (25 bytes)",
+        "jdk.incubator.vector.Long256Vector$Long256Mask::and (25 bytes)")) {
+      assertTrue(BIMORPHIC.matcher(prefix + callee).find(), "not read as a second species: "
+          + callee);
+    }
+    for (String callee : List.of("jdk.incubator.vector.LongVector::fromMemorySegment (25 bytes)",
+        "jdk.incubator.vector.AbstractMask::anyTrue (25 bytes)")) {
+      assertFalse(BIMORPHIC.matcher(prefix + callee).find(), "read as a second species: "
+          + callee);
+    }
   }
 
   @Test

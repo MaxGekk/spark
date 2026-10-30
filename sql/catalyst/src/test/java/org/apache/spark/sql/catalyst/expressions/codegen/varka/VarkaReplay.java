@@ -265,9 +265,10 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
         int[] ints = file.intLiterals().stream().mapToInt(Integer::intValue).toArray();
         long[] longs = file.longLiterals().stream().mapToLong(Long::longValue).toArray();
         long scratchAddress = scratch == null ? 0L : scratch.memoryAddress();
-        // One overload per lane, picked as the runner picks it: the long entry only at the long
-        // lane, the int entry (which the narrow lanes share) at every other.
-        int status = lane == VarkaVectorIR.LaneType.LONG
+        // One overload per lane, picked as the runner picks it: the long entry at a 64-bit lane
+        // (LONG, and DOUBLE's bits), the int entry (which the narrow lanes and FLOAT share) at
+        // every other.
+        int status = lane.bits() == Long.SIZE
             ? kernel.run(srcData, srcValidity, nullCounts, dst, dstValid, ints, longs, len,
                 scratchAddress)
             : kernel.run(srcData, srcValidity, nullCounts, dst, dstValid, ints, len,

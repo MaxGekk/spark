@@ -147,6 +147,51 @@ public final class VarkaTypes {
       return admission instanceof Admission.OnLane(LaneType lane)
           ? Optional.of(lane) : Optional.empty();
     }
+
+    /**
+     * The value Spark's row holds for a lane value whose bits, sign-extended to a long, are
+     * {@code bits}: the integral types' boxed value at their width, a floating type's value
+     * with those bits, and a condition's {@code Boolean}. The tests' oracles hand it to
+     * Spark's {@code eval}, which reads a {@code DOUBLE} input as a {@code Double} and would
+     * fail on the {@code Long} a width switch makes of it.
+     */
+    public Object sparkValue(long bits) {
+      if (admission instanceof Admission.AsCondition) {
+        return bits != 0L;
+      }
+      return switch (lane().orElseThrow(() -> noLane())) {
+        case BYTE -> (byte) bits;
+        case SHORT -> (short) bits;
+        case INT -> (int) bits;
+        case LONG -> bits;
+        case FLOAT -> Float.intBitsToFloat((int) bits);
+        case DOUBLE -> Double.longBitsToDouble(bits);
+      };
+    }
+
+    /**
+     * {@link #sparkValue}'s inverse: the lane bits, sign-extended to a long, of a value Spark's
+     * row or {@code eval} gives for the type. A floating value's bits are its raw ones, so a
+     * NaN's payload and a zero's sign survive the round trip.
+     */
+    public long bits(Object sparkValue) {
+      return switch (sparkValue) {
+        case Boolean b when admission instanceof Admission.AsCondition -> b ? 1L : 0L;
+        case Float f when lane().orElse(null) == LaneType.FLOAT -> Float.floatToRawIntBits(f);
+        case Double d when lane().orElse(null) == LaneType.DOUBLE ->
+            Double.doubleToRawLongBits(d);
+        case Byte b when lane().orElse(null) == LaneType.BYTE -> b;
+        case Short h when lane().orElse(null) == LaneType.SHORT -> h;
+        case Integer i when lane().orElse(null) == LaneType.INT -> i;
+        case Long l when lane().orElse(null) == LaneType.LONG -> l;
+        default -> throw VarkaErrors.illegalArgument("a " + sparkValue.getClass().getSimpleName()
+            + " is not a " + sql + " value on a lane");
+      };
+    }
+
+    private RuntimeException noLane() {
+      return VarkaErrors.illegalArgument(sql + " is read on no lane");
+    }
   }
 
   /**
@@ -270,14 +315,16 @@ public final class VarkaTypes {
           new Conformance.Suite("SmallInt"));
       case INT -> new Info(id, "int", "INT", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.IntegerType), List.of(LaneType.INT),
-          new Conformance.Owed("Int", "485"));
+          new Conformance.Suite("Int"));
       case LONG -> new Info(id, "bigint", "BIGINT", new Admission.OnLane(LaneType.LONG), 64,
           List.of(DataTypes.LongType), List.of(LaneType.LONG),
-          new Conformance.Owed("BigInt", "485"));
-      case FLOAT -> new Info(id, "float", "FLOAT", new Admission.Owed("341"), 32,
-          List.of(DataTypes.FloatType), List.of(), new Conformance.NotLanded());
-      case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.Owed("341"), 64,
-          List.of(DataTypes.DoubleType), List.of(), new Conformance.NotLanded());
+          new Conformance.Suite("BigInt"));
+      case FLOAT -> new Info(id, "float", "FLOAT", new Admission.OnLane(LaneType.FLOAT), 32,
+          List.of(DataTypes.FloatType), List.of(LaneType.FLOAT),
+          new Conformance.Suite("Float"));
+      case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.OnLane(LaneType.DOUBLE), 64,
+          List.of(DataTypes.DoubleType), List.of(LaneType.DOUBLE),
+          new Conformance.Suite("Double"));
       // Every precision is sixteen bytes a row in Arrow (`ArrowUtils.toArrowType`); the tests
       // probe one form on each side of the 64-bit boundary at precision 18.
       case DECIMAL -> new Info(id, "dec", "DECIMAL(10, 2)", new Admission.Owed("347"), 128,
@@ -285,10 +332,10 @@ public final class VarkaTypes {
           List.of(), new Conformance.NotLanded());
       case DATE -> new Info(id, "date", "DATE", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.DateType), List.of(LaneType.INT),
-          new Conformance.Owed("Date", "485"));
+          new Conformance.Suite("Date"));
       case TIME -> new Info(id, "time", "TIME", new Admission.OnLane(LaneType.LONG), 64,
           List.of(new TimeType(0), new TimeType(3), new TimeType(6)), List.of(LaneType.LONG),
-          new Conformance.Owed("Time", "485"));
+          new Conformance.Suite("Time"));
       case TIMESTAMP_NTZ -> new Info(id, "ntz", "TIMESTAMP_NTZ",
           new Admission.OnLane(LaneType.LONG), 64, List.of(DataTypes.TimestampNTZType),
           List.of(LaneType.LONG), new Conformance.Suite("TimestampNtz"));
@@ -296,12 +343,12 @@ public final class VarkaTypes {
           new Admission.OnLane(LaneType.INT), 32,
           fields(YearMonthIntervalType$.MODULE$.YEAR(), YearMonthIntervalType$.MODULE$.MONTH(),
               YearMonthIntervalType::new),
-          List.of(LaneType.INT), new Conformance.Owed("YearMonthInterval", "485"));
+          List.of(LaneType.INT), new Conformance.Suite("YearMonthInterval"));
       case DT_INTERVAL -> new Info(id, "dt", "INTERVAL DAY",
           new Admission.OnLane(LaneType.LONG), 64,
           fields(DayTimeIntervalType$.MODULE$.DAY(), DayTimeIntervalType$.MODULE$.SECOND(),
               DayTimeIntervalType::new),
-          List.of(LaneType.LONG), new Conformance.Owed("DayTimeInterval", "485"));
+          List.of(LaneType.LONG), new Conformance.Suite("DayTimeInterval"));
       // The zoned type is the same eight bytes as the others on the long lane, but its
       // differences and interval additions are computed on local date-times in the session time
       // zone, which is not lane arithmetic (`m9/SCOPE.md` item 31).

@@ -56,10 +56,19 @@ final class VarkaProofFiles {
   /**
    * The int-lane constant divisors the multiply-high proof and {@code VarkaEmitterDivisionSuite}'s
    * sweep and matrix cover: {@code extract(YEAR FROM ym)}'s 12, the fuzz grammar's list
-   * ({@code VarkaIrGrammar.Shapes.CONST_DIVIDE_DIVISORS}), the {@code TIME} split form's 60 and
-   * 3600, and
-   * two edges of {@link VarkaDivisionLowering#signedMagic}: 196611, the first divisor whose shift
-   * Theorem 5.1 raises past the book's, and {@code Integer.MIN_VALUE}, the magnitude 2^31.
+   * ({@code VarkaIrGrammar.Shapes.CONST_DIVIDE_DIVISORS}), 60 and 3600, and two edges of
+   * {@link VarkaDivisionLowering#signedMagic}: 196611, the first divisor whose shift Theorem 5.1
+   * raises past the book's, and {@code Integer.MIN_VALUE}, the magnitude 2^31.
+   *
+   * <p>No compiler site builds an int-lane division by 60 or 3600 (checked 27 October 2026,
+   * VARKA-496): the only int-lane {@code ConstDivide}s are the interval compiler's, by 12 and by
+   * {@code ym / d}'s literal, and {@code TIME}'s divisions by 60 are on the long lane. They were
+   * put here for the {@code TIME} split form ({@code m9/SCOPE.md}'s catalogue row of a
+   * {@code TIME} as seconds and nanoseconds), which is not built and would divide through
+   * {@code BoundedDivide}, a lowering this proof does not state. They stay as two of the open set
+   * {@code ym / d} can divide by, as every divisor here is, and because the rendered range proofs
+   * and {@code VarkaEmitterDivisionSuite}'s sweep iterate this list; proving that set whole is
+   * {@code m9/SCOPE.md} item 116.
    */
   static final List<Integer> INT_DIVISORS =
       List.of(12, 2, 3, 7, 100, -3, -12, 60, 3600, 196611, Integer.MIN_VALUE);
@@ -204,6 +213,9 @@ final class VarkaProofFiles {
    * conversions to milliseconds and microseconds, the field extracts and
    * {@code remainderOfSixty}), which are all a long-lane {@code ConstDivide} the compiler builds,
    * -60, which takes the sign branch a positive divisor does not, and {@link #NTZ_DAY_ODD}.
+   * {@code VarkaDivisorProofSuite} holds the list to the compiler (VARKA-496): it fails on a
+   * long-lane divisor the coverage rows or the cast matrix compile that is missing here, and on
+   * one here that none compiles, -60 apart.
    */
   static final List<Long> LONG_DIVISORS = List.of(
       DateTimeConstants.NANOS_PER_MICROS,

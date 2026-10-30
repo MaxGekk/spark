@@ -50,11 +50,13 @@ import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ForwardedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompileObserver;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
@@ -153,6 +155,21 @@ public final class VarkaExpressionCompiler {
   public static Optional<PartialVarkaProjection> compilePartial(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
+    Optional<PartialVarkaProjection> compiled =
+        compilePartialUnobserved(projectList, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of(projectList, childOutput, familiesOff), options,
+          compiled, o -> compilePartialUnobserved(projectList, childOutput, o, familiesOff));
+    }
+    return compiled;
+  }
+
+  /** {@link #compilePartial} itself, which the recording run repeats under its configurations. */
+  private static Optional<PartialVarkaProjection> compilePartialUnobserved(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
     return planning(
         () -> classifyKernels(entries(projectList), childOutput, options, familiesOff).partial(),
         () -> projectionIdentity(projectList, childOutput), options);
@@ -176,6 +193,21 @@ public final class VarkaExpressionCompiler {
 
   /** {@link #declines(Seq, Seq, VarkaEmitOptions)} with the families switched off. */
   public static SortedMap<Integer, VarkaDecline> declines(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
+    SortedMap<Integer, VarkaDecline> declines =
+        declinesUnobserved(projectList, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of("declines", projectList, childOutput, familiesOff),
+          options, declines, o -> declinesUnobserved(projectList, childOutput, o, familiesOff));
+    }
+    return declines;
+  }
+
+  /** {@link #declines} itself, which the recording run repeats. */
+  private static SortedMap<Integer, VarkaDecline> declinesUnobserved(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
     return planning(() -> Collections.unmodifiableSortedMap(
@@ -265,6 +297,15 @@ public final class VarkaExpressionCompiler {
    */
   public static void setFailInFamilyForTesting(@Nullable VarkaFamily family) {
     VarkaNodeCompiler.setFailInFamilyForTesting(family);
+  }
+
+  /**
+   * The units {@code time_diff} and {@code time_trunc} accept, each with its nanoseconds, as
+   * {@code VarkaTimeCompiler} reads them: a suite compiles every unit from here, not only the
+   * ones a coverage row names, so a unit added to the table is tested without a row (VARKA-496).
+   */
+  public static Map<String, Long> timeUnitsForTesting() {
+    return VarkaTimeCompiler.NANOS_PER_TIME_UNIT;
   }
 
   /**
@@ -721,6 +762,19 @@ public final class VarkaExpressionCompiler {
   public static Explained explainAndCompilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
+    Explained explained = explainUnobserved(condition, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of(condition, childOutput, familiesOff), options,
+          explained, o -> explainUnobserved(condition, childOutput, o, familiesOff));
+    }
+    return explained;
+  }
+
+  /** {@link #explainAndCompilePredicate} itself, which the recording run repeats. */
+  private static Explained explainUnobserved(Expression condition, Seq<Attribute> childOutput,
+      VarkaEmitOptions options, Set<VarkaFamily> familiesOff) {
     return planning(() -> predicate(condition, childOutput, options, familiesOff),
         () -> "condition " + condition + " over " + childOutput.mkString("[", ", ", "]"),
         options);
@@ -857,6 +911,13 @@ public final class VarkaExpressionCompiler {
     List<VarkaConjunctSpec> specs = new ArrayList<>();
     UnaryOperator<Expression> bind = binder(childOutput);
     List<Expression> conjuncts = conjuncts(condition);
+    // Whether any conjunct reads a column that an integral lane reads, which decides whether a
+    // floating conjunct can share the kernel (VarkaKernelPlan.floatingConjunctRefusal). A column
+    // no lane reads, a string say, puts its conjunct on the row path and so does not count.
+    boolean readsIntegral = false;
+    for (Attribute a : CollectionConverters.asJava(condition.references().toSeq())) {
+      readsIntegral |= VarkaTypes.lane(a.dataType()).filter(l -> !l.isFloating()).isPresent();
+    }
     for (int index = 0; index < conjuncts.size(); index++) {
       Expression conjunct = conjuncts.get(index);
       Expression bound = bind.apply(conjunct);
@@ -873,7 +934,9 @@ public final class VarkaExpressionCompiler {
           .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
-        Optional<String> narrow = VarkaKernelPlan.of(List.of(cond), options).refusal()
+        Cond planned = cond;
+        Optional<String> narrow = VarkaKernelPlan.floatingConjunctRefusal(planned, readsIntegral)
+            .or(() -> VarkaKernelPlan.of(List.of(planned), options).refusal())
             .map(VarkaKernelPlan.Refusal::reason);
         if (narrow.isPresent()) {
           marks.restore(inputs, literals, sink);
