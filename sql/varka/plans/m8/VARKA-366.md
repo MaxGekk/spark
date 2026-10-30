@@ -103,9 +103,9 @@ For `x = u * 10^q` with `q = -s` a compile-time constant, per lane, over `w = ab
 3. `T = (T_hi, T_lo)`, the 128-bit normalised approximation of `5^q` the paper specifies, two longs
    in the kernel's long table, computed at compile time from `BigInteger` and checked against the
    paper's table rows by a unit test for `s = 0..27`.
-4. `z = w' * T_hi` as 128 bits: four limb products by the broadcast limbs of `T_hi`, summed with
-   their carries (two `ULT`), the carry-free order 361 plans for the variable product (2.8).
-5. The second product `w' * T_lo`'s high word, four more limb products, added into `z.lo` with its
+4. `z = w' * T_hi` as 128 bits: row 360's `WideMul` by the constant `T_hi` (four limb products by
+   its broadcast limbs, summed with their carries); this row builds no product of its own.
+5. The second product `w' * T_lo`'s high word, a second `WideMul`, added into `z.lo` with its
    carry into `z.hi`; the scalar algorithm takes it only when the low nine bits of `z.hi` are all
    ones, and the lanes compute it always and blend it in under that mask.
 6. `b = z.hi >>> 63`; `m = z.hi >>> (b + 9)`, a variable shift; the binary exponent is `E_s + 63 -
@@ -207,7 +207,8 @@ variable shifts and the masked-constant multiply, held by `VarkaWarmupReachSuite
    rounded there by the JDK's own argument (item 0.2: exact operands, one rounding) - and for
    `FLOAT` the bits of 350's round-to-odd, correct by Boldo and Melquiond's theorem: 2^33 values per
    scale and target, opt-in (`-Dvarka.sweep=true`) in the gate's sweep step with a 2^24 slice in PR
-   CI, the first sweep timed before the rest (milestone plan 10.3 item 5).
+   CI, the first sweep timed before the rest (milestone plan 10.3 item 5). The full sweeps run by
+   hand in that step: no CI workflow sets `varka.sweep` today, so no nightly run is claimed.
 3. **Sampled regions against `BigDecimal`**, for `p` 16 to 18 at every scale: a seeded draw per
    binade of `[2^53, 10^18)`; `+-2^53` and its neighbours; every exact midpoint of the tie windows
    (an odd 54-bit or 25-bit significand times `5^s` times a power of two) and the values one unit
@@ -292,9 +293,10 @@ Predictions, registered before the build:
 papers half a day; the cells half a day; the twin and its harness a day and a half; 366a three days;
 366b two. Test time: the exhaustion is 2^33 values per scale and target, of the order of a minute
 per scale in the kernel and opt-in; the sampled suite tens of thousands of `BigDecimal` calls a
-scale, seconds. It rests on 347 (the load), 350b (`toDouble`, `toFloat` and their below-16 forms),
-343 (`ConvertLane(FLOAT)` and the reinterpretation), 359's unsigned compares if 359 lands first
-(else this row adds them and 359 reuses), and 157 for the outputs.
+scale, seconds. It rests on 347 (the load), 360's `WideMul` (both products), 350b (`toDouble`,
+`toFloat` and their below-16 forms), 343 (`ConvertLane(FLOAT)` and the reinterpretation), 359's
+unsigned compares if 359 lands first (else this row adds them and 359 reuses), and 157 for the
+outputs.
 
 ## 6. What it unlocks in the census
 
