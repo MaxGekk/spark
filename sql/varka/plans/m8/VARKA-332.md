@@ -88,7 +88,8 @@ on the local branch `varka-481` (`0e309d43adb`, not merged). The row's text is t
     `S2I`, `I2B`, `I2S`, `B2S`, `I2L`, `L2I` and the part-form byte loads, all intrinsic where
     they run on the laptop; no `B2L`, `S2L`, `L2B` or `L2S`.
 11. **The null disposal of a range guard is planned twice and built nowhere.** Row 481's plan
-    (local branch, owner's choice B of 25 October 2026) gives `GuardedRange` a `FAIL`/`NULL` mode;
+    (local branch, section 3.1) gives `GuardedRange` a `FAIL`/`NULL` mode (the owner's choice B
+    recorded there is about the `checkIntOverflow` option's scope, not about this mode);
     `VARKA-343.md` 4 builds the same disposal in 343b and says "332's plan, when written, takes
     this disposal rather than building its own". 343 is wave F2, after this row; 481 has no
     start. Row 338 took the other road for TRY: a `FAIL` guard whose declined batch the row
@@ -120,14 +121,14 @@ pairs and 124 forms (identities apart, which the optimizer removes and the regis
 The register gives 332 four more groups by its fallthrough (item 12), none in the row's text:
 `TIME` to integral (4 pairs, 12 forms, none fused), `TIME` narrowed (6 forms, 3 fused),
 day-time to day-time (90 forms, 36 fused), `DATE` to a number or `BOOLEAN` (5 forms, LEGACY only,
-none fused). Whether they are this row's is open (section 8 leaves it to the lead's review first).
+none fused). That is the census tool's bookkeeping default, not an assignment: they are not this
+row's (section 7).
 
 ### What differs from the row text and the milestone plan
 
-- **The F1 wave row's "332 ... is the casts' harness 338 builds on" is stale**: the harness is
-  rows 484 and 486, and 338 is done without this row (`VARKA-338.md` 0).
 - **`TIME` to `SMALLINT` and `TINYINT` nulls under LEGACY** (item 6), where the row's mode split
-  says wrap or raise; if those pairs are in, they need the null disposal in LEGACY too.
+  says wrap or raise; the pairs are out (section 7), and whichever row takes them needs the null
+  disposal under LEGACY too.
 - **Interval casts raise under LEGACY** (item 5), as the row says, and so do the interval-to-narrow
   targets the register calls "narrower targets check".
 - **Multi-field intervals cast to and from integral types** (item 5): `VarkaIntervalCompiler`'s
@@ -143,8 +144,8 @@ none fused). Whether they are this row's is open (section 8 leaves it to the lea
 Every form of the four groups of section 0 fuses in LEGACY, ANSI and TRY with the row engine's
 answers: LEGACY's wrap and the interval casts' raise, ANSI's `CAST_OVERFLOW` by a declined batch,
 TRY's null on the lane, a `BOOLEAN` target as a condition. Not this row: a `BOOLEAN` value output
-(27), the floating (343) and decimal (350, 364) casts, string casts, the fallthrough groups unless
-the lead's review puts them in.
+(27), the floating (343) and decimal (350, 364) casts, string casts, the four groups the register
+gives 332 by default (section 7).
 
 ## 2. Design
 
@@ -167,9 +168,10 @@ ranges are the target types' `MIN_VALUE` and `MAX_VALUE` and section 0 item 5's 
 one place (`VarkaTypes`' entry for the target, beside its lane), so rows 343 and 350 read the same
 numbers.
 
-The new arms live in `VarkaIntegralCastCompiler` (a family of its own or the arithmetic family's,
-which the lead's review settles first, since moving row 28's arms changes what the arithmetic
-switch turns off); `narrowing`'s TRY decline goes.
+The new arms live in `VarkaIntegralCastCompiler`, a family of their own, `INTEGRAL_CAST`
+(`varka/VarkaFamily.java`), with its switch, as 343 plans `FLOATING_CAST`. Row 28's four existing
+arms stay in `arithmeticArm` under the int arithmetic switch, so no existing switch changes what it
+turns off; `narrowing`'s TRY decline goes. Moving them is a later cleanup (section 7).
 
 ### 2.2 The kernels, per cast
 
@@ -196,21 +198,22 @@ The laptop's census (`operator_census.json`) reads the cells the table uses intr
 operators. At 128 bits the long compares are the Java fallback (two long lanes, `m7` row 374), so
 a guard over a `bigint` or day-time value there is the fallback, recorded in `width_audit.json`.
 The census has no `S2B`, `B2L`, `S2L`, `L2B` or `L2S` cell, so the narrow-long forms compose
-through the int lane and the NATIVE `short` to `byte` needs a cell before it is emitted; a direct
-`B2L` is the alternative the lead's review weighs (census cells first, as `VARKA-343.md` 5 step 2
-does).
+through the int lane (`B2I` and `I2L`, `S2I` and `I2L`, and `L2I` before a narrow store or
+wrap), and the NATIVE `short` to `byte` needs an `S2B` cell before it is emitted. A direct `B2L`
+is section 7's.
 
 ### 2.3 What declines a batch and what raises
 
 A kernel never raises. A live lane that Spark raises on declines its batch through the guard's
 collect (`VALUE_RANGE`), and the row engine raises `CAST_OVERFLOW` with Spark's parameters on the
 first such row (item 0.3). A null lane never declines. Under TRY the lane outside the range becomes
-null and the batch runs on, by `GuardedRange`'s `NULL` disposal. Which row builds that disposal is
-the open point of item 0.11; this plan's design takes it from row 481's plan as written there (a
-mode on the node, in `canonical`, `nullsFromValidInputs`, the masked body) and builds it here if it
-has not landed when 332's second pull request starts. Until it exists, TRY could fuse as 338's
-does, by the declining guard (a correct answer, slower on a batch holding one out-of-range value);
-that interim form is not this row's done state.
+null and the batch runs on, by `GuardedRange`'s `NULL` mode, the design of row 481's plan
+(section 3.1 there: a mode on the node, in `canonical` and `withChildren`, owning a validity word,
+`nullsFromValidInputs`, the masked body, the reference's `NULL` arm). Row 481 owns and builds the
+mode; this row does not, and its second pull request waits on 481 (section 5). 338's road, a
+declining guard whose batch the row engine nulls, is not taken: it is a correct answer but slower
+on a batch holding one out-of-range value, and row 368 would record a declined batch where the
+register says fused.
 
 The `BOOLEAN`, widening and narrow-source interval casts cannot fail, so their three modes are one
 kernel; the shape key separates the others by the guard's mode.
@@ -223,9 +226,8 @@ whose bias cannot overflow (a negative `x` gains at most `d - 1`), three lane op
 than 338's floor division and proven in `long_divide.smt2` beside it. For HOUR, MINUTE and SECOND
 `floorDivLong` refuses the divisor (item 0.8), so the first form is `ConstDivide` under a
 `GuardedRange` of `|x| < 2^52` microseconds (about 142 years), whose declined batch the row engine
-computes, as 338 guarded before its exact form; a full-range division for those units is the
-alternative the lead's review weighs, shared with row 103's truncating quotient (`rows` =
-`103,332`).
+computes, as 338 guarded before its exact form. A full-range division for those units is section
+7's.
 
 ### 2.5 The narrow load at the long width
 
@@ -243,22 +245,21 @@ is `L2I` then the narrow store of the int lane. Both are written once for 343's
 
 - `CondValue` admits `BYTE` and `SHORT` (its javadoc's condition): under WIDENED it emits at the
   int lane, under NATIVE at the narrow lane.
-- `VarkaReference` needs the narrow `CondValue` and, if this row builds it, the guard's `NULL` arm.
+- `VarkaReference` needs the narrow `CondValue`; the guard's `NULL` arm is row 481's.
 - The range analysis bounds a `CondValue` to `[0, 1]`, so `CAST(b AS TINYINT)` under a narrow
   consumer emits no shift pair.
 - Cost: no new node; the guard's mode is a cost key as row 481 states. The warm-up blocks gain the
   narrow load at the long width, held by `VarkaWarmupReachSuite`.
 - **What 343 and 350 build on**: the target table of 2.1, the `NarrowLane(g(x))` shape for a narrow
   target (343's `NarrowLane(ConvertLane(x, INT))` under the same guard), the guard's `NULL`
-  disposal, the narrow load at the long width, and `CondValue` at every integral lane (343 adds the
-  floating lanes, 350 a scaled select for `BOOLEAN` to decimal).
+  mode (row 481's), the narrow load at the long width, and `CondValue` at every integral lane (343
+  adds the floating lanes, 350 a scaled select for `BOOLEAN` to decimal).
 - **What 368 needs**: Spark's cast suites build `Cast(Literal(v), to, mode)` and check it with no
   constant folding under 368's harness, so each arm accepts a `LiteralSlot` child exactly as a
   column; a TRY out-of-range literal must be nulled in the kernel, or 368 records a declined batch
   where the matrix says fused; and an ANSI out-of-range value declines with `VALUE_RANGE`, which 368
-  reads apart from a compile decline. *Inference, not checked:* whether a projection whose only
-  leaf is a literal reaches a kernel at all is 368's harness question (it may lift the literal to a
-  one-row column); 332 makes either route meaningful.
+  reads apart from a compile decline. A projection or predicate that reads no input column
+  never reaches a kernel (section 7), so 368's harness must give the literal a column.
 
 ## 3. Tests and proofs
 
@@ -272,8 +273,11 @@ is `L2I` then the narrow store of the int lane. Both are written once for 343's
    MINUTE, SECOND, 3; year-month YEAR and MONTH ends to `byte` and `short` (decline, null) on both
    arms, 16; to `bigint`, 2. **38 sweeps**, 42028 s at row 330's floor of 1106 s each (11 h 40
    min); one arm per tree is 24 sweeps, 26544 s. They wait on 330's budget in `PLAN.md` (item
-   0.14), run opt-in in the nightly and idle windows with `-Dspark.test.timeout`, the first timed
-   before the rest, and PR CI runs a 2^24 slice of each.
+   0.14), and run opt-in (`-Dvarka.sweep=true`) in the gate's sweep step (`dev/varka_gate.sh`),
+   by hand in idle windows with `-Dspark.test.timeout`, the first timed before the rest; PR CI runs
+   a 2^24 slice of each. No CI workflow sets `varka.sweep` today, and the nightly script's
+   opt-in filter runs nothing in a JUnit suite, so no scheduled run is claimed; scheduling the
+   sweeps is a separate finding, not this row's.
 3. **SMT for the 64-bit sources** (`bigint`, day-time), in a new `sql/varka/proofs/casts.smt2`
    (row 490's file; whichever lands first creates it) under Z3 and cvc5, over integers as the
    proofs' README prescribes: the wrap of `L2I` and the shift pair equals reduction mod `2^w`; the
@@ -329,8 +333,11 @@ Predictions, registered before the build:
 1. **The baseline** (4), its own pull request.
 2. **332a, the integral and boolean casts**: the target table, the narrow load and store at the long
    width, the narrowings in LEGACY and ANSI, the tests, the selects (`CondValue` at narrow lanes),
-   the sweeps of narrow and boolean sources, the SMT sections for `bigint`, coverage rows.
-3. **332b, the intervals and TRY**: the guard's `NULL` disposal if not landed, every TRY form, the
+   the sweeps of narrow and boolean sources, the SMT sections for `bigint`, coverage rows, the
+   `INTEGRAL_CAST` family and its switch, and the four default groups marked unclaimed in the
+   register (`dev/varka_census.py`'s `cast_rows`, then `casts.tsv`).
+3. **Row 481**, which builds `GuardedRange`'s `NULL` mode (its own plan, branch `varka-481`).
+4. **332b, the intervals and TRY**, after 481: every TRY form over 481's `NULL` mode, the
    interval casts and the day-time division of 2.4, the multi-field fix, the int and year-month
    sweeps after 330's budget, the conformance in-range sets, the measurement and its verdict.
 
@@ -338,9 +345,11 @@ Predictions, registered before the build:
 |---|---|
 | `VarkaIntegralCastCompiler.java` (new), `VarkaNodeCompiler.java` | the table, the arms |
 | `VarkaIntervalCompiler.java` | the interval casts, the multi-field arms and comment |
-| `varka/VarkaVectorIR.java` | `CondValue` at narrow lanes; `GuardedRange`'s mode if built here |
+| `varka/VarkaVectorIR.java` | `CondValue` at narrow lanes |
 | `varka/VarkaKernelPlan.java`, `Analysis.java`, `VarkaVectorWalk.java` | the long-width load |
 | `varka/VarkaTypes.java` | the target ranges |
+| `varka/VarkaFamily.java` | `INTEGRAL_CAST` |
+| `dev/varka_census.py` | the default groups unclaimed |
 | `varka/VarkaRangeAnalysis.java`, the warm-up | `CondValue`'s bound; the reach |
 | `sql/varka/proofs/casts.smt2`, `narrow_range.smt2`, `long_divide.smt2` | 3.3 |
 | `VarkaProofFiles.java` | 3.3's rendering |
@@ -350,7 +359,7 @@ Predictions, registered before the build:
 | generated | `casts_fused.tsv`, `casts.tsv`, `census.tsv` |
 
 **Size: medium, in three pull requests.** The baseline half a day; 332a about four days (the long
-width load is most of it); 332b about four, one more if the disposal is built here. The sweeps
+width load is most of it); 332b about four, after row 481. The sweeps
 add machine time (3.2), not gate time; the gate gains the 2^24 slices and the narrow sweeps, of
 the order of the narrow suites' seconds.
 
@@ -361,19 +370,67 @@ fuse in no form today, 4 in part (`bigint` to `int`, `int` to year-month, year-m
 `int` to day-time in context) and 3 whole. The census's `cast` and `try_cast` entries have an empty
 `fused_today` and list every type (`census.tsv`). *Inference, not checked in `dev/varka_census.py`:*
 those entries credit a type only once every cast from it fuses, in which case the integral types
-and `bool` also wait on 343's and 350's pairs. The fallthrough groups count only if they are put in.
+and `bool` also wait on 343's and 350's pairs. The count is of the row's 36 pairs only.
 
 ## 7. Out of this row
 
-Out: a `BOOLEAN` value output (27), the floating, decimal and string casts, `TIME` and `DATE`
-pairs and the day-time narrowings unless the lead's review puts them in, `try_eval`, a full-range
-division for the sub-day units if 2.4's guard is kept.
+**The four groups the register gives 332 by default** (item 0.12), marked unclaimed in 332a, each
+with a suggested home:
+
+- `TIME` to integral (12 forms): no milestone 8 row owns `TIME` casts; a new row, or the scope
+  catalogue (`m9/SCOPE.md`). It is `floorDiv(nanos, 10^9)` under `ConstDivide`'s bound, which a
+  `TIME` value meets, and its narrow targets null under LEGACY (item 0.6).
+- `TIME` narrowed to a lower precision (3 forms declined): the same home; a floor division of
+  nanoseconds of day.
+- Day-time to day-time at a coarser end (54 forms declined): row 103, whose day-time work holds
+  the truncating quotient.
+- `DATE` to a number or `BOOLEAN` (5 forms, LEGACY only): row 333's typed null leaf.
+
+**A full-range day-time division below a day.** 2.4 guards the HOUR, MINUTE and SECOND ends at
+`2^52` microseconds and declines beyond. An exact division by those constants over every long
+arrives with row 30's 64-bit division family (its long-lane magic for a literal divisor); row
+103's truncating day-time quotient is its other consumer.
+
+**Moving row 28's casts into `INTEGRAL_CAST`**, a later cleanup guarded by `emitted_bytes.json`
+being byte-identical. What keys on the arithmetic family's boundary today (grepped on this
+commit): `coverage.json` lists the int arithmetic switch on 82 rows, 15 of them holding a `Cast`
+(`CAST(i AS BIGINT)`, `i < l`, `CAST(ntz AS DATE)` and their kin), and `docs/sql-varka.md` renders
+the same column; `VarkaFamilySwitchSuite` asserts that a family switched off declines exactly the
+coverage rows that hold its nodes (`VarkaFamilySwitchSuite.java:266`) and names the family in a
+failure test (`:370`); `VarkaFamilySwitchQuerySuite.scala:59` switches it off over `i + 1`. No
+option-matrix configuration, `skips.tsv` line or `dev/varka_matrix.sh` setting names a family
+switch. So the move regenerates the coverage table's switch column for those rows and changes what
+`spark.sql.codegen.varka.family.intArithmetic.enabled` turns off; no matrix configuration moves.
+
+**A direct `B2L`** (and `S2L`, `L2B`, `L2S`): a measured option only if a benchmark shows the
+composition through the int lane costs; the census has no cell for it (item 0.10).
+
+**Casts over a literal alone never reach a kernel.** `VarkaExpressionCompiler`'s projection pass
+returns no kernel when its outputs read no input column (`VarkaExpressionCompiler.java:608`,
+`outputs.isEmpty() || inputs.size() == 0`), and the predicate pass the same
+(`:1010`). Spark's cast suites build `Cast(Literal(v), to, mode)` (`CastSuiteBase.scala:55-60`;
+`TryCastSuite.scala:33-38`), so under constant folding's exclusion each test is a literal-only
+projection and would record "declined" for every pair. Row 368's harness therefore binds the
+literal's value to a one-row input column of its type (a `BoundReference` over a one-row batch,
+`TryCastSuite` already passing `InternalRow(l.value)` for its error cases), so the cast reaches the
+same arm a column does; 332's arms take a column and a `LiteralSlot` child alike.
+
+Also out: a `BOOLEAN` value output (27), the floating, decimal and string casts, `try_eval`.
 
 Declines that stay, each naming its row: an ANSI or interval batch holding a value Spark raises
 on (the row engine raises it), a day-time value past `2^52` microseconds under a sub-day unit
-(2.4), a narrow value in a long kernel at a lane count with no byte species (329's refusal).
+(2.4, row 30), a narrow value in a long kernel at a lane count with no byte species (329's
+refusal).
 
 ## 8. Questions for the owner
+
+Context, not questions:
+
+- **The sweeps wait on row 330's budget.** `PLAN.md` 10.3 item 5 does not yet hold the total row
+  330's first sweep measured (item 0.14), and the F1 wave row makes 332's sweeps wait on it.
+- **The F1 wave row's "332 ... is the casts' harness 338 builds on" is stale** (`PLAN.md` 4.1):
+  the harness is rows 484 and 486, and 338 is done without this row (`VARKA-338.md` 0). It is the
+  owner's text, so this plan flags it and does not edit it.
 
 1. **The sweep budget.** Section 3.2's 38 sweeps of 2^32 are about 11 h 40 min at row 330's floor;
    one arm per tree, the cut 330's record leaves to the owner, is 24 sweeps and 7 h 22 min, with
