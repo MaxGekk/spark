@@ -22,7 +22,9 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 import scala.Option;
 import scala.runtime.BoxedUnit;
@@ -59,7 +61,9 @@ import org.apache.spark.sql.internal.SQLConf;
  *       not set before, so no case leaks a setting into the next.</li>
  *   <li>{@link #noop}, the trait's {@code noop()}: a query run to the end, its rows dropped.</li>
  *   <li>{@link #note}, a line of the results file outside a table, such as a rung's facts.</li>
- *   <li>{@link #requireBaseline}, a baseline benchmark's check that a section does not fuse.</li>
+ *   <li>{@link #fusedPlan}, a query's plan when it holds a Varka node, and
+ *       {@link #requireBaseline}, a baseline benchmark's check that a section fuses only when
+ *       its class lists it as fusing.</li>
  *   <li>{@link #stopLeftoverSessions} and {@link #clearSessions}, for a benchmark that makes its
  *       own sessions, and {@link #withEmitOptions} for one that compares emitter designs.</li>
  * </ul>
@@ -157,6 +161,20 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
   }
 
   /**
+   * The executed plan of {@code query} on {@code session} when it holds a Varka node - a fused
+   * projection or filter - and empty when it does not. The plan comes back so that a caller
+   * refusing a section that fuses can show the tree without planning the query a second time.
+   */
+  public static Optional<SparkPlan> fusedPlan(SparkSession session, String query) {
+    SparkPlan plan = session.sql(query).queryExecution().executedPlan();
+    boolean fused = plan.find(
+        p -> p instanceof VarkaColumnarToRowExec || p instanceof VarkaProjectExec
+            || p instanceof VarkaFilterExec || p instanceof VarkaFilterColumnarToRowExec)
+        .isDefined();
+    return fused ? Optional.of(plan) : Optional.empty();
+  }
+
+  /**
    * Runs {@code body} with {@code settings} set on {@code session}'s configuration, then puts
    * back each one it set: the earlier value where there was one, unset where there was none. A
    * key's earlier state is read with {@code contains}, not {@code get}, since {@code get} answers
@@ -206,42 +224,6 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
     });
   }
 
-  // ---------------------------------------------------------------------------------------
-  // Baselines
-  // ---------------------------------------------------------------------------------------
-
-  /**
-   * The system property that lifts {@link #requireBaseline}'s check: {@code
-   * -Dvarka.baseline.fuseCheck=false} runs a baseline class after a row has started to fuse its
-   * sections, so that the same class measures that row against its committed results.
-   */
-  public static final String FUSE_CHECK_PROPERTY = "varka.baseline.fuseCheck";
-
-  /** Whether the session's plan for {@code query} holds a Varka node. */
-  private static boolean fuses(SparkSession session, String query) {
-    return session.sql(query).queryExecution().executedPlan().find(
-        p -> p instanceof VarkaColumnarToRowExec || p instanceof VarkaProjectExec
-            || p instanceof VarkaFilterExec || p instanceof VarkaFilterColumnarToRowExec)
-        .isDefined();
-  }
-
-  /**
-   * Fails the run when {@code varka}'s plan for {@code query} holds a Varka node: a baseline is
-   * only one while nothing fuses, and its results file is the record of the code before the row
-   * that fuses it. {@link #FUSE_CHECK_PROPERTY} set to {@code false} lifts the check.
-   */
-  protected static void requireBaseline(SparkSession varka, String title, String query) {
-    if (!Boolean.parseBoolean(System.getProperty(FUSE_CHECK_PROPERTY, "true"))) {
-      return;
-    }
-    if (fuses(varka, query)) {
-      SparkPlan plan = varka.sql(query).queryExecution().executedPlan();
-      throw new IllegalStateException(title + " fuses, so it is no longer a baseline (-D"
-          + FUSE_CHECK_PROPERTY + "=false measures it as one): " + query + "\n"
-          + plan.treeString());
-    }
-  }
-
   /**
    * Prints {@code line} and writes it to the results file, if the run writes one: a fact a
    * section's tables depend on, kept beside them so the file says what was measured.
@@ -255,6 +237,77 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
       } catch (IOException e) {
         throw new UncheckedIOException(e);
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Baselines
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * The system property that lifts the fuse check of {@link #requireBaseline}: {@code
+   * -Dvarka.baseline.fuseCheck=false} is the run that measures a row against a baseline's
+   * committed results, after the row has started to fuse the baseline's sections. It takes
+   * {@code true}, the default, or {@code false}, in any case, and refuses anything else, so that
+   * a misspelt value cannot lift the check unnoticed.
+   */
+  public static final String FUSE_CHECK_PROPERTY = "varka.baseline.fuseCheck";
+
+  /** Whether {@link #FUSE_CHECK_PROPERTY} leaves the fuse check on. */
+  static boolean fuseCheck() {
+    String value = System.getProperty(FUSE_CHECK_PROPERTY);
+    if (value == null) {
+      return true;
+    }
+    return switch (value.toLowerCase(Locale.ROOT)) {
+      case "true" -> true;
+      case "false" -> false;
+      default -> throw new IllegalArgumentException(
+          "-D" + FUSE_CHECK_PROPERTY + " must be true or false, not \"" + value + "\"");
+    };
+  }
+
+  /**
+   * Fails the run when {@code varka}'s plan for {@code query} holds a Varka node: a baseline is
+   * only one while nothing fuses, and its results file is the record of the code before the row
+   * that fuses it. {@link #FUSE_CHECK_PROPERTY} set to {@code false} lifts the check. A baseline
+   * that writes its results calls {@link #requireBaseline(SparkSession, String, String, boolean)}
+   * instead, which also notes in the file each section that fuses.
+   */
+  protected static void requireBaseline(SparkSession varka, String title, String query) {
+    if (!fuseCheck()) {
+      return;
+    }
+    fusedPlan(varka, query).ifPresent(plan -> {
+      throw new IllegalStateException(title + " fuses, so it is no longer a baseline: " + query
+          + "\n" + plan.treeString());
+    });
+  }
+
+  /**
+   * Checks that {@code varka} fuses {@code query} exactly when the section says it does, and
+   * notes each section that fuses in the results file. {@code fuses} is the section's entry in
+   * its class's list of expected fusers: a section a row has fused is listed by that row, so a
+   * later row that starts to fuse an unlisted section fails the run rather than timing a kernel
+   * under the label of the row path. A listed section that no longer fuses fails too, since the
+   * list would then misstate the file. {@link #FUSE_CHECK_PROPERTY} set to {@code false} lifts
+   * both checks for the run that measures a row, and every section that fuses is still noted.
+   */
+  protected final void requireBaseline(
+      SparkSession varka, String title, String query, boolean fuses) {
+    Optional<SparkPlan> plan = fusedPlan(varka, query);
+    if (fuseCheck()) {
+      if (plan.isPresent() && !fuses) {
+        throw new IllegalStateException(title + " fuses, so it is no longer a baseline; a row "
+            + "that fuses it lists it as fusing: " + query + "\n" + plan.get().treeString());
+      }
+      if (plan.isEmpty() && fuses) {
+        throw new IllegalStateException(title + " is listed as fusing but runs on the row "
+            + "path: " + query);
+      }
+    }
+    if (plan.isPresent()) {
+      note(title + ": fuses on the varka on arm, so it times a kernel there, not the row path");
     }
   }
 }

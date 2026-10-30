@@ -42,16 +42,27 @@ import org.apache.spark.sql.internal.SQLConf;
  * {@code spark row path (varka off)}, a session without the Varka rule, and {@code varka on}, a
  * session with it. Today both are the row path, so they should tie.
  *
- * <p>A baseline is only one while nothing fuses: before any section is timed, the run checks that
- * the Varka session's plan for each holds no Varka node, and fails when a row has started to fuse
- * one, unless {@link VarkaSqlBenchmarkBase#FUSE_CHECK_PROPERTY} lifts the check for the run that
- * measures that row.
+ * <p>A baseline is only one while nothing fuses: before any section is timed, the run checks
+ * each section's plan on the Varka session against the section's {@code fuses} flag, the list of
+ * the sections a row has fused, and fails when an unlisted section fuses or a listed one does not;
+ * the results file notes each section that fuses. No section is listed today. A row that fuses a
+ * section lists it, so that its fusion cannot turn a baseline section into a fused one unnoticed.
  *
  * <p>To run this benchmark, on a GitHub runner (the results come back as an artifact):
  * <pre>
  *   gh workflow run benchmark.yml -f class=VarkaFloatingArithmeticBaselineBenchmark -f jdk=25 \
  *     -f expected-cpu="AMD EPYC 7763"
  *   (and again with -f extra-java-options=-XX:MaxVectorSize=16 for the 128-bit companion)
+ * </pre>
+ * The run that measures a row which fuses unlisted sections against the committed files lifts
+ * the check with {@link VarkaSqlBenchmarkBase#FUSE_CHECK_PROPERTY}, still noting every section
+ * that fuses:
+ * <pre>
+ *   gh workflow run benchmark.yml -f class=VarkaFloatingArithmeticBaselineBenchmark -f jdk=25 \
+ *     -f expected-cpu="AMD EPYC 7763" -f extra-java-options=-Dvarka.baseline.fuseCheck=false
+ *   gh workflow run benchmark.yml -f class=VarkaFloatingArithmeticBaselineBenchmark -f jdk=25 \
+ *     -f expected-cpu="AMD EPYC 7763" \
+ *     -f extra-java-options="-XX:MaxVectorSize=16 -Dvarka.baseline.fuseCheck=false"
  * </pre>
  */
 public class VarkaFloatingArithmeticBaselineBenchmark extends VarkaSqlBenchmarkBase {
@@ -62,23 +73,35 @@ public class VarkaFloatingArithmeticBaselineBenchmark extends VarkaSqlBenchmarkB
   static final String VIEW = "varka_floating_arithmetic";
 
   /**
-   * A section: its title, its query, and the SQL settings it runs under on both sessions, empty
-   * for a form whose answer does not depend on the mode.
+   * A section: its title, its query, the SQL settings it runs under on both sessions, empty for a
+   * form whose answer does not depend on the mode, and whether the Varka session fuses it, which
+   * the run checks before it times anything.
    */
-  record Section(String title, String query, Map<String, String> conf) {}
+  record Section(String title, String query, Map<String, String> conf, boolean fuses) {}
 
   /**
    * The table: {@code x} and {@code y} as doubles, {@code ym} a year-month and {@code dt} a
    * day-time interval, with no null, and {@code xn} to {@code dtn} the same values with one row
    * in ten null, at a different row in each column.
    *
-   * <p>The doubles are spread over a few thousand either side of zero and are never zero: each is
-   * a multiple of a seventh or an eleventh offset by a quarter, so no division raises under ANSI,
-   * and every interval result stays in its type. {@code ym} is up to a hundred years of months,
-   * which times at most about 7300 stays far inside an int; {@code dt} is up to a day in seconds,
-   * whose microseconds over the smallest {@code |x|}, a 28th, stay far inside a long.
+   * <p>Over the benchmark's rows, {@code x} runs from {@code -7000.25} to {@code 7285.75} and
+   * {@code y} from {@code -4500.25} to about {@code 4592.3}. Neither is ever zero: each is a
+   * multiple of a seventh or an eleventh offset by a quarter, so no division raises under ANSI,
+   * and the smallest {@code |x|} is a 28th and the smallest {@code |y|} a 44th.
+   * Every interval result stays in its type: {@code ym} is under a hundred years of months, which
+   * times at most about 7300 stays far inside an int, and {@code dt} is under a day in seconds,
+   * whose microseconds over the smallest {@code |x|} stay far inside a long.
    */
   static String tableSql(int rows) {
+    return tableSql("range(0, " + rows + ")");
+  }
+
+  /**
+   * {@link #tableSql(int)} over the ids of {@code ids}, a relation with a {@code BIGINT} column
+   * {@code id}: the queries suite picks the ids that reach both signs, zero's neighbours and the
+   * extremes, which a short prefix of the range does not.
+   */
+  static String tableSql(String ids) {
     return """
         select x, y, ym, dt,
                case when id %% 10 = 1 then null else x end as xn,
@@ -90,7 +113,7 @@ public class VarkaFloatingArithmeticBaselineBenchmark extends VarkaSqlBenchmarkB
                      ((id * 7) %% 100019) / 11.0d - 4500.25d as y,
                      interval '1' month * cast((id * 13) %% 1200 as int) as ym,
                      interval '1' second * ((id * 17) %% 86400) as dt
-              from range(0, %d))""".formatted(rows);
+              from %s)""".formatted(ids);
   }
 
   /** Every section, in the order they run: each null density, then each form. */
@@ -106,24 +129,24 @@ public class VarkaFloatingArithmeticBaselineBenchmark extends VarkaSqlBenchmarkB
       String density = ", " + (nulls.isEmpty() ? "no nulls" : "one row in ten null");
       String from = " AS a FROM " + VIEW;
       out.add(new Section("DOUBLE x / y, LEGACY" + density,
-          "SELECT " + x + " / " + y + from, legacy));
+          "SELECT " + x + " / " + y + from, legacy, false));
       out.add(new Section("DOUBLE x / y, ANSI" + density,
-          "SELECT " + x + " / " + y + from, ansi));
+          "SELECT " + x + " / " + y + from, ansi, false));
       out.add(new Section("DOUBLE x / 3.0D" + density,
-          "SELECT " + x + " / 3.0D" + from, Map.of()));
+          "SELECT " + x + " / 3.0D" + from, Map.of(), false));
       out.add(new Section("DOUBLE try_divide(x, y)" + density,
-          "SELECT try_divide(" + x + ", " + y + ")" + from, Map.of()));
+          "SELECT try_divide(" + x + ", " + y + ")" + from, Map.of(), false));
       out.add(new Section("DOUBLE sqrt(abs(x))" + density,
-          "SELECT sqrt(abs(" + x + "))" + from, Map.of()));
-      out.add(new Section("DOUBLE -x" + density, "SELECT -" + x + from, Map.of()));
+          "SELECT sqrt(abs(" + x + "))" + from, Map.of(), false));
+      out.add(new Section("DOUBLE -x" + density, "SELECT -" + x + from, Map.of(), false));
       out.add(new Section("DOUBLE signum(x)" + density,
-          "SELECT signum(" + x + ")" + from, Map.of()));
+          "SELECT signum(" + x + ")" + from, Map.of(), false));
       out.add(new Section("DOUBLE degrees(x)" + density,
-          "SELECT degrees(" + x + ")" + from, Map.of()));
+          "SELECT degrees(" + x + ")" + from, Map.of(), false));
       out.add(new Section("year-month interval ym * x" + density,
-          "SELECT " + ym + " * " + x + from, Map.of()));
+          "SELECT " + ym + " * " + x + from, Map.of(), false));
       out.add(new Section("day-time interval dt / x" + density,
-          "SELECT " + dt + " / " + x + from, Map.of()));
+          "SELECT " + dt + " / " + x + from, Map.of(), false));
     }
     return out;
   }
@@ -143,7 +166,7 @@ public class VarkaFloatingArithmeticBaselineBenchmark extends VarkaSqlBenchmarkB
         VarkaArrowSessions.cache(session, VIEW);
       }
       for (Section s : sections()) {
-        withConf(varka, s.conf(), () -> requireBaseline(varka, s.title(), s.query()));
+        withConf(varka, s.conf(), () -> requireBaseline(varka, s.title(), s.query(), s.fuses()));
       }
       for (Section s : sections()) {
         section(s.title(), () -> withConf(baseline, s.conf(), () -> withConf(varka, s.conf(),
