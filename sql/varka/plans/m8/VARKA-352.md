@@ -152,6 +152,11 @@ every night. Not this row: each type's nodes, their reference semantics and thei
 
 ### 2.1 The shared extension point: a fuzz descriptor per type
 
+What 352 builds once, up front: the descriptor, the draw rule and its check (2.2), the first
+refit (2.3), the TLP raise rule (2.4), the cast productions and generators' common part (2.5),
+the cross-mode arm (2.6) and the nightly job (2.7). Everything per type is the type row's, done
+through these parts.
+
 A record per type, keyed by `VarkaTypeId`, in a new test class `VarkaFuzzTypes` (catalyst, Java,
 beside `VarkaIrGrammar`, so both fuzzers read it; sql/core's tests already import catalyst's):
 
@@ -204,7 +209,9 @@ So:
 4. **What a new sequence pins.** Its blocks are added to `emitted_bytes.json` under a new key
    (`lanes.*.fuzz_<type>`), two thousand shapes as twenty blocks, so a refactor of the emitter is
    proven over the new lane too and no existing digest moves (question 2). A side sequence is
-   unpinned, as 481's and `NARROW_FUZZ_SEED`'s are.
+   unpinned, as 481's and `NARROW_FUZZ_SEED`'s are. Five such sequences add ten thousand
+   emissions to the thirty thousand fuzz shapes the bytes suite emits today; the time is priced in
+   352a step 2's pull request from the suite's CI time.
 5. **Values after the shape are free, and new value kinds take a stream of their own.** A
    committed sequence's lane values are not pinned (the bytes and the cost model read shapes only),
    but `known_failures.tsv` and the op-cap scans replay them; a new value kind (2.5) is drawn from
@@ -229,7 +236,8 @@ regenerates every pinned output once and refits the cost model. From 335a's reco
 `awaitingRefit` set and `PRICED_LANES`, each entry leaving as it is priced. No coverage row's bytes
 move. 335a's refit was paired against its base on a benchmark of the 64-tail ladder because a
 price change regroups shapes; a refit here does the same, on the runners, before it merges
-(`VarkaSharedPrefixBenchmark` and `VarkaEmissionBenchmark`, row 409's protocol).
+(`VarkaSharedPrefixBenchmark` and `VarkaEmissionBenchmark`, alternated rounds at each width as
+335's 9.2a did, with the corrections row 409 made to its first table).
 
 The schedule is the owner's (335a's refit needed his word; question 3). Proposed: **refit A** in
 352a's last step, taking 431, 432, the boolean nodes and `CondValue`, 481's `NULL` guard if 481
@@ -374,8 +382,9 @@ first (`dev/varka_calibration.py`), and stated at its observed ratio in the step
    violation at the first nightly.
 3. **The cross-mode arm**: no violation on the row engine outside the named exception; ten pairs
    fuse in some form today (row 486), so the fused count starts there.
-4. **The partition check's added time** stays under a fifth of the suite's: fourteen queries in
-   place of eight on a quarter of the compositions.
+4. **The partition check's added queries**: fourteen in place of eight on a quarter of the
+   compositions, so the suite's query count grows by about a fifth, read from its info lines; its
+   time is priced in step 3's pull request from the calibration table.
 5. **Refit A** moves every fuzz block and no coverage row, and the 64-tail ladder is within its
    band at all three widths.
 6. **No existing digest moves** in any step before refit A or between A and B.
@@ -402,19 +411,21 @@ descriptor sites from `Owed` to `Present`, its sequence or side sequence with it
 
 - **341 (`FLOAT`, `DOUBLE`)**: the `fuzz_float` and `fuzz_double` sequences and the specials
   source; 342, 343, 344 and 346 draw their nodes there.
-- **331, 332, 27 (`BOOLEAN`)**: the boolean nodes join the int corpus at refit A; 332's cast
-  compositions draw in their side sequence.
+- **331, 332, 27 (`BOOLEAN`)**: the boolean nodes, and 27's `BoolOutput` (left to this row by
+  `VARKA-27.md` 3 item 8), join the int corpus at a refit; 332's cast compositions draw in their
+  side sequence.
 - **332, 330, 481 (the narrow types)**: the casts and the checked arithmetic in side sequences
   until a refit.
-- **30, 104 (integral division, `BIGINT`)**: `IntDivide` in its side sequence; `try_mod` and
-  `try_divide` in the cross-mode list.
+- **30, 104 (integral division, `BIGINT` arithmetic; existing types filled in, 1.1 item 6)**:
+  `IntDivide` in its side sequence; `try_mod` and `try_divide` in the cross-mode list.
 - **338 to 340 (`TIMESTAMP_NTZ`)**: the Spark columns and TLP shapes in 352a; 339's `AddMonths` in
   the mixed reach test.
 - **347 to 351, 157 (the decimal within 18 digits)**: `fuzz_decimal` with the shapes sweep, and the
   Spark decimal columns `(9, 2)` to `(18, 18)`.
 - **359 to 364, 366 (the lane pair)**: `fuzz_decimal_pair`, the columns `(19, 0)` and `(38, 10)`,
   the tie windows.
-- **337 (`hash`)**: the hash forms in the Spark grammar over every type with columns.
+- **337 (`hash`)**: the hash forms in the Spark grammar, once 337's coverage rows exist, over
+  every type with columns.
 
 And **352b, the close**: refit B, the done-when read type by type against the descriptor table (no
 `Owed` site left), the cross-mode count against `casts_fused.tsv`, section 10.
