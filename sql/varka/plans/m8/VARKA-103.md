@@ -13,7 +13,7 @@ scalar Java against the calls Spark's code makes, sampled, not proved.
 
 **Spark's answers.** Every day-time interval form below raises in every evaluation mode: none has
 a LEGACY wrap or an ANSI switch, and the `try_` spellings over an interval are `TryEval`. So
-LEGACY, ANSI and TRY collapse to one kernel per form, and TRY is item 12.
+LEGACY, ANSI and TRY collapse to one kernel per form, and TRY is item 12 (the casts of 2.7 aside).
 
 1. **`dt + dt`, `dt - dt`, `-dt`** are `IntervalMathUtils.addExact`, `subtractExact` and
    `negateExact` on the long (`expressions/arithmetic.scala:466-467`, `:564-565`, `:99`, the
@@ -114,16 +114,20 @@ LEGACY, ANSI and TRY collapse to one kernel per form, and TRY is item 12.
 12. **TRY is `TryEval`, which no arm claims.** `try_add`, `try_subtract`, `try_multiply` and
     `try_divide` over an interval become `TryEval(Add(...))` and kin (`expressions/TryEval.scala:
     90-97`, `:135-141`, `:229-235`, `:268-274`); 342 and 340 decline it by name, and row 481's
-    `NULL` guard (`VARKA-481.md` 3.1) serves `GuardedRange`, not a caught exception. So this row
-    needs nothing of 481 and builds no TRY form.
-13. **The other factors and divisors are other rows'.** A floating factor is row 342's 2.4, both
-    product and quotient, with `fp_half_up.smt2` and cells (`VARKA-342.md` 2.4, 3.7), after 343's
-    conversions; its form agreed with Guava on every cell of **[A, 7]** and on 50000000 drawn
-    pairs. A decimal factor: row 349's plan (section 7) marks the products unclaimed with 361 and
-    363 the suggested home, and the quotients go to 363, which claims them and declines them until
-    a variable 128-bit division is planned (`VARKA-363.md` 2.5, 8 question 1). A column divisor or
-    factor needs row 30's `IntDivide` or 104's checked long multiply. A decimal literal in SQL is
-    the common spelling: `dt * 1.5` is a decimal product, not a double one (section 8, point 7).
+    `NULL` guard (`VARKA-481.md` 3.1) serves `GuardedRange`, not a caught exception. So the
+    arithmetic needs nothing of 481 and builds no TRY form; only the parked casts of 2.7, whose TRY
+    spelling is `Cast` itself and nulls, use 481's mode (103c).
+13. **The other factors and divisors lean on other rows' nodes.** A floating factor's lowering,
+    the multiply or divide and its `HALF_UP` conversion, is row 342's 2.4 after 343's conversions
+    (`VARKA-342.md` 2.4); its form agreed with Guava on every cell of **[A, 7]** and on 50000000
+    drawn pairs, and the named tests at the ties, `2^53` and the long edges are this row's (3.3,
+    section 8, point 2). A decimal column factor: row 349's plan (section 7) marks the products
+    unclaimed with 361 and 363 the suggested home, and the quotients go to 363, which claims them
+    and declines them until a variable 128-bit division is planned (`VARKA-363.md` 2.5, 8 question
+    1). A column divisor or factor needs row 30's `IntDivide` or 104's checked long multiply, and a
+    literal divisor that does not divide `D` row 30's constant forms (`VARKA-30.md` 2.4, 7). A
+    decimal literal in SQL is the common spelling: `dt * 1.5` is a decimal product, not a double
+    one, and this row takes it (2.4, section 8, point 7).
 14. **`java.time` is not an oracle for negative values.** `Duration` keeps floor seconds and a
     non-negative nano part, so at `x = -D + 1` `toDays()` is -1 where `x / D` is 0; over 2000000
     drawn longs `toDays` differs 66144 times and the hour, minute and second parts as often
@@ -149,26 +153,37 @@ LEGACY, ANSI and TRY collapse to one kernel per form, and TRY is item 12.
 - **Hours and minutes need 332's long-to-byte store, not 329's.** 329's byte store takes an
   int-lane value; this kernel is driven at the long lane (item 15).
 - **"Each division exact under its stated bound or guarded"** holds with no guard for the extracts
-  and for `dt / k` with `k` dividing `D` (item 11); other integral literals take 30's constant
-  forms, `ConstDivide` under a `2^52` guard first.
-- **The `HALF_UP` double-factor tests are 342's lowering** (item 13); this row's cells go to 342's
-  3.7 (point 2 of section 8).
+  and for `dt / k` with `k` dividing `D` (item 11). No `2^52`-guarded quotient is built: a literal
+  divisor that does not divide `D` declines naming row 30 until 30's constant forms land, which
+  claim `/` and `%` over a literal divisor as over a column one (`VARKA-30.md` 7), and then 103d
+  uses them (section 8, point 4).
+- **The `HALF_UP` double-factor tests stay here** (item 13): 342's 2.4 builds the lowering, and the
+  ties at both signs, `2^53` and the long edges are this row's named tests (section 8, point 2).
+- **The row's magnitude form is wrong at `Long.MIN_VALUE`** (the first bullet): row 103's line in
+  `PLAN.md` carries the dated correction.
+- **The casts parked here are this row's** (section 8, point 5): the coarser day-time casts from
+  332 and the decimal to and from interval casts from 350, as 103c.
 - **`m5/PLAN.md` 2.38's correction is already there.** The dated note of 14 October 2026
   (`m5/PLAN.md:2379-2386`) is the done-when's "corrected by a dated note"; nothing is added.
 - **`java.time` is the oracle at the arithmetic edges only** (item 14).
-- **The wave edges are wider than G1's "after 28 and 329":** 332b (the byte store, the bias
-  helper if it lands first), 347 and 157 (the seconds), 30 (column divisors, `div`) and 104 (a
-  column factor). G1 runs after F3 already, so only 332, 30 and 104 add an edge (section 8).
+- **The wave edges are wider than G1's "after 28 and 329":** 332b (the byte store, and the bias
+  helper, 332's, unless 103a lands first), 347 and 157 (the seconds and the decimal casts), 481
+  (the TRY casts), 342 (the double factor), 30 (column divisors, other literal divisors, `div`) and
+  104 (a column factor). G1 runs after F3 already, so only 332, 481, 30 and 104 add an edge; the
+  lead edits the waves table (section 8, point 9).
 
 ## 1. Goal and non-goal
 
 Every day-time interval form of `m5/PLAN.md` 2.38 fuses with Spark's answers and declines a batch
 exactly where Spark raises: `+`, `-`, negation and `abs`; `dt * k` and `dt / k` for an integral
-literal `k`, and for an integral column once 104 and 30 give the checked multiply and the
-division; `extract` of `DAY`, `HOUR`, `MINUTE` and `SECOND`; `make_dt_interval` with its partial
-sums in Spark's order; and `dt div` a literal or a column. Not this row: a floating factor (342), a
-decimal column factor (361, 363), `TryEval` (no row), the interval casts beyond the identity
-relabels (section 8), the year-month forms beyond section 8, point 6.
+literal `k` (a divisor of `D` first, any other after 30), and for an integral column once 104 and
+30 give the checked multiply and the division; `ym * k` for an integral literal; `dt * c` and
+`dt / c` for a decimal literal `c`; the named tests of a double factor over 342's lowering;
+`extract` of `DAY`, `HOUR`, `MINUTE` and `SECOND`; `make_dt_interval` with its partial sums in
+Spark's order; `dt div` a literal or a column; and the interval casts parked here: day-time to a
+coarser day-time end, and decimal to and from both interval types. Not this row: a floating
+factor's lowering (342), a decimal column factor (361, 363), `TryEval` (no row; section 8's open
+points propose a scope item), the year-month forms beyond `ym * k`.
 
 ## 2. Design
 
@@ -188,8 +203,8 @@ as the year-month arms are on theirs, under the same family switch
 The mode is `FAIL` unconditionally, as for the year-month arms (`VarkaIntervalCompiler.java:
 448-470`). Two units meet through a cast to the wider type; a cast to an end field at least as fine
 as the source's is the identity on the value (a whole number of the source unit is a whole number
-of the finer one), so it compiles to the child beside the SECOND relabel, and the truncating casts
-keep declining (section 8, point 5). The error each engine raises is the row engine's own: the
+of the finer one), so it compiles to the child beside the SECOND relabel; the truncating casts
+are 2.7's, in 103c. The error each engine raises is the row engine's own: the
 declined batch re-evaluates the expression, so `abs` raises `ARITHMETIC_OVERFLOW` and `-dt` the
 interval class (items 1, 2). Under `checkIntOverflow = false` these `FAIL` nodes lose their check
 as the year-month ones do (`varka/Analysis.java:676-686`); whatever row 481 settles for that option
@@ -207,6 +222,14 @@ with `x * k = MIN` **[A, 4]**. `k = 0` is the literal 0 (Spark multiplies and ne
 the operand, `k = -1` the checked negation of 2.1. A `TINYINT`, `SMALLINT` or `INT` literal is its
 long value. `k * dt` is the same node.
 
+**`ym * k` for an integral literal** (section 8, point 6) takes the same guard at the int lane:
+`Math.multiplyExact` on the int raises exactly outside `[ceil(Int.MIN / k), floor(Int.MAX / k)]`
+for `k > 0`, the two swapped for `k < 0`, so `GuardedRange` then `IntArith(MUL, WRAP)` at the int
+lane replaces today's decline over an unbounded column (item 9). A `BIGINT` literal is Spark's
+`multiplyExact` on longs then `toIntExact` (`intervalExpressions.scala:645-648`), which raises
+exactly where the true product leaves the int, so it is the same guard with the bounds computed in
+`BigInteger` and clamped to the int.
+
 ### 2.3 The extracts
 
     b = BitOp(AND, BitOp(SHR, x, 63), D - 1)             the bias, 0 or D - 1
@@ -219,23 +242,27 @@ long value. `k * dt` is the same node.
 
 `q`, `r` and the hour quotient are shared nodes, so a query extracting several fields computes
 the chain once. The narrowing to an int is exact since `|q| <= 106,751,991`; to a byte, since
-`|hours| <= 23` and `|minutes| <= 59`. The bias helper is `truncDivLong(x, d)` beside
-`floorDivLong`, for any positive even `d` that `floorDivLong` admits, with its claim in
-`long_divide.smt2`: built by whichever of 332b and this row lands first, reused by the other
-(section 8, point 1). The new arm claims `ExtractANSIIntervalDays` where it is a node of the walk;
-inside `DateAdd` the extract is the offset, which the date arm reads itself without recursing
-(`VarkaChronoCompiler.java:477-485`), so no node has two claimants (`VarkaFamilyChainSuite`
-holds that). That arm still declines a day offset other than `CAST(i AS INTERVAL DAY)` ("day
-interval is not an int column cast to days"), so `d + dt` over a stored `INTERVAL DAY` column
-keeps declining; admitting this row's quotient there under the date arm's day guard is a
-follow-up for the calendar family, not built here.
+`|hours| <= 23` and `|minutes| <= 59`. The bias helper is row 332's: its 2.4 claims the biased
+floor `floorDiv(x + ((x >> 63) & (d - 1)), d)` for a DAY end, with its claim in `long_divide.smt2`
+beside 338's (`VARKA-332.md` 2.4, 3.3). 332b builds it; if 103a lands first, 103a builds it to
+332's form and API, a helper beside `floorDivLong` taking the long node and a divisor that
+`floorDivLong` admits, with the same `long_divide.smt2` claim, and 332b reuses it (section 8,
+point 1). 332's plan names no method; this plan writes it `truncDivLong(x, d)`.
+
+The new arm claims `ExtractANSIIntervalDays` where it is a node of the walk; inside `DateAdd` the
+extract is the offset, which the date arm reads itself without recursing
+(`VarkaChronoCompiler.java:477-485`), so no node has two claimants (`VarkaFamilyChainSuite` holds
+that). That arm still declines a day offset other than `CAST(i AS INTERVAL DAY)` ("day interval is
+not an int column cast to days", `:527`), so `d + dt` over a stored `INTERVAL DAY` column keeps
+declining; admitting this row's quotient there under the date arm's day guard is a follow-up for
+the calendar family, not built here, and section 8's open points propose its home.
 
 ### 2.4 The quotients by an integral literal
 
 `LongMath.divide(x, k, HALF_UP)`: `k = 0` and `k = -1` decline at compile time, the first because
 every valid row raises, the second as row 89 declines `ym / -1`, naming row 414 (item 4 is new
-evidence for it, section 8); `k = 1` is the operand. Otherwise, with `q` the truncated quotient and
-the wrapping `r = x - q * k`:
+evidence for it, section 8, point 8); `k = 1` is the operand. Otherwise, with `q` the truncated
+quotient and the wrapping `r = x - q * k`:
 
     bump = IfElse(|r| >= ceil(|k| / 2) and r != 0, x and k of one sign ? 1 : -1, 0)
     result = q + bump
@@ -247,13 +274,33 @@ overflows, and the admission program's first run failed 462239 of 7600418 cells 
 overflow-free form 0 of 7600418 differ from `LongMath.divide` over nineteen divisors **[A, 5]**.
 `q` and `r` come from:
 
-- **`k` dividing `D`** (`|k|` among its 504 divisors): `q = q_D * (D / k) + r_D / k`, `r = r_D % k`
-  over 2.3's `q_D`, `r_D`, exact over every long with no guard; 4800264 cells, 0 differ **[A, 5]**.
-- **any other `k`:** row 30's constant forms for a `BIGINT` dividend (`VARKA-30.md` 2.4): its
-  `GUARDED` default, `ConstDivide` under a `GuardedRange` of `|x| < 2^52`, about 142 years, and
-  its `MULHI` arm when chosen. Before 30 lands the `GUARDED` form is buildable from existing nodes,
-  and this row builds it there rather than wait (section 8, point 4).
-- **`k = Long.MIN_VALUE`:** 30's `IfElse(x = MIN, 1, 0)` for `q`, and `r = x` elsewhere.
+- **`k` dividing `D`** (`|k|` among its 504 divisors), in 103a: `q = q_D * (D / k) + r_D / k`,
+  `r = r_D % k` over 2.3's `q_D`, `r_D`, exact over every long with no guard; 4800264 cells, 0
+  differ **[A, 5]**. This is the one quotient this row builds from its own nodes.
+- **any other `k`**, in 103d: until row 30 lands the arm declines naming row 30, which claims `/`
+  and `%` over a literal divisor as over a column one (`VARKA-30.md` 7); no `2^52`-guarded
+  `ConstDivide` is built here (section 8, point 4). Once 30 lands, `q` and `r` are its constant
+  forms for a `BIGINT` dividend (`VARKA-30.md` 2.4), whichever arm its `longConstDivide` option
+  selects, and the step above follows; `k = Long.MIN_VALUE` is 30's `IfElse(x = MIN, 1, 0)` for
+  `q`, with `r = x` elsewhere. Only here can `|k|` reach `Long.MAX_VALUE`, so the half constant's
+  overflow above, and its planted fault (3.7), live in 103d.
+
+**A decimal literal factor or divisor** (`dt * 1.5`, `dt / 1.5`; section 8, point 7), in 103a. For
+`c = u / 10^s`, `u` its unscaled long, Spark's `Decimal` path (item 3) is `HALF_UP(x * u / 10^s)`
+and `HALF_UP(x * 10^s / u)`: 2.2's guard on `x * u` or `x * 10^s`, a wrapping multiply, then the
+step above by `10^s` or `u`, all 64-bit; 2400176 cells over eight literals agree with Spark where
+the guard admits **[A, 8]**. The guard is exact only where no division follows (`s = 0` for the
+product); elsewhere it can decline lanes Spark answers (it declined 1352613 products of the sample),
+which the row engine computes. The division takes the day split, so the divisor must divide `D`:
+`10^s` does for every scale up to 8, and a `u` that does not, or a larger scale, declines naming row
+30 and joins 103d. A zero `u` declines at compile time as `k = 0` does, and `u = -1` at scale 0 as
+`k = -1`. The named tests are the double factor's tie cells of 3.3, spelled as decimal literals,
+with Spark's `Decimal` path as the expected value: not **[A, 7]**'s double answers, since nothing
+converts to a double here, so `(2^53 + 1) * 0.5` is a true tie and `MAX * 1.0` fits where the double
+raised (its guard declines, and the row engine answers).
+
+**A double factor** is 342's 2.4 lowering, its arm and node; this row adds only the named tests of
+3.3 over it, in 103d, after 342 (section 8, point 2).
 
 ### 2.5 Column factors and divisors, and `div`
 
@@ -288,54 +335,144 @@ folded), or a `DECIMAL(18, 6)` column through 347's leaf; another seconds operan
 decimal and 350's (section 8, point 3, for which row reads the literal). Overflowing lanes decline
 and the row engine raises the error with its context.
 
-### 2.7 Reference, cost, warm-up, census
+### 2.7 The casts parked here (103c)
+
+Section 8, point 5 keeps both groups here, under the interval family's switch. Spark's rules,
+pinned:
+
+- **Day-time to a coarser day-time end** (54 forms, `VARKA-332.md` 7):
+  `durationToMicros(microsToDuration(x), end)` (`Cast.scala:1105-1107`;
+  `sql/api/.../util/SparkIntervalUtils.scala:56-76`), which is `x - x % u` for the target end's
+  unit, `D`, `H` or `M`. The round trip through `Duration` is exact over every long and never
+  raises: at `Long.MIN_VALUE` the seconds equal `minDurationSeconds`, `floorDiv(Long.MIN_VALUE,
+  10^6)` (`:38`), and that branch adds the negative nano adjustment to `(minDurationSeconds + 1) *
+  10^6` instead of multiplying. So the lowering is 2.3's chain with no guard, one kernel for every
+  mode: `x - r_D` to DAY, `x - r_D % H` to HOUR, `x - r_D % M` to MINUTE, exact by item 11. A finer
+  end is 2.1's identity.
+- **Decimal to day-time** (`Cast.scala:1116-1118`; `IntervalUtils.scala:939-954`):
+  `d.toBigDecimal * u` exactly, for `u` the end unit (`D`, `H`, `M` or `10^6`), then `setScale(0,
+  HALF_UP)` and `toLongExact`, any failure `castingCauseOverflowError` (`CAST_OVERFLOW`). For a
+  `DECIMAL(p, s)` with `p <= 18` and unscaled `v` it is `HALF_UP(v * u / 10^s)`: reduce `u / 10^s`
+  to `a / b` in lowest terms at compile time, then 2.2's guard on `v * a` and 2.4's step by `b`, the
+  shape of the decimal literal factor with the decimal as the column. `b` divides `D` at every scale
+  up to 8; another `b` declines naming row 30 until 103d.
+- **Decimal to year-month** (`Cast.scala:1136-1138`; `IntervalUtils.scala:841-853`): `d * 12` for
+  a YEAR end, `d` for MONTH, `setScale(0, HALF_UP)`, `toIntExact`, the same construction with the
+  bounds of the int and a `NarrowLane` to the int result.
+- **Day-time to decimal** (`Cast.scala:1411-1416`; `IntervalUtils.scala:930-937`): `Decimal(v /
+  unit)` for a DAY, HOUR or MINUTE end, Java's truncating division and so 2.3's quotient
+  (`q_D * (D / u) + r_D / u`), and `Decimal(v, 19, 6)` for SECOND; then `changePrecision` to the
+  target with `nullOnOverflow = false` (`CastUtils.changePrecisionExact`, `HALF_UP` by
+  `Decimal.changePrecision`), raising `cannotChangeDecimalPrecisionError`. For a target `(p, s)`
+  with `p <= 18`: a guard of `|n| < 10^(p - s)` on the integral value before its multiply by
+  `10^s` (guard-the-inputs, as row 360's note asks), or for SECOND a `HALF_UP` division by
+  `10^(6 - s)` when `s < 6` and the `10^p` check after it.
+- **Year-month to decimal** (`Cast.scala:1417-1422`): `Decimal(yearMonthIntervalToInt(ym, start,
+  end))`, `v / 12` truncating for a YEAR end (a bounded `ConstDivide` at the int lane) or `v`, then
+  the same `changePrecision`.
+
+**The modes.** The coarser day-time casts cannot fail. The decimal casts raise under LEGACY and
+ANSI alike (the helpers throw whatever the mode); under TRY the cast's own `catch` returns null
+(`Cast.scala:1586-1597`), so a TRY form needs row 481's `NULL` mode, and only where its guard is
+exact (`b = 1`, and every precision check after the value is formed); a conservative guard
+declines the batch under TRY too. **Prerequisites**: 347's decimal leaf for the sources, 157's
+64-bit store for the targets, 481 for TRY, and 103a's quotient. A decimal above precision 18 on
+either side needs 359's lane pair and declines (section 8, open points).
+
+### 2.8 Reference, cost, warm-up, census
 
 No new node, so the reference evaluator, the cost model's features and the budget's weights are
 unchanged; the warm-up reach suite is rerun, since the arms emit long-lane `MUL`, `SHR` and
 `ConstDivide` combinations the blocks may not hold (`VarkaWarmupReachSuite`). The census's
-`abs`, `negative`, `+`, `-`, `div`, `dt_times_num`, `dt_div_num`, `make_dt_interval`, `extract`,
-`date_part`, `datepart` and the four `extract_dt_*` entries are updated as each lands (section 6).
+`abs`, `negative`, `+`, `-`, `div`, `dt_times_num`, `dt_div_num`, `ym_times_num`,
+`make_dt_interval`, `extract`, `date_part`, `datepart`, the four `extract_dt_*` entries and the
+cast register's interval rows are updated as each lands (section 6).
 
 ## 3. Tests and proofs
 
 1. **SMT over integers**, linear by constants, in `sql/varka/proofs/long_divide.smt2` beside 338's
    claim: the bias form equals `trunc(x / D)` over every long and its biased dividend does not
    overflow; `x - trunc(x / D) * D` equals `x rem D` and lies in `(-D, D)`; `r rem H = x rem H`
-   and `r rem M = x rem M`; and `trunc(x / u) = q * (D / u) + trunc(r / u)` for `u` in `H`, `M`,
-   `10^6` and every divisor a coverage row uses. In a new `sql/varka/proofs/dt_arith.smt2`: the
-   multiply guard's bounds against `multiplyExact`'s range, per literal used by a test; the days
-   guard and the hour and minute products' ranges of 2.6; and the `HALF_UP` rule of 2.4 per
-   divisor, as `ym_divide.smt2` does at the int lane (a symbolic divisor is nonlinear and was not
-   solved there either). Priced at VARKA-245's observed ratio: under 8 s per solver.
+   and `r rem M = x rem M`, which also give 2.7's coarser casts; and `trunc(x / u) = q * (D / u) +
+   trunc(r / u)` for `u` in `H`, `M`, `10^6` and every divisor a coverage row or a test uses. In a
+   new `sql/varka/proofs/dt_arith.smt2`: the multiply guard's bounds against `multiplyExact`'s
+   range, per literal used by a test, at the long lane and for `ym * k` at the int lane; the days
+   guard and the hour and minute products' ranges of 2.6; the `HALF_UP` rule of 2.4 per divisor, as
+   `ym_divide.smt2` does at the int lane (a symbolic divisor is nonlinear and was not solved there
+   either), `Long.MAX_VALUE` among the divisors once 103d builds it; and for each decimal literal
+   and each cast's `(unit, scale)` a test uses, the reduced `a / b` and its guard. Priced at
+   VARKA-245's observed ratio: under 8 s per solver.
 2. **Sampled, where the claim is not linear**: the column divisor's Guava sequence (2.5) against
    `LongMath.divide` over drawn pairs with `i` at 0, `+-1`, `+-2`, `Long.MIN_VALUE`,
-   `Long.MAX_VALUE`; the `make_dt_interval` draw of **[A, 6]**.
+   `Long.MAX_VALUE`; the `make_dt_interval` draw of **[A, 6]**; the decimal literal forms against
+   Spark's `Decimal` path, the draw of **[A, 8]**; the decimal casts against `IntervalUtils`'s and
+   `CastUtils`'s own helpers over drawn unscaled values at each `(p, s)` a coverage row uses.
 3. **Named cells** through the coverage differential and an emitter suite, both widths: `dt + dt2`
    at `MAX` and `MAX - 1`; `-dt` and `abs(dt)` at `MIN` and `MIN + 1`, with the raised class of
-   each (items 1, 2); `dt * k` at `lo - 1`, `lo`, `hi`, `hi + 1` for `k = 2`, `-2`, `MIN`; the
-   extracts at `MIN`, `MAX`, `+-D`, `+-(D - 1)`, `+-1` and 0; `dt / k` at the ties `+-5 / 2` and
-   `5 / -2` and at `2^62 / MIN` **[A, 5]**, at `+-2^52` for a guarded divisor; `make_dt_interval`
-   at days `+-106,751,991` and `+-106,751,992` and the partial-sum cell of item 6; `dt div -1` at
-   `MIN`, which wraps.
+   each (items 1, 2); `dt * k` at `lo - 1`, `lo`, `hi`, `hi + 1` for `k = 2`, `-2`, `MIN`, and
+   `ym * k` at the same four for `k = 2`, `-2` and `Int.MIN_VALUE`; the extracts at `MIN`, `MAX`,
+   `+-D`, `+-(D - 1)`, `+-1` and 0; `dt / k` at the ties `+-5 / 2` and `5 / -2` **[A, 5]**, and
+   `dt / 7` declining naming row 30 until 103d, then fused with `2^62 / MIN` **[A, 5]** and
+   `1 / Long.MAX_VALUE`, whose answer is 0; `make_dt_interval` at days `+-106,751,991` and
+   `+-106,751,992` and the partial-sum cell of item 6; `dt div -1` at `MIN`, which wraps.
+   - **The double factor** (103d, over 342's lowering; section 8, point 2), the cells of
+     **[A, 7]** with Guava's answers: the ties `+-1 * 0.5`, `1 * -0.5`, `+-5 * 0.5`, `+-3 * 0.5`,
+     `+-3 / 2.0` and `5 / -2.0` at both signs; `2^53` by `(2^53 + 1) * 0.5`, which is
+     4503599627370496 by the conversion, and `+-(2^53 - 1) * 0.5`; the long edges `MAX * 1.0`,
+     `(MAX - 511) * 1.0` and `MIN * -1.0` raising, `(MAX - 512) * 1.0` 9223372036854774784,
+     `MAX * -1.0` and `MIN * 1.0` `MIN`; NaN and the infinities, `7 / Infinity` 0.
+   - **The decimal literal factor** (103a; section 8, point 7): the same cells spelled as decimal
+     literals (`dt * 0.5`, `dt * -0.5`, `dt / 2.0`, `dt * 1.0`, `dt * -1.0`), the expected value
+     Spark's `Decimal` path (2.4: no conversion to a double, so these answers differ from the
+     double's at `2^53` and at `MAX`), and `dt / 7.0` declining naming row 30.
+   - **The casts** (103c): each coarser end at `MIN`, `MAX`, `+-(D - 1)`, `+-(H - 1)` and
+     `+-(M - 1)`; decimal to day-time and year-month at a `HALF_UP` tie of each sign and at the
+     first value past the long and the int; day-time and year-month to a decimal at the target's
+     `10^p - 1` and the first value past it, under each mode, TRY's null included.
 4. **The sweep, run by hand in the gate**: a `VarkaDayTimeSweepSuite`, tagged so the PR build skips
    it as 481's and 330's sweeps are, drawing 2^28 longs per form against Spark's own expressions on
    the row engine. No CI workflow runs it; the gate records its time.
 5. **Coverage rows**, a family "Day-time interval arithmetic": `dt + dt2`, `dt - dt2`, `-dt`,
-   `abs(dt)`, `dt * 3`, `3 * dt`, `dt / 7` (guarded), `dt / 24` (day split), `dt div dt2` (after
-   30), the four `extract`s and `date_part`, `make_dt_interval(i, i2, i3)` and with a
-   `DECIMAL(18, 6)` column, each naming its verification for row 490's check (the SMT sections, or
-   `differential`).
+   `abs(dt)`, `dt * 3`, `3 * dt`, `ym * 3`, `dt / 24` (day split), `dt * 1.5` and `dt / 1.5`, `dt /
+   7` (after 30), `dt div dt2` (after 30), the four `extract`s and `date_part`,
+   `make_dt_interval(i, i2, i3)` and with a `DECIMAL(18, 6)` column, `CAST(dt AS INTERVAL HOUR)`,
+   `CAST(dec AS INTERVAL SECOND)` and `CAST(dt AS DECIMAL(18, 6))`, each naming its verification
+   for row 490's check (the SMT sections, or `differential`).
 6. **The fuzzers**: the Spark-level grammar gains the forms over `dt` and `dt2` (row 352's
    per-type draw, `VARKA-352.md` 2.2).
+7. **The planted faults**, for row 504, each under a test flag, refuted by this section's proof or
+   sweep and failed by the differential suite:
+   - **The magnitude form with an arithmetic shift** in place of 2.3's bias: the day quotient as
+     the floor of `|x|` with the sign restored, `|x|` by `(x ^ (x >> 63)) - (x >> 63)`, which wraps
+     at `Long.MIN_VALUE`. Refuted by 1's `long_divide.smt2` claim, the planted form stated beside
+     the bias form as a `sat` witness at `MIN`, and by test 4's sweep, whose draw holds the edges;
+     failed by 3's `extract(DAY)` cell at `MIN`, where it answers 106751991 against -106751991
+     (4 of the admission's drawn longs differ, **[A, 1]**). Planted in 103a.
+   - **The half constant as `(|k| + 1) / 2`**, in 2.4's step: at `|k| = Long.MAX_VALUE` it wraps
+     negative, so every lane with a non-zero remainder steps. Refuted by 1's `dt_arith.smt2`
+     `HALF_UP` claim at `k = Long.MAX_VALUE` as a `sat` witness; failed by 3's `1 /
+     Long.MAX_VALUE` cell, which it answers 1 for Spark's 0; the admission program's first run had
+     this form and failed 462239 of 7600418 cells (`results/VARKA-103-admission.txt`, its header).
+     Planted in 103d, the first step where `|k|` can exceed `D` (2.4); for the divisors of `D` in
+     103a the fault is not live, and the test says so rather than pass vacuously.
+   - **A partial sum of `make_dt_interval` checked out of Spark's order**: the hours and minutes
+     products added to the seconds first and the days product last. Refuted by 2's
+     `make_dt_interval` draw and test 4's sweep; failed by 3's partial-sum cell of item 6 (days
+     106751991, hours -1, secs 14454775808 micros), where the reordered sums never overflow and so
+     the fault fuses a lane on which Spark raises **[A, 6]**. Planted in 103b.
+
+   A fault that only declines more, such as 2.2's symmetric bound `+-(MAX / |k|)` (**[A, 4]**),
+   is not one of them: the row engine answers the declined batch correctly, so the differential
+   cannot fail on it; the guard's exactness rests on 1's bounds claim instead.
 
 ## 4. The baseline, and predictions
 
 **The baseline first, its own pull request on the unchanged code**:
 `VarkaDayTimeIntervalBaselineBenchmark`, a class of its own, over Arrow-cached `dt`, `dt2`, three
 int columns and a `DECIMAL(18, 6)` column: the projections `dt + dt2 - dt`, `abs(dt)`, `dt * 3`,
-`dt / 7`, `dt / 24`, `extract(DAY FROM dt)`, `extract(HOUR FROM dt)`, the four extracts together,
-`make_dt_interval(i, i2, i3)` and with the decimal seconds, and the filter
-`extract(HOUR FROM dt) >= 12`. Run on the EPYC 7763 runners at 256 and 128 bits through the
+`dt * 1.5`, `dt / 24`, `extract(DAY FROM dt)`, `extract(HOUR FROM dt)`, the four extracts together,
+`make_dt_interval(i, i2, i3)` and with the decimal seconds, `CAST(dt AS INTERVAL HOUR)`, and the
+filter `extract(HOUR FROM dt) >= 12`. Run on the EPYC 7763 runners at 256 and 128 bits through the
 benchmark workflow, committed beside the class.
 
 Predictions, registered before the build:
@@ -346,8 +483,8 @@ Predictions, registered before the build:
 3. **The extracts** at least three times faster at 256 bits: about a dozen lane operations and two
    `ConstDivide`s against two `%` and one `/` per row; the four together within twice one alone,
    by the shared chain.
-4. **`dt / 7`** within 20% of `dt / 24`: one `ConstDivide` and a guard against the day split's
-   chain.
+4. **`dt * 1.5`** within 30% of `dt / 24`: both are the day split's chain, the first with a
+   guard and a multiply ahead of it.
 5. **At 128 bits on x86**, the filter falls under row 503's two-lane rule as it stands and the
    projections still beat the row path.
 6. **Test time**: the proof additions under 8 s per solver (VARKA-245's ratio); the coverage
@@ -357,113 +494,180 @@ Predictions, registered before the build:
 ## 5. Order, files and size
 
 1. **The baseline** (4), its own pull request.
-2. **103a, needing nothing unbuilt**: 2.1, 2.2, `extract(DAY)`, 2.4 with the day split and the
-   `GUARDED` form, the proof additions, the cells and coverage rows of those forms.
-3. **103b, after 332b and 157 and 347**: `HOUR`, `MINUTE`, `SECOND`, `make_dt_interval`, and the
-   measurement against the baseline at both widths.
-4. **103c, after 30 and 104**: 2.5's column forms and `div`.
+2. **103a, needing nothing unbuilt**: 2.1, 2.2 with `ym * k`, `extract(DAY)` (and the bias
+   helper, if 332b has not built it), 2.4's day split and the decimal literal forms whose divisor
+   divides `D`, the proof additions, the cells and coverage rows of those forms, the first planted
+   fault.
+3. **103b, after 332b and 157 and 347**: `HOUR`, `MINUTE`, `SECOND`, `make_dt_interval` (the
+   seconds of both, section 8, point 3), the third planted fault, and the measurement against the
+   baseline at both widths.
+4. **103c, after 103a, 157, 347 and 481**: 2.7's casts, TRY over 481's `NULL` mode where the
+   guard is exact, and their cells and measurement.
+5. **103d, after 30, 104 and 342**: 2.5's column forms and `div`, the literal divisors that do not
+   divide `D` (integral and decimal) over 30's constant forms, the second planted fault, and the
+   double factor's named tests over 342's lowering.
 
 | file | what |
 |---|---|
-| `VarkaIntervalCompiler.java` | the day-time arms of 2.1 to 2.6 |
-| `VarkaTimeCompiler.java` | the identity relabel to a finer end field |
-| `VarkaNodeCompiler.java` | `truncDivLong`, the day split helper |
+| `VarkaIntervalCompiler.java` | the day-time arms of 2.1 to 2.6, `ym * k` |
+| `VarkaTimeCompiler.java` | the identity relabel to a finer end field, 2.7's casts |
+| `VarkaNodeCompiler.java` | the day split helper, and `truncDivLong` if 103a lands before 332b |
 | `sql/varka/proofs/long_divide.smt2`, `dt_arith.smt2`, `VarkaProofFiles.java` | 3.1's claims |
 | tests | the emitter and sweep suites, the coverage rows, the fuzz grammar |
 | benchmark | the baseline class and its results files |
 | generated | `coverage.json`, `docs/sql-varka.md`, `emitted_bytes.json` |
 | generated | `width_audit.json`, `census.tsv` |
 
-**Size: medium, in four pull requests.** The baseline about half a day; 103a about two days;
-103b about two after its prerequisites; 103c about a day after 30 and 104.
+**Size: medium, in five pull requests.** The baseline about half a day; 103a about two and a half
+days (the decimal literal and `ym * k` added); 103b about two after its prerequisites; 103c about
+two (the casts, settled here on 30 October 2026); 103d about a day and a half after 30, 104 and
+342. Eight to nine days in all against the first plan's five and a half, which may move the row
+to large (section 8, open points).
 
 ## 6. What it unlocks in the census
 
 The day-time pairs of `abs`, `negative`, `+` and `-` count when 103a lands; `extract_dt_days`
 with it, and `extract_dt_hours` and `extract_dt_minutes` with 103b; `extract_dt_seconds` and
 `make_dt_interval` with 103b over 157's store and 347's leaf; `extract`, `date_part` and `datepart`
-over `dt` when the four fields fuse; `dt_times_num` and `dt_div_num` for the integral types when
-103c lands, their `float`, `double` and `dec` cells staying with 342, 361 and 363; `div` over `dt`
-with 103c. `try_add` and `try_subtract` over `dt` stay with `TryEval`, which no row builds; their
-`rows` column naming 103 is corrected in 103a's pull request.
+over `dt` when the four fields fuse; `ym_times_num`'s literal integral factor with 103a;
+`dt_times_num` and `dt_div_num` for an integral or decimal literal with 103a (a divisor of `D`)
+and 103d (the rest), for an integral column with 103d, their `float` and `double` cells being 342's
+lowering and their decimal column cells 361's and 363's; `div` over `dt` with 103d; the interval
+rows of the cast register with 103c. `try_add` and `try_subtract` over `dt` stay with `TryEval`,
+which no row builds; the census edits that record it are the lead's (section 8, open points).
 
 ## 7. Out of this row, and declines that stay
 
-Out: the floating factor (342); a decimal column factor (361, 363); `TryEval` and the `try_`
-forms over an interval; the legacy `CalendarInterval` forms; `avg(dt)`, whose
-`DivideDTInterval(sum, count)` lives inside an aggregate (`expressions/aggregate/Average.scala:
-124`), which Varka does not fuse.
+Out: a floating factor's lowering (342; the named tests are this row's); a decimal column factor
+(361, 363); `TryEval` and the `try_` forms over an interval; the legacy `CalendarInterval` forms;
+`avg(dt)`, whose `DivideDTInterval(sum, count)` lives inside an aggregate
+(`expressions/aggregate/Average.scala:124`), which Varka does not fuse; `d + dt` over a stored
+`INTERVAL DAY` column (2.3).
 
-Declines that stay: a literal zero divisor; `dt / -1` until row 414; a column factor before 104 and
-a column divisor before 30; a batch with a lane Spark raises on (an overflowing sum, product,
-negation or partial sum, a zero column divisor, `MIN / -1`, a value past `2^52` under the guarded
-quotient); the truncating day-time casts (section 8, point 5); at two long lanes on x86 a condition
+Declines that stay: a literal zero divisor; `dt / -1` until row 414; until 103d, a literal divisor
+that does not divide `D`, naming row 30; a column factor before 104 and a column divisor before 30;
+a batch with a lane Spark raises on (an overflowing sum, product, negation or partial sum, a zero
+column divisor, `MIN / -1`, a value a cast cannot hold); a batch a conservative guard rejects (a
+decimal literal's or a decimal cast's multiply ahead of a division), which the row engine answers;
+a decimal above precision 18 on either side of 2.7's casts; at two long lanes on x86 a condition
 root under row 503's rule.
 
-## 8. Questions for the owner
+## 8. Settlements and open points
 
-None of the owner's yet; the lead's open points, from the admission check:
+None of the owner's. The lead settled the admission check's nine points on 30 October 2026:
 
-1. **Who builds `truncDivLong`.** 332's 2.4 builds it in 332b, and its section 7 says "row 103,
-   whose day-time work holds the truncating quotient". (a) Whichever of 332b and 103a lands first
-   builds it with its `long_divide.smt2` claim, the other reuses. (b) 332b only, 103a waiting.
-   *Recommended: (a)*: 103a otherwise waits on 481 through 332b for three lane operations.
-2. **The double-factor cells.** The row text asks this row to test `HALF_UP` at ties, `2^53` and
-   the long edges; 342's 2.4 builds the lowering and its 3.7 lacks those cells. (a) They join
-   342's 3.7 from **[A, 7]**: `(2^53 + 1) * 0.5` is 4503599627370496, not `2^52 + 1`, by the
-   conversion; `MAX * 1.0` and `(MAX - 511) * 1.0` raise while `(MAX - 512) * 1.0` is
-   9223372036854774784 and `MAX * -1.0` is `MIN`; `7 / Infinity` is 0. (b) This row adds them as
-   its own test after 342. *Recommended: (a)*, one owner per lowering.
-3. **The seconds.** Row 351's text claims `extract(SECOND FROM dt)` and `make_dt_interval` over
-   decimal seconds, and G1 says "its decimal seconds being 351's shapes", while this row's
-   done-when lists both. Neither needs anything 351 builds: the extract is a remainder stored by
-   157, the seconds operand a literal or a column read by 347. (a) This row builds both (103b), and
-   351's text drops them. (b) This row builds `make_dt_interval` with the literal seconds only and
-   the `r % M` node; 351 the rest. *Recommended: (a)*; with (b) the done-when needs the same split.
-4. **The guarded quotient before row 30.** (a) 103a builds `ConstDivide` under the `2^52` guard
-   for a literal `k` not dividing `D` from existing nodes, and 30's `MULHI` arm replaces it when
-   chosen. (b) Such a `k` declines until 30. *Recommended: (a)*: the divisors that matter most
-   divide `D` anyway (item 11).
-5. **The casts parked on this row.** 332's section 7 sends day-time to day-time at a coarser end (54
-   forms) here, and 350's section 7 the decimal to and from day-time casts ("row 103 or 332's
-   interval work"). The first is `trunc(x / u) * u` for `u` in `D`, `H`, `M` and `10^6`, exact over
-   every long by item 11; `durationToMicros` (`sql/api/.../util/SparkIntervalUtils.scala:56`) is
-   to be read for its edge at the minimum duration first. (a) Both join this row as a 103d. (b) The
-   coarser casts here, the decimal ones to 350 or 364. (c) Neither, recorded unclaimed.
-   *Recommended: (b)*: the coarser casts are this row's division, the decimal ones are decimal
-   casts.
-6. **`ym * k` for a literal.** The census names 103 on `ym_times_num`; `ym * 2` over a stored
-   column declines today for want of a checked int multiply (item 9), and 2.2's guard serves the
-   int lane unchanged. (a) 103a applies it to `ym * k` for an integral literal. (b) Out.
-   *Recommended: (a)*, one arm and the same proof.
-7. **A decimal literal factor.** `dt * 1.5` and `dt / 1.5` are decimal forms (item 3). For a
-   literal `c = u / 10^s` they are `HALF_UP(x * u / 10^s)` and `HALF_UP(x * 10^s / u)`: 2.2's guard
-   on `x * u` or `x * 10^s`, then 2.4's division by a constant, all 64-bit; 2400176 cells over
-   eight literals agree with Spark's `Decimal` path where the guard admits **[A, 8]**. (a) This row
-   takes the literal forms; 361 and 363 keep the column ones. (b) All stay with 361 and 363.
-   *Recommended: (a)*, the spelling users write.
-8. **Row 414's evidence.** 414's symptom is a missing `== SQL ==` block. The closer fact is item
-   1's: `IntervalMathUtils.negateExact` raises with `context = null`, so if the fallback evaluates
-   a negation (the lowering `ym / -1` was given) rather than the original `DivideYMInterval`,
-   whose own raise carries `origin.context`, the block vanishes as 414 describes. A second fact:
-   `DivideDTInterval` and `DivideYMInterval` raise different classes for `MIN / -1` in the two
-   engines (item 4; `intervalExpressions.scala:799-801`, `:818`), which would show as a condition
-   mismatch if the fallback and the oracle took different paths. Both are candidates for 414, to
-   be handed to that row and not fixed here.
-9. **The G1 edges.** The waves table's G1 row says "103 after 28 and 329"; this plan needs 332b
-   (or point 1's (a)), 157, 347, and for 103c 30 and 104. The table is outside this row's line, so
-   its edit is the lead's.
+1. **The truncation helper is row 332's**, since its 2.4 claims the biased floor. If 103a lands
+   first, 103a builds it under 332's form and API and 332b reuses it (2.3).
+2. **The double-factor tests stay in this row.** Row 103's own done-when names them: the ties at
+   both signs, `2^53` and the long edges, as named tests in 103d (3.3). Row 342 is cited only for
+   the multiply node, its 2.4 lowering.
+3. **The seconds forms are this row's**: `extract(SECOND FROM dt)` and `make_dt_interval` over
+   decimal seconds, both in 103b. Row 351's plan file does not design them; only `PLAN.md`'s row
+   351 text and the G1 wave row mention them, and the lead edits those rows separately.
+4. **No `2^52`-guarded quotient.** `VARKA-30.md` 7 claims `/` and `%` over a column divisor and a
+   literal one alike. This row builds only its exact day-split quotient, for the divisors of a day;
+   other literal divisors wait on row 30 and decline naming it, then join 103d (2.4).
+5. **The casts parked on this row stay here**: the coarser day-time casts from 332's section 7
+   and the decimal to and from interval casts, year-month and day-time, that row 350's plan sent
+   here (`VARKA-350.md` 7). Bouncing them back would leave them with no owner, and they are
+   interval casts, under the interval family's switch. They are 103c, with Spark's rules pinned
+   in 2.7 (`IntervalUtils.decimalToYearMonthInterval`, `decimalToDayTimeInterval`, `HALF_UP`).
+6. **`ym * k` for an integral literal**: yes, with the same guard (2.2), in 103a.
+7. **A decimal literal factor** (`dt * 1.5`, `dt / 1.5`) is this row's (2.4), with the double
+   factor's tie cells as its named tests (3.3). The 2400176 samples of **[A, 8]** are the admission
+   check, not the test.
+8. **Row 414's evidence is a hand-over, not fixed here.** The closer fact is item 1's:
+   `IntervalMathUtils.negateExact` raises with `context = null`, so if the fallback evaluates a
+   negation (the lowering `ym / -1` was given) rather than the original `DivideYMInterval`, whose
+   own raise carries `origin.context`, the block vanishes as 414 describes. The second: the two
+   engines raise different classes for `MIN / -1` (item 4; `intervalExpressions.scala:733-745`
+   against `:889-893`, and `:799-801`, `:818` for the year-month form), which would show as a
+   condition mismatch if the fallback and the oracle took different paths. That difference may be
+   an upstream Spark defect, one input with an engine-dependent error class; the lead checks it on
+   apache/master.
+9. **The G1 edges** are the lead's to edit; what they should be is under the open points below.
+
+### Open points for the lead
+
+The edits this plan needs outside row 103's line, none made here:
+
+1. **The G1 wave row.** Today: "103 after 28 and 329, its decimal seconds being 351's shapes".
+   Proposed: "103 after 28 and 329 (103a), 332 (332b's byte store), 157 and 347 (103b and 103c),
+   481 (103c's TRY casts), 342 (103d's double-factor tests), and 30 and 104 (103d), its decimal
+   seconds its own". Of these, 332, 481, 30 and 104 add an edge; the others land in earlier waves.
+   G1's own 30 makes 103d the wave's last step.
+2. **Row 351's text** (settlement 3): drop `extract(SECOND FROM dt)` and "`make_dt_interval` ...
+   over decimal seconds" from its list, `make_time` and `make_timestamp_ntz` staying.
+3. **A `TryEval` item in `m9/SCOPE.md`**, the next free number (125 on master today), general rather
+   than interval work: "`TryEval` over a fused subtree. Every `try_` function whose operand is not
+   one of the arithmetic forms Spark rewrites into a `NULL`-returning node becomes `TryEval(child)`
+   (`expressions/TryEval.scala:90-97`, `:135-141`, `:229-235`, `:268-274`), which turns any
+   exception raised in its subtree into a null. Rows 342 and 340 decline it by name, and row 481's
+   `NULL` guard serves a `GuardedRange` only, not a caught exception, so `try_add`, `try_subtract`,
+   `try_multiply` and `try_divide` over an interval have no builder, nor `try_eval` over a subtree
+   whose nodes raise (349's plan suggests 350 for a decimal one). A kernel can answer it where every
+   raising site of the subtree is a guard whose rejection is exact: those guards switch to `NULL`
+   mode and the subtree's null mask absorbs them; a subtree with a conservative guard or a site no
+   guard covers declines. **Done when** the rule is built over 481's mode, each `try_` entry over an
+   interval fuses with a coverage row, and a subtree with an inexact guard is shown to decline."
+4. **A follow-up for `d + dt`** over a stored `INTERVAL DAY` column (2.3): (a) an `m9/SCOPE.md`
+   item, the number after (3)'s: "the date arm reads a stored `INTERVAL DAY` column as its day
+   offset: row 103's day quotient, narrowed to an int under the date arm's day guard
+   (`VarkaChronoCompiler.java:527`'s decline today)"; (b) a new milestone 8 row after 103a. The
+   form is not in `m5/PLAN.md` 2.38's list, so (a) fits the rule that a finding becomes a row only
+   when it serves the milestone's done-when.
+5. **The census entries** (`census_curated.txt`, then the script):
+   - `try_add` and `try_subtract` (lines 110 and 113): rows `330,104,103,342,349,360` become
+     `330,104,342,349,360`; the note "overflow gives null" gains "; over ym and dt it is
+     `TryEval`, which no row builds (`m9/SCOPE.md` item 125)", or the number (3) takes.
+   - `ym_times_num` (line 197): rows unchanged; the note gains "; an integral literal factor
+     over a stored column is row 103's guard (103a)". Its integral column factor still declines
+     (item 9) and its decimal literal factor is not in settlement 7: see point 7 below.
+   - `dt_times_num` and `dt_div_num` (lines 199 and 200): rows `103,342,349` become
+     `103,342,361,363` as 349's plan (section 7) and 363's (2.5) place the decimal column cells;
+     the notes gain "an integral or decimal literal and an integral column are row 103's; a
+     floating factor is 342's lowering".
+   - `extract_dt_days` (line 203): the note gains "; inside `d + dt` over a stored `INTERVAL DAY`
+     column it declines", naming (4)'s home.
+   - The cast register (`m8/casts.tsv`, from its source): the rows column of `dec ym`, `dec dt`,
+     `ym dec` and `dt dec` names `350,364` today and becomes `103` (with point 9's choice above
+     precision 18), and `dt dt`'s `103,332` becomes `103`, the 54 coarser forms being 103c's.
+6. **Row 414's hand-over** (settlement 8): the two facts above join row 414's evidence, the error
+   class difference flagged as possibly upstream.
+
+Decisions that the settlements do not reach:
+
+7. **`ym * c` for a decimal literal, and `ym * i` for a column.** Settlement 7 names the day-time
+   forms only; `ym * 1.5` is `MultiplyYMInterval`'s decimal arm (`intervalExpressions.scala:
+   651-652`), the same construction at the int lane. (a) 103a takes it beside `dt * 1.5`. (b) It
+   stays with 349. The int column factor has no checked int multiply off the narrow lanes
+   (`VarkaNodeCompiler.java:1119-1122`); its home is (a) 104's checked multiply, at the int lane,
+   (b) a scope item. Evidence for neither beyond item 9.
+8. **The helper's name.** 332's plan gives the form and the proof's place but no method name; this
+   plan writes `truncDivLong(x, d)`. (a) The name stands, and 332's plan adopts it when 332b is
+   built. (b) 332's plan names it first.
+9. **A 128-bit decimal in 2.7's casts.** 364's plan leaves the interval pairs to the homes 350's
+   plan gave them, "the same above 18" (`VARKA-364.md` 0, item 20), so by settlement 5 they are
+   this row's too; 103c declines them for want of 359's lane pair. (a) A later step of this row,
+   after 359 and 364's rescale, sized then. (b) Declined naming this row with no step planned, an
+   `m9/SCOPE.md` item holding the work.
+10. **The size.** The settlements add the casts, the decimal literal and `ym * k`: about eight to
+    nine days in five pull requests against the first plan's five and a half in four. (a) Medium
+    stands. (b) Large, the size column of row 103 changed with this plan.
 
 ## 9. Done when
 
 Row 103's text holds, with the corrections above: `m5/PLAN.md` 2.38's list fuses - `+`, `-`,
 negation, `abs`, the products and quotients by an integral literal and, after 104 and 30, an
-integral column, the four extracts and `make_dt_interval`, each with coverage rows; every division
-is exact over every long (the extracts, the divisors of `D`) or under its stated `2^52` guard; the
-SMT claims of 3.1 hold under both solvers; the cells of 3.3 pass at both widths, with the error
-class of each declined lane the row engine's; the sweep has run in the gate with its time recorded;
-the measurement against the baseline is committed at both widths with its predictions scored; and
-the PR build and the option matrix pass.
+integral column, the four extracts and `make_dt_interval`, each with coverage rows - and so do
+`ym * k` for an integral literal, the products and quotients by a decimal literal, and the casts of
+2.7; every division is exact over every long (the extracts, the divisors of `D`, the coarser casts)
+or 30's constant form after 103d, with no `2^52` guard of this row's own; the SMT claims of 3.1
+hold under both solvers; the cells of 3.3 pass at both widths, the double factor's ties at both
+signs, `2^53` and the long edges among them, with the error class of each declined lane the row
+engine's; each planted fault of 3.7 is refuted by its proof or sweep and fails the differential;
+the sweep has run in the gate with its time recorded; the measurement against the baseline is
+committed at both widths with its predictions scored; and the PR build and the option matrix pass.
 
 ## 10. Outcome
 
