@@ -161,10 +161,11 @@ The sources of each cell, and the facts the design rests on:
     For `|u| >= 2^64` the top 64 bits `w'` and `w' + 1` give two different doubles on 0.00027 to
     0.00053 of a lane over six uniform types and the baseline's column. Varka's bodies are
     straight-line and a guard's decline folds into the batch's status (`varka/VarkaBodyEmitter.java:
-    645-661`), so one disagreeing lane declines its batch: of batches of 10000 rows, the
-    `spark.sql.inMemoryColumnarStorage.batchSize` default (`internal/SQLConf.scala:1031-1036`),
-    between 0.004821 and 0.069459 would survive, and of 4096-row batches 0.1125 to 0.3354. On the
-    same draws `FLOAT` and the `INT` outcome never disagree.
+    645-661`), so one disagreeing lane declines its batch: of batches of 10000 rows, the Arrow
+    cache's default (`ArrowCachedBatchSerializer.scala:107` reads
+    `spark.sql.execution.arrow.maxRecordsPerBatch`, `internal/SQLConf.scala:5529-5537`), between
+    0.004821 and 0.069459 would survive, and of 4096-row batches 0.1125 to 0.3354. On the same draws
+    `FLOAT` and the `INT` outcome never disagree.
 
 ### What differs from the row text and the milestone plan
 
@@ -253,14 +254,15 @@ pair is 360's class K disposal: `g = GuardedRange(CondValue(ovf), 0, 0, d)` adde
 | select | `IfElse(b, pair(10^s), pair(0))` on both words, true guarded when `p = s` | `BOOLEAN` into `p >= 19` |
 
 `up(x, k)` multiplies by `10^k`: for `k <= 18` 360b's `WideMul(x.lo, 10^k)` on a 64-bit value and
-its pair-times-word form on a pair; for `k >= 19`, where `10^k` passes 63 bits, two steps, `10^18`
-and then `10^(k - 18)`, each exact under the guard, which bounds the product by `10^p2 - 1` (43890
-type pairs take the two steps **[A]**). A 64-bit result - `p2 <= 18` - is the low word after the
-check, which then holds a sign-extended value; a 64-bit source enters as `Pair(x, SHR(x, 63))`. Each
-guard is dropped where the compiler proves it dead, the exemption the row names (`p_in + delta <=
-p_out` up, `p_in - delta < p_out` down, `READING_ARROW_RS.md` 1 and 3.6) and the others row 350's
-2.1 lists: `p - s <= 18` for `BIGINT`, `p - s` at most 9, 4 and 2 for the three narrow targets, an
-integral source of at most `p - s` digits, `p > s` for `BOOLEAN`.
+its pair-times-word form on a pair; for `k >= 19`, where `10^k` passes 63 bits, steps of at most
+`10^18` each - two up to `k = 36`, three at 37 and 38 - every step exact under the guard, which
+bounds the final product by `10^p2 - 1` (43890 type pairs take more than one step **[A]**); an
+integral source's `up(v, s)` steps the same way. A 64-bit result - `p2 <= 18` - is the low word
+after the check, which then holds a sign-extended value; a 64-bit source enters as `Pair(x, SHR(x,
+63))`. Each guard is dropped where the compiler proves it dead, the exemption the row names (`p_in +
+delta <= p_out` up, `p_in - delta < p_out` down, `READING_ARROW_RS.md` 1 and 3.6) and the others row
+350's 2.1 lists: `p - s <= 18` for `BIGINT`, `p - s` at most 9, 4 and 2 for the three narrow
+targets, an integral source of at most `p - s` digits, `p > s` for `BOOLEAN`.
 
 **The overflow defences, as the 28 October rule asks.** The rescale up is **guard-the-inputs**: the
 guard is the target's precision check moved before the multiply, exact by row 349's lemma at full
@@ -381,7 +383,7 @@ gains the funnel shift, held by `VarkaWarmupReachSuite`.
    and proven in its file, which this one cites); the `BIGINT` check exactly where the truncated
    value leaves `[-2^63, 2^63 - 1]`; LEGACY's low word as reduction mod `2^64` and the narrow wrap
    mod `2^w` (332's `casts.smt2` claims cited if that file lands first); the narrow exact rule's
-   check; each guard of 2.2 against the precision check it replaces, the two-step rescale's
+   check; each guard of 2.2 against the precision check it replaces, the stepped rescale's
    exactness, and each exemption as `unsat` of an overflow; the `BOOLEAN` test; the normalisation,
    `w' * 2^(64 - l) + dropped = m`; `MIDPOINT`'s comparison against `mu`, linear for each shift
    amount, the amounts a case split (if the file's time passes the budget, the split is sampled and
@@ -428,9 +430,10 @@ mode:
   AS INT)`, the double rule's arm, and `CAST(x AS DOUBLE)`;
 - a `(20, 2)` column with integer parts to `5 * 10^12`, so every value is an exact lane: `CAST(x AS
   DOUBLE)`;
-- over the `(18, 4)` column, `CAST(x AS DECIMAL(22, 8))` under LEGACY and ANSI, a fallible rescale
-  into the pair whose guard is live and never rejects; and over 350's `BIGINT` column, `CAST(l AS
-  DECIMAL(25, 8))` under LEGACY and ANSI, a live integral guard.
+- over the `(18, 4)` column, `CAST(x AS DECIMAL(21, 8))` under LEGACY and ANSI, a fallible rescale
+  into the pair (`18 + 4 > 21`) whose guard, at integer parts up to `10^13 - 1`, is live and never
+  rejects; and over 350's `BIGINT` column, `CAST(l AS DECIMAL(25, 8))` under LEGACY and ANSI, a live
+  integral guard.
 
 Run by `benchmark.yml` on the EPYC 7763 at 256 and 128 bits with `expected-cpu`, committed beside
 the class's files.
@@ -496,11 +499,12 @@ seconds per solver. It rests on 359, 360b, 363, 366, 350, 343, 481 and 332, and 
 A decimal pair counts fused only when it fuses at every precision up to 38 (the milestone plan's
 2.8; 359's answered question 2), so this row is where the census's cast entries over a decimal input
 count, given 350 and 366. Of the ten - `cast`, `try_cast`, `boolean`, `tinyint`, `smallint`, `int`,
-`bigint`, `float`, `double`, `decimal` - `boolean`, `bigint` and `decimal` count when 364a lands,
-and `float`, `double`, `int`, `smallint` and `tinyint` with 364b if the band of 2.5 is served,
-otherwise they wait on it. `cast` and `try_cast` wait on the six unclaimed pairs of item 0.20. The
-22 comparison and choice pairs `VARKA-359.md` 6 parks on "360 and 363" count with 360b's rescale up
-and this row's coercion casts through 363's division, as 363's plan has it.
+`bigint`, `float`, `double`, `decimal` - `boolean` (as a projection given row 27's boolean output),
+`bigint` and `decimal` count when 364a lands, and `float`, `double`, `int`, `smallint` and `tinyint`
+with 364b if the band of 2.5 is served, otherwise they wait on it. `cast` and `try_cast` wait on the
+six unclaimed pairs of item 0.20. The 22 comparison and choice pairs `VARKA-359.md` 6 parks on "360
+and 363" count with 360b's rescale up and this row's coercion casts through 363's division, as 363's
+plan has it.
 
 ## 7. Out of this row, and declines that stay
 
