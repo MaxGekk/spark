@@ -113,7 +113,7 @@ class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
     val actual = varkaSpark.sql(query)
     val plan = actual.queryExecution.executedPlan
     assertFused(plan)
-    checkAnswer(actual, spark.sql(query))
+    checkAnswer(actual, expectedSql(query, actual))
     assertKernelsRan(plan)
     val declined = varkaNode(plan).metrics("numFallbackBatchesDeclined").value
     assert(declined === 0L, s"$query: $declined batch(es) declined inside the guard")
