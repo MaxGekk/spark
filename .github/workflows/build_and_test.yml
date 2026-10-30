@@ -1394,8 +1394,10 @@ jobs:
       uses: ./.github/actions/checkout-and-sync
       with:
         ref: ${{ needs.precondition.outputs.head_sha }}
-    - name: Cache SBT and Maven
-      uses: actions/cache@v4
+    # The dependency caches are restored only: the fork's master Build and the Varka suites' jobs
+    # save them (see the varka-scoped job), so this job never adds a branch's copy of its own.
+    - name: Restore SBT and Maven
+      uses: actions/cache/restore@v4
       with:
         path: |
           build/apache-maven-*
@@ -1404,8 +1406,8 @@ jobs:
         key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
         restore-keys: |
           build-
-    - name: Cache Coursier local repository
-      uses: actions/cache@v4
+    - name: Restore the Coursier local repository
+      uses: actions/cache/restore@v4
       with:
         path: ~/.cache/coursier
         key: varka-scoped-coursier-sql-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
@@ -1502,8 +1504,17 @@ jobs:
       uses: ./.github/actions/checkout-and-sync
       with:
         ref: ${{ needs.precondition.outputs.head_sha }}
-    - name: Cache SBT and Maven
-      uses: actions/cache@v4
+    # The dependency caches: restored here, saved after the suites by the save steps below. A
+    # cache is scoped to the branch that saved it, and a branch reads its own entries and the
+    # default branch's, so the fork's master Build (varka-master.yml, dispatched by
+    # varka-fork-sync.yml) saves them where every branch reads them. A pull request's branch
+    # saves an entry only when its key misses and the branch changes the files the key hashes:
+    # a branch that saved every miss would keep its own 1 GB copy of each module's Coursier
+    # cache, and the fork's cache would run past its quota (VARKA-525,
+    # m8/results/VARKA-525-fork-cache.txt).
+    - name: Restore SBT and Maven
+      id: build-cache
+      uses: actions/cache/restore@v4
       with:
         path: |
           build/apache-maven-*
@@ -1512,13 +1523,34 @@ jobs:
         key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
         restore-keys: |
           build-
-    - name: Cache Coursier local repository
-      uses: actions/cache@v4
+    - name: Restore the Coursier local repository
+      id: coursier-cache
+      uses: actions/cache/restore@v4
       with:
         path: ~/.cache/coursier
         key: varka-scoped-coursier-${{ matrix.module }}-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
         restore-keys: |
           varka-scoped-coursier-${{ matrix.module }}-
+    # Whether this job may save the dependency caches: on master always; on another branch only
+    # when its change, measured from its merge base with Varka's master as checkout-and-sync sets
+    # it, touches a file the keys hash, since only then can its key be one master lacks. A run
+    # with no merge base cannot tell, and saves.
+    - name: Decide whether to save the dependency caches
+      id: cache-save
+      run: |
+        build_files='(^|/)pom\.xml$|(^|/)plugins\.sbt$|^project/build\.properties$'
+        build_files+='|^build/(mvn|sbt|sbt-launch-lib\.bash|spark-build-info)$'
+        save=false
+        if [ "$GITHUB_REF" = refs/heads/master ]; then
+          save=true
+        elif [ -z "${VARKA_DIFF_BASE:-}" ] || [ -z "${VARKA_DIFF_HEAD:-}" ]; then
+          save=true
+        elif git diff --name-only "$VARKA_DIFF_BASE" "$VARKA_DIFF_HEAD" \
+            | grep -E "$build_files" > /dev/null; then
+          save=true
+        fi
+        echo "save the dependency caches where their keys miss: $save"
+        echo "save=$save" >> "$GITHUB_OUTPUT"
     - name: Install Java ${{ inputs.java }}
       uses: actions/setup-java@v5
       with:
@@ -1591,6 +1623,30 @@ jobs:
           export VARKA_HARNESS_STORE=$PWD/target/varka-harness-store
         fi
         ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+    # One job of each module saves its Coursier cache and one job the SBT and Maven cache, which
+    # every module's jobs share, so the six jobs do not race to save the same key. They save even
+    # when a suite failed: the dependencies resolved all the same.
+    - name: Save the Coursier local repository
+      if: >-
+        !cancelled() && matrix.shard == '0/3' && steps.cache-save.outputs.save == 'true'
+        && steps.coursier-cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/coursier
+        key: ${{ steps.coursier-cache.outputs.cache-primary-key }}
+    - name: Save SBT and Maven
+      if: >-
+        !cancelled() && matrix.module == 'sql' && matrix.shard == '0/3'
+        && steps.cache-save.outputs.save == 'true' && steps.build-cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+        key: ${{ steps.build-cache.outputs.cache-primary-key }}
     # sql's first job saves the compile state its suites ran on, every module's target/scala-2.13,
     # for the next Builds to start from (VARKA-520). sql's classpath holds catalyst's, so this one
     # state serves every Varka job.

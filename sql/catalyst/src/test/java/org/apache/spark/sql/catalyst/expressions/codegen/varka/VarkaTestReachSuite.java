@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -69,6 +70,49 @@ public final class VarkaTestReachSuite {
     var s = recording();
     s.emitted(List.of(days(false)), 2, 0, VarkaEmitOptions.DEFAULTS);
     assertEquals(Set.of(), s.current, "date_sub emits alike under both configurations");
+  }
+
+  /** A recorder listening for one test, its digests kept. */
+  private static VarkaTestReach.Recorder digesting() {
+    var r = recording();
+    r.currentDigests = new ConcurrentHashMap<>();
+    return r;
+  }
+
+  @Test
+  @DisplayName("a test's digest moves under the configuration that moves its bytes and no other")
+  void digestMovesWithTheBytes() {
+    var r = digesting();
+    r.emitted(List.of(days(true)), 2, 0, VarkaEmitOptions.DEFAULTS);
+    var d = VarkaTestReach.digests(r.currentDigests, List.of(PLANTED, INERT));
+    assertEquals(Set.of(VarkaTestReach.DEFAULTS, PLANTED, INERT), d.keySet());
+    assertNotEquals(d.get(VarkaTestReach.DEFAULTS), d.get(PLANTED));
+    assertEquals(d.get(VarkaTestReach.DEFAULTS), d.get(INERT));
+  }
+
+  @Test
+  @DisplayName("a test's digest is the same in whatever order it compiled its kernels")
+  void digestIgnoresOrder() {
+    var a = digesting();
+    a.emitted(List.of(days(true)), 2, 0, VarkaEmitOptions.DEFAULTS);
+    a.emitted(List.of(days(false)), 2, 0, VarkaEmitOptions.DEFAULTS);
+    var b = digesting();
+    b.emitted(List.of(days(false)), 2, 0, VarkaEmitOptions.DEFAULTS);
+    b.emitted(List.of(days(true)), 2, 0, VarkaEmitOptions.DEFAULTS);
+    var configs = List.of(PLANTED, INERT);
+    assertEquals(VarkaTestReach.digests(a.currentDigests, configs),
+        VarkaTestReach.digests(b.currentDigests, configs));
+    var one = digesting();
+    one.emitted(List.of(days(false)), 2, 0, VarkaEmitOptions.DEFAULTS);
+    assertNotEquals(VarkaTestReach.digests(a.currentDigests, configs),
+        VarkaTestReach.digests(one.currentDigests, configs), "a kernel more is another digest");
+  }
+
+  @Test
+  @DisplayName("what differs between two JVMs' renderings of one compile is left out of its digest")
+  void stableRenderingDropsIds() {
+    assertEquals(VarkaTestReach.stable("(a#12 + b#3) @1b2c3d4e $$Lambda/0x00007f0012345678"),
+        VarkaTestReach.stable("(a#7 + b#40) @9f8e7d6c $$Lambda/0x00007f00abcdef00"));
   }
 
   @Test

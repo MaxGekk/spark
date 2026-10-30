@@ -37,8 +37,13 @@ on:
 jobs:
   build:
     name: "Option matrix: build and plan"
-    # Never on apache/spark, whose tree has no Varka; on this project's repositories always.
-    if: github.repository != 'apache/spark'
+    # Never on apache/spark, whose tree has no Varka. The Sunday schedule runs on vecbricks/varka
+    # only: the fork's master follows this project's (varka-fork-sync.yml) and carries this file,
+    # and a schedule there does nothing. A dispatch runs on either repository. The jobs after
+    # this one need it, so they are skipped with it.
+    if: >-
+      github.repository != 'apache/spark'
+      && (github.event_name != 'schedule' || github.repository == 'vecbricks/varka')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -398,12 +403,14 @@ jobs:
       with:
         name: varka-option-matrix-reach
         path: target/varka-run-reach
-    # Each suite's seconds run whole, its median over the configurations that ran all of it, from
-    # this run's JUnit reports, for the next plan's weights (sql/varka/matrix/suite-seconds.tsv).
+    # Each suite's seconds run whole, its median over the configurations that ran all of it, and
+    # its seconds under each of them, from this run's JUnit reports, for the next plan's weights
+    # (sql/varka/matrix/suite-seconds.tsv and config-suite-seconds.tsv).
     - name: Suite seconds
       if: always()
       run: |
         python3 dev/varka_matrix_bins.py times --reach target/varka-run-reach/reach.tsv \
+          --per-configuration target/config-suite-seconds.tsv \
           target/varka-merged/runs > target/suite-seconds.tsv
     - name: Upload the report
       if: always()
@@ -413,6 +420,7 @@ jobs:
         path: |
           target/varka-matrix-report.txt
           target/suite-seconds.tsv
+          target/config-suite-seconds.tsv
         if-no-files-found: ignore
         retention-days: 30
 
