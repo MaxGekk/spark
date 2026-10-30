@@ -43,6 +43,10 @@ import java.util.function.Function;
  * defaults run, which runs everything, and with {@code -Dvarka.matrix.reach=false}. What C2 makes
  * of a class can depend on what it compiled before (rows 383 and 404), and that is not filtered:
  * the defaults run's order is the one the class was checked in.
+ *
+ * <p>A caller that names its tree may have the defaults' emission from {@link
+ * VarkaFuzzDefaultsStore}, the hashes the defaults run kept, instead of emitting the tree again:
+ * the verdict is the same, and a tree the store lacks is emitted at the defaults as before.
  */
 public final class VarkaReach {
 
@@ -88,13 +92,37 @@ public final class VarkaReach {
    */
   public static boolean ranAtDefaults(VarkaEmitOptions options, VarkaEmitOptions atDefaults,
       byte[] bytes, Function<VarkaEmitOptions, byte[]> emit, Tally tally) {
-    return ranAtDefaults(VarkaMatrixRuns.CONFIG, ON, options, atDefaults, bytes, emit, tally);
+    return ranAtDefaults(VarkaMatrixRuns.CONFIG, ON, options, atDefaults, bytes, emit, null, null,
+        tally);
+  }
+
+  /**
+   * {@link #ranAtDefaults} that first asks {@link VarkaFuzzDefaultsStore#current()} what
+   * {@code tree} emitted to at the defaults, and emits it there only where the store has no
+   * answer. {@code tree} describes the tree as the store keys it: everything that determines it
+   * and its emission at the defaults, the class name it is emitted as included.
+   */
+  public static boolean ranAtDefaults(VarkaEmitOptions options, VarkaEmitOptions atDefaults,
+      byte[] bytes, Function<VarkaEmitOptions, byte[]> emit, String tree, Tally tally) {
+    return ranAtDefaults(VarkaMatrixRuns.CONFIG, ON, options, atDefaults, bytes, emit,
+        VarkaFuzzDefaultsStore.current(), tree, tally);
   }
 
   /** {@link #ranAtDefaults} with the configuration and the switch named: the seam its test uses. */
   static boolean ranAtDefaults(String config, boolean on, VarkaEmitOptions options,
       VarkaEmitOptions atDefaults, byte[] bytes, Function<VarkaEmitOptions, byte[]> emit,
       Tally tally) {
+    return ranAtDefaults(config, on, options, atDefaults, bytes, emit, null, null, tally);
+  }
+
+  /**
+   * {@link #ranAtDefaults} with the store named as well; a null {@code store} or {@code tree}
+   * emits at the defaults. The store holds emissions under {@link VarkaEmitOptions#DEFAULTS}
+   * alone, so it answers only for a case whose defaults run used them.
+   */
+  static boolean ranAtDefaults(String config, boolean on, VarkaEmitOptions options,
+      VarkaEmitOptions atDefaults, byte[] bytes, Function<VarkaEmitOptions, byte[]> emit,
+      VarkaFuzzDefaultsStore store, String tree, Tally tally) {
     if (!on || config.isEmpty()) {
       return false;
     }
@@ -103,14 +131,23 @@ public final class VarkaReach {
       return true;
     }
     if (bytes != null && emit != null) {
-      byte[] theirs;
-      try {
-        theirs = emit.apply(atDefaults);
-      } catch (RuntimeException declined) {
-        // A form the defaults decline is one this configuration has moved into the emitter.
-        theirs = null;
+      boolean asked = store != null && tree != null
+          && atDefaults.equals(VarkaEmitOptions.DEFAULTS);
+      Boolean stored = asked ? store.sameAsDefaults(tree, bytes) : null;
+      boolean same;
+      if (stored != null) {
+        same = stored;
+      } else {
+        byte[] theirs;
+        try {
+          theirs = emit.apply(atDefaults);
+        } catch (RuntimeException declined) {
+          // A form the defaults decline is one this configuration has moved into the emitter.
+          theirs = null;
+        }
+        same = theirs != null && Arrays.equals(bytes, theirs);
       }
-      if (theirs != null && Arrays.equals(bytes, theirs)) {
+      if (same) {
         tally.sameBytes.incrementAndGet();
         return true;
       }

@@ -17,7 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.util.concurrent.atomic.AtomicInteger
+import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -59,14 +60,31 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
   private val allBatches = sys.props.get("varka.series.allBatches").contains("true")
   /** The largest size whose trees meet every batch. */
   private val fullBelow = 3
-  private val classCounter = new AtomicInteger(0)
   /** The cases the option matrix's reach filter took as the defaults run's (VARKA-507). */
   private val reach = new VarkaReach.Tally
+  /**
+   * Which trees the filter skipped and which it ran, each as a count and an order-free digest of
+   * the trees: two runs of one configuration, with the defaults' store and without, print the
+   * same line exactly when they skipped the same trees.
+   */
+  private val skippedSet = (new AtomicLong, new AtomicLong)
+  private val movedSet = (new AtomicLong, new AtomicLong)
+
+  private def note(set: (AtomicLong, AtomicLong), tree: String): Unit = {
+    set._1.incrementAndGet()
+    set._2.addAndGet(ByteBuffer.wrap(VarkaFuzzDefaultsStore.sha256(tree.getBytes("UTF-8")))
+      .getLong)
+  }
 
   override def afterAll(): Unit = {
     try {
       // scalastyle:off println
-      if (VarkaMatrixRuns.CONFIG.nonEmpty) println(reach.line(getClass.getSimpleName))
+      if (VarkaMatrixRuns.CONFIG.nonEmpty) {
+        println(reach.line(getClass.getSimpleName))
+        println(s"VARKA_REACH_SET\t${getClass.getSimpleName}\t${VarkaMatrixRuns.CONFIG}\t" +
+          f"skipped ${skippedSet._1.get} ${skippedSet._2.get}%016x\t" +
+          f"moved ${movedSet._1.get} ${movedSet._2.get}%016x")
+      }
       // scalastyle:on println
     } finally super.afterAll()
   }
@@ -127,23 +145,41 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
    * failure in `failures` - anything thrown, a mismatch, a non-zero status, a refusal. With
    * `filtered`, a shape emitted under the matrix's base options to the bytes the defaults emit
    * is not run: the defaults run has compared the same class over the same batches (VARKA-507).
+   * The defaults' bytes come from the defaults run's store where it has them
+   * (`VarkaFuzzDefaultsStore`), and a run of the defaults keeps them there.
+   *
+   * The class is named by the test (`tag`), the lane and the index, so that a tree is emitted as
+   * the same class in every JVM and the store's hash of the defaults' class is comparable with
+   * this JVM's.
    */
   private def check(roots: Seq[VarkaVectorIR], long: Boolean, index: Int, treeSize: Int,
-      options: VarkaEmitOptions, failures: Failures, filtered: Boolean = false): Unit = {
+      options: VarkaEmitOptions, failures: Failures, filtered: Boolean = false,
+      tag: String = ""): Unit = {
     val className = "org.apache.spark.sql.varka.execution.VarkaSmallTree" +
-      s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
+      s"${if (long) "Long" else ""}$tag$index"
     val numInputs = if (long) VarkaIrSeries.LONG_NUM_INPUTS else VarkaIrSeries.NUM_INPUTS
     val label = s"lane=${if (long) "long" else "int"} size=$treeSize index=$index " +
       s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${if (options.isDefault) "(defaults)" else options.canonical()}"
+    // What determines the tree and its emission at the defaults, as the store keys it.
+    lazy val tree = s"VarkaSmallTreeSuite\t$className\t$numInputs\t${VarkaIrSeries.LITERALS}\t" +
+      roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")
     try {
-      emit(roots, numInputs, options, className) match {
+      val emitted = emit(roots, numInputs, options, className)
+      val store = VarkaFuzzDefaultsStore.current()
+      if (filtered && store != null && VarkaMatrixRuns.CONFIG.isEmpty) {
+        store.record(tree, options, emitted.orNull)
+      }
+      val filter = filtered && options == VarkaMatrix.base && VarkaMatrixRuns.CONFIG.nonEmpty
+      emitted match {
         case None => failures.skipped += 1
-        case Some(bytes) if filtered && options == VarkaMatrix.base &&
+        case Some(bytes) if filter &&
             VarkaReach.ranAtDefaults(options, VarkaEmitOptions.DEFAULTS, bytes,
-              o => emit(roots, numInputs, o, className).orNull, reach) =>
+              o => emit(roots, numInputs, o, className).orNull, tree, reach) =>
           failures.ranAtDefaults += 1
+          note(skippedSet, tree)
         case Some(bytes) =>
+          if (filter) note(movedSet, tree)
           failures.checked += 1
           if (long) {
             for (b <- pick(VarkaIrSeries.longBatches.asScala.toSeq, index, treeSize)) {
@@ -210,7 +246,7 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
       VarkaVectorIR.childrenOf(g.node).find(!_.isInstanceOf[Cond]).foreach { child =>
         if (index % slices == slice) {
           check(Seq(g.node, child), long = false, index, treeSize, VarkaMatrix.base, failures,
-            filtered = true)
+            filtered = true, tag = "Pair")
         }
         index += 1
       }
