@@ -123,6 +123,9 @@ Taking a part by job: a part is read only where its job succeeded, and a module'
 without the other's. A job that failed leaves its tests with no line, which then run under every
 configuration; the sql record no longer depends on catalyst's jobs passing. A part from a job that
 did not finish is never read, since its suite lines may be missing while its test lines are not.
+Master's catalyst parts read beside a pull request's sql parts bring their JVM-wide lines, which
+the readers join to every test of the concatenated record, sql's included; they are kept, since
+they can only cost skipping, and row 539 step 3's per-JVM lines are what remove that cost.
 
 ### 2.4 The reach rule for catalyst tests
 
@@ -184,13 +187,19 @@ A configuration may skip a catalyst test only where all of these hold, and runs 
    (the tag or `FULL`), and the audit run of 3.5 must report it as a record miss when the tag is
    withheld.
 4. **Planted fault 3, a tampered line.** One recorded test that `cse=false` moves (from proof 1)
-   has `cse=false` removed from its line in a scratch copy of the record; the audit run must name
-   that test under that configuration.
-5. **The audit run.** The matrix gains a dispatch input `audit`, under which each configuration
-   runs exactly the catalyst tests the record would skip, and the report lists any that fails or
-   whose emitted digest (row 508's `VarkaTestUse`) differs from the defaults' as a record miss,
-   failing the run. Faults 2 and 3 are its self-test; the owner chooses whether it also runs on a
-   schedule (section 8).
+   has `cse=false` removed from its line in a scratch copy of the record. It is caught without a
+   run: the recording also writes `VarkaTestUse`'s digest lines (`-Dvarka.matrix.useRecord`,
+   without JaCoCo's agent, so digests only), one per test and covered configuration, and a new
+   check (`dev/varka_matrix_bins.py check-reach`, run in the matrix's build job before it plans)
+   fails the record where a line omits a configuration whose digest differs from the defaults'.
+   The line and the digests come from the same comparison, so only a damaged or edited file
+   disagrees; the check is what makes such a file refused rather than read.
+5. **The audit run**, for what the recorder never heard (fault 2): the matrix gains a dispatch
+   input `audit`, under which each configuration runs exactly the catalyst tests the record would
+   skip, and the report lists any that fails as a record miss, failing the run. A configuration's
+   JVM computes no digests, so a miss that changes behaviour without failing is outside its reach;
+   that is what the classification of 2.4 rule 2 is for. Fault 2 with its tag withheld is its
+   self-test; the owner chooses whether it also runs on a schedule (section 8).
 6. **Self-tests.** `varka_matrix_reuse.py --selftest` for the per-job parts, the module standing
    alone and the master lookup's three refusals (not an ancestor, catalyst changed, no complete
    record); `VarkaTestReachSuite` for the two `UNRECORDED` kinds, `_ALL` and the `C2Code` check.
@@ -226,7 +235,10 @@ shared the slots. A miss of P1 or P2 below their range reopens 2.2's rule before
 2. **The option-reader classification** (in A): each recorded suite's non-compile uses of
    `BASE`, the tag where one cannot be placed, the result committed as a results file; proofs 1
    to 3 on the laptop before A is pushed.
-3. **The audit run** (pull request B, small): the `audit` input and its report; proofs 4 and 5.
+3. **The record's checks** (pull request B, small): the digest lines written beside the record
+   and uploaded with it, `check-reach` in the matrix's build job, the `audit` input and its
+   report; proofs 4 and 5. Files: `build_and_test.yml`, `varka-option-matrix.yml`,
+   `dev/varka_matrix_bins.py`.
 4. **The master record** (pull request C, small): `_ALL`, the seven-day retention, the master
    lookup of 2.3 and its self-tests.
 5. **The new suites measured** (in C): the seven suites of 0.7 recorded on the laptop and placed
