@@ -145,9 +145,9 @@ The sources of each cell:
     rescale up; `DECIMAL(18, 4)` to `(38, 10)` is 360's. No section casts a decimal to an integral,
     floating or boolean type, or rescales down within precision 18.
 18. **`m8/casts.tsv` names this row on 21 decimal pairs, the row's text on fewer.** The row's text
-    covers decimal with integral, decimal, `BOOLEAN`, `DOUBLE` and `FLOAT`: 14 pairs (11 from and
-    3 to a decimal, counting `BIGINT` to decimal, whose `(20, 0)` coercion type is 360's). The file
-    also gives 350 the two floating sources (346's construction), the four interval pairs and
+    covers decimal with integral, decimal, `BOOLEAN`, `DOUBLE` and `FLOAT`: 13 pairs (8 from a
+    decimal and 5 to one, counting `BIGINT` to decimal, whose `(20, 0)` coercion type is 360's). The
+    file also gives 350 the two floating sources (346's construction), the four interval pairs and
     `TIME` to decimal (a rescale or a unit division), and `DATE` to decimal (LEGACY's null). Open
     point 4.
 
@@ -177,8 +177,13 @@ The sources of each cell:
 - **The `DOUBLE` quotient needs 342's floating division, and the `FLOAT` round-to-odd an FMA node**
   that no row has built (item 11). The F3 row names 365, 341 and 343 as this row's predecessors;
   342 is one too, and the FMA node is this row's (2.4). Open point 8.
-- **An integral source to a decimal is also row 360's text**, as 348 and 349's plans flagged; this
-  plan builds every integral source into precision 18 and leaves `(20, 0)` to 360. Open point 3.
+- **Every integral source into precision 18 is this row's**, coercion's `(3, 0)`, `(5, 0)` and `(10,
+  0)` included (settled by the lead, 30 October 2026: row 360's plan declines them naming 350, and
+  348's and 349's plans decline `i < d9` naming 350); `(20, 0)` stays 360's. The owner's row texts
+  still both claim them (section 7).
+- **No product of this row's own.** The rescales multiply by `10^k` within 64 bits; the one multiply
+  wider than 64 bits, the high word of `LIMB_MAGIC`'s product (2.2), is row 360's `WideMul` over a
+  constant multiplier, which this row calls and does not build.
 
 ## 1. Goal and non-goal
 
@@ -249,9 +254,9 @@ unchanged, and as an output root it is 157's `WidenDecimal` over the unscaled lo
   `ConstDivide`'s `dividendBound`. At the twelve `(p, k)` of item 0.15 it passes `2^52`, and the arm
   `decimalDivisionForm` (`Reason.MACHINE`) picks: `GUARD`, a `GuardedRange(m, 0, 2^(52 + k) - 1,
   FAIL)` before the shift, whose declined batch the row engine computes; or `LIMB_MAGIC`, the 64-bit
-  magic multiply for `10^k` with Lemire, Bartlett and Kaser's exact bound (2.8), its high word built
-  from four `vpmuludq` (the constant's limbs written `broadcast(c).and(0xFFFFFFFF)`, 2.8's rule for
-  C2's `vmuludq` pattern), exact over every `m < 2^63` and with no guard. The default is a
+  magic multiply for `10^k` with Lemire, Bartlett and Kaser's exact bound (2.8), its high word row
+  360's `WideMul` by the constant (four `vpmuludq`), exact over every `m < 2^63` and with no guard,
+  so this arm lands after 360's `WideMul`. The default is a
   measurement (section 4), open point 5.
 
 ### 2.3 The three narrow casts under ANSI and TRY
@@ -463,8 +468,9 @@ F3 decimal rows below 19: 350a about four days (the proof file and the table tes
 table test is a pure function, the named cases and slot tables of the size of 347's, seconds; the
 sampled suite is a few million `Cast.eval` calls, of the order of a minute, opt-in in full and a
 slice in PR CI; the proof file is priced from its spiked form at VARKA-245's observed ratio in the
-calibration table, under twenty seconds per solver. It rests on 347, 348 (`value()`), 481, 332a,
-342, 343 and 366, and on 157 for the decimal outputs.
+calibration table, under twenty seconds per solver. It rests on 347, 348 (`value()`), 481 (the
+`NULL` mode, which this row does not build), 332a (the narrow load in a bigint kernel), 342, 343 and
+366, on 360's `WideMul` for the `LIMB_MAGIC` arm only, and on 157 for the decimal outputs.
 
 ## 6. What it unlocks in the census
 
@@ -479,14 +485,20 @@ say the double rule computed as the exact rule below 17, if open point 1 keeps t
 ## 7. Out of this row, and declines that stay
 
 Out: the exact arm (366); every precision above 18 (359, 360, 363, 364), including the `(20, 0)`
-coercion type of a `BIGINT`; `DOUBLE` and `FLOAT` to decimal (346); the interval, `TIME` and `DATE`
-pairs of item 0.18 (open point 4); `try_eval` over a decimal subtree; a `BOOLEAN` output (27); a
-negative scale. Trino's `FLOAT` midpoint-margin test (`READING_TRINO_DECIMAL.md` 7, step 2) would
-keep more lanes off 366's arm at `p >= 16` but needs its own error bound proven; it is not built
-here. An integer form of the double rule at precision 17 and 18 - the truncated quotient moved by
-one where the remainder lies within half an ulp of the next integer - would avoid the floating lane
-there; it needs a per-lane leading-zero count and a tie rule, costs about what 366's arm does, and
-is not built.
+coercion type of a `BIGINT`; any product wider than 64 bits (360's `WideMul`, 361's general
+product); the narrow column load in a bigint kernel (332's, which this row uses); `GuardedRange`'s
+`NULL` mode (481's, from which every TRY null here comes); `DOUBLE` and `FLOAT` to decimal (346);
+the interval, `TIME` and `DATE` pairs of item 0.18 (open point 4); `try_eval` over a decimal
+subtree; a `BOOLEAN` output (27); a negative scale. Trino's `FLOAT` midpoint-margin test
+(`READING_TRINO_DECIMAL.md` 7, step 2) would keep more lanes off 366's arm at `p >= 16` but needs
+its own error bound proven; it is not built here. An integer form of the double rule at precision 17
+and 18 - the truncated quotient moved by one where the remainder lies within half an ulp of the next
+integer - would avoid the floating lane there; it needs a per-lane leading-zero count and a tie
+rule, costs about what 366's arm does, and is not built.
+
+**Flagged, not resolved:** the owner's row texts have rows 350 and 360 both claiming the integral
+casts to `(3, 0)`, `(5, 0)` and `(10, 0)` ("to and from integral types" here, "the widening casts"
+there). The plans settle them as this row's; aligning the row texts is the owner's.
 
 Declines that stay, each naming its row: an ANSI batch holding a value Spark raises on (the row
 engine raises it); under `decimalDivisionForm=GUARD`, a batch past `2^(52 + k)` at the twelve `(p,
@@ -512,13 +524,10 @@ None of the owner's yet. The points below are the lead's to settle or to put to 
 2. **The per-batch taking of 366's arm.** The row's text says the arm is "taken per batch when the
    guard mask of 350 is not all true". It is `VARKA-366.md`'s open point 1, recorded there with its
    options, since the mechanism is 366's.
-3. **Integral to decimal at 64 bits: this row or 360.** Row 360 names the widening casts to `(3,
-   0)`, `(5, 0)`, `(10, 0)` and `(20, 0)`; this row names "to and from integral types". (a) This row
-   builds every integral source into precision 18, coercion's three narrow types included, and 360
-   `(20, 0)` and the lane pair. (b) 360 builds coercion's four, this row the explicit casts. (c) 360
-   builds all. Evidence: 348's and 349's plans (their 7) flagged the same overlap; the shape is one
-   guarded multiply (2.1) whatever the target. The plan is written under (a).
-4. **The interval, `TIME` and `DATE` decimal pairs.** `casts.tsv` gives 350 and 364 seven pairs the
+3. **Integral to decimal at 64 bits: settled by the lead** (30 October 2026): this row's, coercion's
+   `(3, 0)`, `(5, 0)` and `(10, 0)` included, `(20, 0)` 360's. What stays open is the owner's row
+   text, which section 7 flags.
+4. **The interval, `TIME` and `DATE` decimal pairs.** `casts.tsv` gives 350 and 364 six pairs the
    row's text omits: decimal to year-month (`IntervalUtils.decimalToYearMonthInterval`, `HALF_UP`
    to months, `toIntExact`, `util/IntervalUtils.scala:841-845`) and to day-time
    (`decimalToDayTimeInterval`, `Cast.scala:1116-1118`), year-month and day-time to decimal (the
