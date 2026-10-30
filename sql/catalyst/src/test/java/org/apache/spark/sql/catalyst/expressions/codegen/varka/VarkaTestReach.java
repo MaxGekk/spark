@@ -23,19 +23,25 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
@@ -139,7 +145,10 @@ public final class VarkaTestReach {
       // one not named here runs every test.
       append("#\tcovers\t" + String.join(",", configs));
       // What the JVM compiled outside every suite, which every test may have read.
-      Runtime.getRuntime().addShutdownHook(new Thread(() -> append("*\t*\t" + names(r.outside))));
+      Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        append("*\t*\t" + names(r.outside));
+        VarkaTestUse.outside(digests(r.outsideDigests, r.configs));
+      }));
     }
   }
 
@@ -148,32 +157,42 @@ public final class VarkaTestReach {
    * suite in {@link #UNRECORDED} pauses the listening instead, and writes no line.
    */
   public static void suiteBegin(String suite) {
+    VarkaTestUse.suiteBegin();
     Recorder r = recorder;
     if (r != null) {
       r.paused = UNRECORDED.containsKey(suite);
       r.suite = ConcurrentHashMap.newKeySet();
+      r.suiteDigests = new ConcurrentHashMap<>();
     }
   }
 
   /** Closes the suite's window with a {@code suite<TAB>*} line, which joins each of its tests'. */
   public static void suiteEnd(String suite) {
     Recorder r = recorder;
+    SortedMap<String, String> digests = new TreeMap<>();
     if (r != null && r.suite != null) {
       Set<String> moved = r.suite;
       r.suite = null;
+      digests = digests(r.suiteDigests, r.configs);
+      r.suiteDigests = null;
       boolean paused = r.paused;
       r.paused = false;
       if (!paused) {
         append(suite + "\t*\t" + names(moved));
+      } else {
+        digests.clear();
       }
     }
+    VarkaTestUse.suiteEnd(suite, digests);
   }
 
   /** Begins a test's line, where the run records. */
   static void begin() {
+    VarkaTestUse.begin();
     Recorder r = recorder;
     if (r != null) {
       r.current = ConcurrentHashMap.newKeySet();
+      r.currentDigests = new ConcurrentHashMap<>();
     }
   }
 
@@ -185,13 +204,22 @@ public final class VarkaTestReach {
   static void end(String suite, String test, boolean cancelled) {
     Recorder r = recorder;
     if (r == null) {
+      VarkaTestUse.end(suite, test, new TreeMap<>());
       return;
     }
     Set<String> moved = r.current;
     r.current = null;
+    SortedMap<String, String> digests = digests(r.currentDigests, r.configs);
+    r.currentDigests = null;
+    // A test that cancelled, or one in a suite the recording leaves out, has no digest: a reader
+    // reruns it under every configuration.
+    if (cancelled || r.paused) {
+      digests.clear();
+    }
     if (!r.paused) {
       append(suite + "\t" + test + "\t" + (cancelled ? EVERY : names(moved)));
     }
+    VarkaTestUse.end(suite, test, digests);
   }
 
   /** The line's word for a test every configuration runs. */
@@ -242,6 +270,22 @@ public final class VarkaTestReach {
     private static void broke(Throwable t) {
       VarkaCompileObserver.set(null);
       append("#\tbroken\t" + t.getClass().getName() + ": " + t.getMessage());
+      VarkaTestUse.broke("the reach recording: " + t.getClass().getName() + ": " + t.getMessage());
+    }
+  }
+
+  /**
+   * What one compile or kernel gave: the configurations it moves, and for the defaults and each
+   * configuration the digests of what it compiled and emitted there, one for a compile or a
+   * kernel, several for a kernel more than one compile produced.
+   */
+  record Outcome(Set<String> moved, Map<String, Set<String>> digests) {
+    static final Outcome NONE = new Outcome(Set.of(), Map.of());
+
+    Outcome merge(Outcome o) {
+      var d = new TreeMap<String, Set<String>>(digests);
+      o.digests.forEach((k, v) -> d.merge(k, v, VarkaTestReach::union));
+      return new Outcome(union(moved, o.moved), Map.copyOf(d));
     }
   }
 
@@ -250,14 +294,18 @@ public final class VarkaTestReach {
     private static final String NAME = "org.apache.spark.sql.varka.execution.VarkaReachProbe";
 
     private final List<String> configs;
-    private final Map<List<Object>, Set<String>> byCompile = new ConcurrentHashMap<>();
-    private final Map<List<Object>, Set<String>> byKernel = new ConcurrentHashMap<>();
-    // A kernel's IR to the configurations that moved the compile producing it.
-    private final Map<List<VarkaVectorIR>, Set<String>> producedBy = new ConcurrentHashMap<>();
+    private final Map<List<Object>, Outcome> byCompile = new ConcurrentHashMap<>();
+    private final Map<List<Object>, Outcome> byKernel = new ConcurrentHashMap<>();
+    // A kernel's IR to what the compiles producing it gave.
+    private final Map<List<VarkaVectorIR>, Outcome> producedBy = new ConcurrentHashMap<>();
     volatile Set<String> current;
     volatile Set<String> suite;
     volatile boolean paused;
     final Set<String> outside = ConcurrentHashMap.newKeySet();
+    // Each window's digests by configuration, beside its moved set; null where nobody reads them.
+    volatile Map<String, Set<String>> currentDigests;
+    volatile Map<String, Set<String>> suiteDigests;
+    final Map<String, Set<String>> outsideDigests = new ConcurrentHashMap<>();
 
     Recorder(List<String> configs) {
       this.configs = configs;
@@ -269,12 +317,12 @@ public final class VarkaTestReach {
       if (paused) {
         return;
       }
-      Set<String> moved = byCompile.computeIfAbsent(List.of(inputs, options, Optional.of(result)),
+      Outcome got = byCompile.computeIfAbsent(List.of(inputs, options, Optional.of(result)),
           k -> VarkaCompileObserver.unobserved(() -> movedBy(options, result, recompile)));
       for (CompiledVarkaProjection kernel : kernels(result)) {
-        producedBy.merge(kernel.outputs(), moved, VarkaTestReach::union);
+        producedBy.merge(kernel.outputs(), got, Outcome::merge);
       }
-      note(moved);
+      note(got);
     }
 
     @Override
@@ -283,38 +331,55 @@ public final class VarkaTestReach {
       if (paused) {
         return;
       }
-      Set<String> moved = byKernel.computeIfAbsent(
+      Outcome got = byKernel.computeIfAbsent(
           List.of(outputs, numInputs, numLiterals, options),
           k -> VarkaCompileObserver.unobserved(() -> {
             var out = new TreeSet<String>();
+            var digests = new TreeMap<String, Set<String>>();
             Emission mine = Emission.of(outputs, numInputs, numLiterals, options);
+            String own = mine.digest();
+            digests.put(DEFAULTS, Set.of(own));
             for (String config : configs) {
               VarkaEmitOptions theirs = VarkaMatrixRuns.parseOver(options, config);
-              if (!theirs.equals(options)
-                  && !mine.equals(Emission.of(outputs, numInputs, numLiterals, theirs))) {
+              Emission there = theirs.equals(options) ? mine
+                  : Emission.of(outputs, numInputs, numLiterals, theirs);
+              boolean moved = !mine.equals(there);
+              if (moved) {
                 out.add(config);
               }
+              digests.put(config, Set.of(moved ? there.digest() : own));
             }
-            return Set.copyOf(out);
+            return new Outcome(Set.copyOf(out), Map.copyOf(digests));
           }));
-      note(moved);
-      note(producedBy.getOrDefault(outputs, Set.of()));
+      note(got);
+      note(producedBy.getOrDefault(outputs, Outcome.NONE));
     }
 
     /** Notes what moved for the test running, else the suite setting up, else the JVM. */
-    private void note(Set<String> moved) {
+    private void note(Outcome got) {
       Set<String> c = current;
       Set<String> w = suite;
-      (c != null ? c : w != null ? w : outside).addAll(moved);
+      (c != null ? c : w != null ? w : outside).addAll(got.moved());
+      Map<String, Set<String>> d = c != null ? currentDigests : w != null ? suiteDigests
+          : outsideDigests;
+      if (d != null) {
+        got.digests().forEach((k, v) -> d.computeIfAbsent(k, x -> ConcurrentHashMap.newKeySet())
+            .addAll(v));
+      }
     }
 
-    private Set<String> movedBy(VarkaEmitOptions options, Object result,
+    private Outcome movedBy(VarkaEmitOptions options, Object result,
         Function<VarkaEmitOptions, Object> recompile) {
       var out = new TreeSet<String>();
+      var digests = new TreeMap<String, Set<String>>();
       List<Emission> mine = emissions(result, options);
+      String form = sha256(stable(String.valueOf(result)));
+      String defaults = compileDigest(form, mine);
+      digests.put(DEFAULTS, Set.of(defaults));
       for (String config : configs) {
         VarkaEmitOptions theirs = VarkaMatrixRuns.parseOver(options, config);
         if (theirs.equals(options)) {
+          digests.put(config, Set.of(defaults));
           continue;
         }
         Object again;
@@ -322,13 +387,33 @@ public final class VarkaTestReach {
           again = recompile.apply(theirs);
         } catch (RuntimeException e) {
           out.add(config);
+          digests.put(config, Set.of(sha256("throws " + e.getClass().getName())));
           continue;
         }
-        if (!Objects.equals(again, result) || !mine.equals(emissions(again, theirs))) {
+        List<Emission> there = emissions(again, theirs);
+        boolean same = Objects.equals(again, result);
+        if (!same || !mine.equals(there)) {
           out.add(config);
         }
+        // A compiled form equal to the defaults' prints as theirs: only one that differs is
+        // rendered again.
+        digests.put(config, Set.of(same && mine.equals(there) ? defaults
+            : compileDigest(same ? form : sha256(stable(String.valueOf(again))), there)));
       }
-      return Set.copyOf(out);
+      return new Outcome(Set.copyOf(out), Map.copyOf(digests));
+    }
+
+    /**
+     * A compile's digest: the digest of its compiled form as it prints, with the expression ids
+     * and identity hashes that differ between JVMs taken out ({@link #stable}), and its kernels'
+     * emissions.
+     */
+    private static String compileDigest(String form, List<Emission> emissions) {
+      var text = new StringBuilder(form);
+      for (Emission e : emissions) {
+        text.append('\n').append(e.digest());
+      }
+      return sha256(text.toString());
     }
 
     private static List<Emission> emissions(Object result, VarkaEmitOptions options) {
@@ -341,11 +426,17 @@ public final class VarkaTestReach {
 
     /** What emitting one kernel gave: its bytes, or the refusal's kind and message. */
     private record Emission(byte[] bytes, String refusal) {
+      String digest() {
+        return bytes != null ? sha256(bytes) : sha256("refuses " + stable(refusal));
+      }
+
       static Emission of(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
           VarkaEmitOptions options) {
         try {
-          return new Emission(VarkaLoopEmitter.emit(NAME, outputs, numInputs, numLiterals, null,
-              null, options), null);
+          byte[] bytes = VarkaLoopEmitter.emit(NAME, outputs, numInputs, numLiterals, null, null,
+              options);
+          VarkaTestUse.kernelRefs(bytes);
+          return new Emission(bytes, null);
         } catch (RuntimeException e) {
           return new Emission(null, e.getClass().getName() + ": " + e.getMessage());
         }
@@ -379,6 +470,55 @@ public final class VarkaTestReach {
     var out = new TreeSet<>(a);
     out.addAll(b);
     return Set.copyOf(out);
+  }
+
+  /** The digest record's name for the defaults, beside the configurations'. */
+  static final String DEFAULTS = "defaults";
+
+  /**
+   * A window's digest under the defaults and each configuration: one over its sorted item
+   * digests, the same in any order the window heard them, and one over none for a window that
+   * compiled nothing. Empty for a window nobody read.
+   */
+  static SortedMap<String, String> digests(Map<String, Set<String>> window,
+      List<String> configs) {
+    var out = new TreeMap<String, String>();
+    if (window != null) {
+      for (String config : concat(DEFAULTS, configs)) {
+        Set<String> items = window.getOrDefault(config, Set.of());
+        out.put(config, sha256(String.join("\n", new TreeSet<>(items))).substring(0, 16));
+      }
+    }
+    return out;
+  }
+
+  private static List<String> concat(String first, List<String> rest) {
+    var out = new ArrayList<String>(rest.size() + 1);
+    out.add(first);
+    out.addAll(rest);
+    return out;
+  }
+
+  // Catalyst's expression ids (a#12), identity hashes (@1b2c3d4e) and the addresses in a lambda's
+  // class name ($$Lambda/0x00007f...) differ between JVMs.
+  private static final Pattern UNSTABLE =
+      Pattern.compile("#\\d+|@[0-9a-f]{5,8}\\b|0x[0-9a-f]{6,}");
+
+  /** {@code text} without what differs between two runs of the same code. */
+  static String stable(String text) {
+    return text == null ? "" : UNSTABLE.matcher(text).replaceAll("#");
+  }
+
+  static String sha256(String text) {
+    return sha256(text.getBytes(StandardCharsets.UTF_8));
+  }
+
+  static String sha256(byte[] bytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   // ---------------------------------------------------------------------------------------------

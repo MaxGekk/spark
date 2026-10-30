@@ -40,13 +40,22 @@ writes both measured files from a fanned-out run's JUnit reports.
       [--target SECONDS] > bins.json          # the job matrix, {"include": [...]}
   dev/varka_matrix_bins.py times [--reach FILE] [--per-configuration FILE] JUNIT_DIR... \\
       > suite-seconds.tsv
+  dev/varka_matrix_bins.py select --base DIR --pr DIR --configurations FILE \\
+      (--changed FILE | --trees OLD NEW) [--reach FILE --reach-out FILE] > units.tsv
   dev/varka_matrix_bins.py --selftest
 
 Each bin's `units` is one line a JVM, `configuration|module|suite,suite,...`, the suites as
 simple names, which the bin's job hands to `dev/varka_matrix.sh --suites`.
+
+`select` (VARKA-508) compares master's `VarkaTestUse` record with a pull request's and prints
+the (configuration, suite, test) units the pull request's matrix reruns, one
+`configuration<TAB>suite<TAB>reason<TAB>test` line each (the test last, as it may hold any
+character), or the single unit `*<TAB>*<TAB>reason<TAB>*` for everything. `--reach-out` writes
+the same selection as a reach record, which `plan --reach` and the configurations' JVMs read.
 """
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -314,6 +323,227 @@ def times(junit_dirs, reach=None):
     return {suite: statistics.median(seconds) for suite, seconds in runs.items()}
 
 
+# ---------------------------------------------------------------------------------------------
+# Selection: which (configuration, suite, test) units a pull request's matrix reruns
+# ---------------------------------------------------------------------------------------------
+
+# The compiler's and the emitter's classes, whose whole effect on a test's answer is what they
+# compiled and emitted for it: a change to one reruns a unit only where the unit's digest moved.
+# Every other class a test used reruns it under every configuration when it changes, so a class
+# left off this list costs reruns and a class wrongly on it is a skip without a check. Kept to the
+# lowering, the analyses, the plan and the emitter; the IR's own records, the shape cache, the
+# warm-up, the errors and every class the evaluator calls stay off it. A class here that a kernel
+# calls as it runs is not covered by the digest: the record names the classes the emitted kernels
+# refer to (`#<TAB>kernel-refs`), and those are taken off this list.
+COMPILER = "org.apache.spark.sql.catalyst.expressions.codegen."
+DIGESTED_CLASSES = frozenset(
+    [
+        COMPILER + name
+        for name in [
+            "VarkaChronoCompiler",
+            "VarkaConditionCompiler",
+            "VarkaConjunctOrder",
+            "VarkaExpressionCompiler",
+            "VarkaIntervalCompiler",
+            "VarkaNodeCompiler",
+            "VarkaSizeAdmission",
+            "VarkaSlotTable",
+            "VarkaTimeCompiler",
+        ]
+    ]
+    + [
+        COMPILER + "varka." + name
+        for name in [
+            "Analysis",
+            "Slots",
+            "TruncLevelLeaf",
+            "WeekdayLeaf",
+            "VarkaBodyEmitter",
+            "VarkaChronoLowering",
+            "VarkaDescriptors",
+            "VarkaDivisionLowering",
+            "VarkaEmitBudget",
+            "VarkaEmitCost",
+            "VarkaEmitCostTable",
+            "VarkaKernelPlan",
+            "VarkaLoopEmitter",
+            "VarkaMethodNames",
+            "VarkaOperandPosition",
+            "VarkaRangeAnalysis",
+            "VarkaValueRange",
+            "VarkaVectorWalk",
+        ]
+    ]
+)
+
+
+def digested_class(name):
+    """Whether `name`, an inner class by its outer one, is on the compiler's list."""
+    return name.split("$", 1)[0] in DIGESTED_CLASSES
+
+
+EVERYTHING = ("*", "*", "*")
+
+
+def read_use(path):
+    """`VarkaTestUse`'s record, a directory of `use-<pid>.tsv` files or one file: for each
+    (suite, test) its class set (None where the run kept none) and its digests by configuration,
+    each suite's set-up as test `*` and the JVMs' own as suite `*`, test `*`, and the classes the
+    emitted kernels refer to. None for a record that is missing, empty or marked broken."""
+    p = Path(path)
+    files = sorted(p.glob("use-*.tsv")) if p.is_dir() else [p] if p.is_file() else []
+    classes, digests, refs = {}, {}, set()
+    try:
+        for f in files:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                parts = line.split("\t")
+                if parts[0] == "#":
+                    if len(parts) >= 2 and parts[1] == "broken":
+                        return None
+                    if len(parts) == 3 and parts[1] == "kernel-refs":
+                        refs |= {c for c in parts[2].split(",") if c}
+                elif parts[0] == "U" and len(parts) >= 4:
+                    key = (parts[1], "\t".join(parts[3:]))
+                    names = parts[2]
+                    got = (
+                        {"*"} if names == "*" else set() if names == "-" else set(names.split(","))
+                    )
+                    classes.setdefault(key, set()).update(got)
+                elif parts[0] == "D" and len(parts) >= 5:
+                    key = (parts[1], "\t".join(parts[4:]))
+                    digests.setdefault(key, {})[parts[2]] = parts[3]
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not classes and not digests:
+        return None
+    return {"classes": classes, "digests": digests, "refs": refs}
+
+
+def class_name(path):
+    """A class file's path to (class name, is a test class): the name is what follows the
+    `classes/` or `test-classes/` directory, or the whole path for a bare name."""
+    s = "/" + str(path).replace("\\", "/")
+    test = "/test-classes/" in s
+    for marker in ("/test-classes/", "/classes/"):
+        if marker in s:
+            s = s.split(marker, 1)[1]
+            break
+    s = s.lstrip("/")
+    if s.endswith(".class"):
+        s = s[: -len(".class")]
+    return s.replace("/", "."), test
+
+
+def tree_diff(old, new):
+    """The class files that differ between two class trees, added and removed ones included, as
+    paths relative to the trees' roots."""
+
+    def sums(root):
+        out = {}
+        for f in Path(root).rglob("*.class"):
+            out[str(f.relative_to(root))] = hashlib.sha256(f.read_bytes()).hexdigest()
+        return out
+
+    a, b = sums(old), sums(new)
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+
+def is_varka(name):
+    simple = name.rsplit(".", 1)[-1]
+    return ".varka." in name or "Varka" in simple
+
+
+def select(base, pr, changed, configurations):
+    """The (configuration, suite, test) units to rerun, and the reason for each, given master's
+    record `base`, the pull request's `pr`, the changed class files `changed` (paths or names)
+    and the matrix's configurations (the defaults among them). A unit reruns when its test is
+    new or has no digest under the configuration, when its digest differs from master's, when a
+    test class of its suite changed, or when a class its test used changed, the compiler's and
+    the emitter's classes aside, which its digest stands for. Everything reruns, as the single
+    unit `*`, when either record is missing or broken, or when a changed class is one neither the
+    record nor the digest can place: a test class other than a suite's own, a class outside
+    Varka, or a class some test's record could not see (a child JVM's)."""
+    if base is None or pr is None:
+        return {EVERYTHING: "no usable record"}
+    configs = [DEFAULTS] + [c for c in configurations if c != DEFAULTS]
+    refs = base["refs"] | pr["refs"]
+
+    def digested(name):
+        return digested_class(name) and name not in refs
+
+    main_changed, digest_changed, test_changed = set(), set(), set()
+    for path in changed:
+        name, test = class_name(path)
+        if test:
+            test_changed.add(name)
+        elif not is_varka(name):
+            return {EVERYTHING: f"{name} is outside Varka's record"}
+        elif digested(name):
+            digest_changed.add(name)
+        else:
+            main_changed.add(name)
+    # A changed test class reruns its own suite; any other test class (a harness, a fixture)
+    # is used by tests the record cannot name.
+    suites = {s for s, _ in pr["classes"]} | {s for s, _ in pr["digests"]}
+    rerun_suites = set()
+    for name in test_changed:
+        top = name.rsplit(".", 1)[-1].split("$", 1)[0]
+        if top in suites:
+            rerun_suites.add(top)
+        else:
+            return {EVERYTHING: f"test class {name} is not a recorded suite's own"}
+
+    def used(rec, suite, test):
+        got = set(rec["classes"].get((suite, test), set()))
+        got |= rec["classes"].get((suite, "*"), set())
+        got |= rec["classes"].get(("*", "*"), set())
+        return got
+
+    # A test's digest joins its suite's set-up, but not the JVM's own: what a JVM compiled outside
+    # every suite depends on which suites shared it, which the planner changes from run to run.
+    # A test that asks for such a compile or kernel again reports it into its own digest; one
+    # that only reuses an object built there does not, a limit the reach record shares.
+    def digest(rec, suite, test, config):
+        own = rec["digests"].get((suite, test), {}).get(config)
+        if own is None:
+            return None
+        return own, rec["digests"].get((suite, "*"), {}).get(config, "")
+
+    out = {}
+    tests = sorted(
+        {k for k in pr["classes"] if k[1] != "*" and k[0] != "*"}
+        | {k for k in pr["digests"] if k[1] != "*" and k[0] != "*"}
+    )
+    for suite, test in tests:
+        known = (suite, test) in base["classes"] or (suite, test) in base["digests"]
+        reason = None
+        if not known:
+            reason = "new test"
+        elif suite in rerun_suites:
+            reason = "its suite's class changed"
+        else:
+            u = used(base, suite, test) | used(pr, suite, test)
+            if "*" in u and (main_changed or digest_changed):
+                reason = "ran a child JVM the record cannot see"
+            elif u & main_changed:
+                reason = "used " + min(u & main_changed)
+            elif (suite, test) not in base["classes"] and main_changed:
+                reason = "no class set recorded"
+        for config in configs:
+            why = reason
+            if why is None:
+                b, p = digest(base, suite, test, config), digest(pr, suite, test, config)
+                if b is None or p is None:
+                    # No digest under this configuration (one that runs every test, or a test the
+                    # recording left out): only a change to no compiler class lets it stay.
+                    why = "no digest" if digest_changed else None
+                elif b != p:
+                    why = "digest moved"
+            if why is not None:
+                out[(config, suite, test)] = why
+    return out
+
+
 def write_config_seconds(path, seconds, runs=None, header=None):
     """The file `read_config_seconds` reads, one line a (configuration, suite), the configuration
     as its run directory names it; `runs` the number of matrix runs each value is from, one for
@@ -508,6 +738,217 @@ class SelfTest(unittest.TestCase):
         w = suite_weight({}, {"A": 10.0, "B": 30.0, "C": 50.0})
         self.assertEqual(w("New"), 30.0)
 
+    # -- selection (VARKA-508) ------------------------------------------------------------------
+
+    def _use(self, root, name, lines):
+        d = Path(root, name)
+        d.mkdir(parents=True, exist_ok=True)
+        Path(d, "use-1.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return read_use(d)
+
+    K = "org.apache.spark.sql.varka.vector.Kernels"
+    H = "org.apache.spark.sql.varka.vector.Helpers"
+    E = "org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter"
+
+    def _records(self, root, pr_digest="d1", pr_extra=()):
+        common = [
+            f"U\tS\t{self.K},{self.E}\tuses kernels",
+            f"U\tS\t{self.H},{self.E}\tuses helpers",
+            f"U\tS\t{self.E}\t*",
+            "U\t*\t-\t*",
+            "U\tT\t*\tchild",
+        ]
+        base = self._use(
+            root,
+            "base",
+            common
+            + [
+                "D\tS\tdefaults\td0\tuses kernels",
+                "D\tS\tx=1\td1\tuses kernels",
+                "D\tS\tdefaults\td0\tuses helpers",
+                "D\tS\tx=1\td1\tuses helpers",
+                "D\tT\tdefaults\td0\tchild",
+            ],
+        )
+        pr = self._use(
+            root,
+            "pr",
+            common
+            + [
+                "D\tS\tdefaults\td0\tuses kernels",
+                f"D\tS\tx=1\t{pr_digest}\tuses kernels",
+                "D\tS\tdefaults\td0\tuses helpers",
+                "D\tS\tx=1\td1\tuses helpers",
+                "D\tT\tdefaults\td0\tchild",
+            ]
+            + list(pr_extra),
+        )
+        return base, pr
+
+    def test_a_changed_runtime_class_reruns_only_the_tests_that_used_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root)
+            path = "sql/varka/engine/target/scala-2.13/classes/" + self.K.replace(".", "/")
+            got = select(base, pr, [path + ".class"], ["x=1", "fusedCeiling=200"])
+        self.assertEqual(
+            set(got),
+            {
+                (c, s, t)
+                for c in ["defaults", "x=1", "fusedCeiling=200"]
+                for s, t in [("S", "uses kernels"), ("T", "child")]
+            },
+        )
+        self.assertEqual(got[("x=1", "S", "uses kernels")], f"used {self.K}")
+
+    def test_an_inner_class_is_its_own_class(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root)
+            got = select(base, pr, [f"classes/{self.K.replace('.', '/')}$Inner.class"], ["x=1"])
+        # No test ran the inner class; only the test whose child JVM the record cannot see reruns.
+        self.assertEqual({(s, t) for _, s, t in got}, {("T", "child")})
+
+    def test_a_compiler_change_reruns_only_where_the_digest_moved(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root, pr_digest="d2")
+            got = select(base, pr, [self.E], ["x=1", "fusedCeiling=200"])
+        # x=1's digest of one test moved; fusedCeiling=200 has no digest, so a compiler change
+        # reruns it; the child JVM's test reruns everywhere.
+        self.assertEqual(got[("x=1", "S", "uses kernels")], "digest moved")
+        self.assertNotIn(("x=1", "S", "uses helpers"), got)
+        self.assertNotIn(("defaults", "S", "uses kernels"), got)
+        self.assertEqual(got[("fusedCeiling=200", "S", "uses helpers")], "no digest")
+        self.assertIn(("x=1", "T", "child"), got)
+
+    def test_a_digest_that_moved_reruns_without_any_class_change(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root, pr_digest="d2")
+            got = select(base, pr, [], ["x=1"])
+        self.assertEqual(set(got), {("x=1", "S", "uses kernels")})
+
+    def test_a_suites_own_class_reruns_the_suite_and_another_test_class_everything(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root)
+            own = select(base, pr, ["x/test-classes/org/p/S$$anonfun$1.class"], ["x=1"])
+            other = select(base, pr, ["x/test-classes/org/p/VarkaHarness.class"], ["x=1"])
+        self.assertEqual(
+            {(s, t) for _, s, t in own}, {("S", "uses kernels"), ("S", "uses helpers")}
+        )
+        self.assertEqual(set(other), {EVERYTHING})
+
+    def test_a_kernel_referenced_compiler_class_is_not_digested(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root, pr_extra=[f"#\tkernel-refs\t{self.E}"])
+            got = select(base, pr, [self.E], ["x=1"])
+        self.assertIn(("x=1", "S", "uses helpers"), got, "a kernel calls it as it runs")
+
+    def test_a_new_test_and_a_class_outside_varka(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root, pr_extra=["U\tS\t-\tnew one", "D\tS\tx=1\td9\tnew one"])
+            got = select(base, pr, [], ["x=1"])
+            self.assertEqual(got[("defaults", "S", "new one")], "new test")
+            outside = select(base, pr, ["classes/org/apache/spark/sql/Dataset.class"], ["x=1"])
+        self.assertEqual(set(outside), {EVERYTHING})
+
+    def test_a_missing_or_broken_record_reruns_everything(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root)
+            broken = self._use(root, "broken", ["U\tS\t-\tt", "#\tbroken\tboom"])
+            self.assertIsNone(broken)
+            self.assertIsNone(read_use(Path(root, "absent")))
+            self.assertEqual(set(select(None, pr, [], ["x=1"])), {EVERYTHING})
+            self.assertEqual(set(select(base, broken, [], ["x=1"])), {EVERYTHING})
+
+    def test_the_selection_as_a_reach_record_the_planner_reads(self):
+        with tempfile.TemporaryDirectory() as root:
+            base, pr = self._records(root, pr_digest="d2")
+            got = select(base, pr, [], ["x=1"])
+            reach = Path(root, "reach.tsv")
+            reach.write_text("#\tcovers\tx=1\nS\tuses kernels\tx=1\nS\tuses helpers\t-\n")
+            out = Path(root, "selected.tsv")
+            out.write_text("\n".join(reach_record(got, pr, reach)) + "\n")
+            covered, tests = read_reach(out)
+            self.assertEqual(covered, {"x=1"})
+            self.assertEqual(tests["S"], [set(), {"x=1"}], "helpers, then kernels, by name")
+            # A selection of everything is a broken record, which reruns everything.
+            out.write_text("\n".join(reach_record({EVERYTHING: "x"}, pr)) + "\n")
+            self.assertIsNone(read_reach(out))
+
+    def test_tree_diff_finds_changed_added_and_removed_class_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            for side, files in [
+                ("a", {"p/A.class": b"1", "p/B.class": b"2", "p/C.class": b"3"}),
+                ("b", {"p/A.class": b"1", "p/B.class": b"9", "p/D.class": b"4"}),
+            ]:
+                for name, data in files.items():
+                    f = Path(root, side, "classes", name)
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    f.write_bytes(data)
+            got = tree_diff(Path(root, "a"), Path(root, "b"))
+        self.assertEqual(got, ["classes/p/B.class", "classes/p/C.class", "classes/p/D.class"])
+
+
+def reach_record(selected, pr, reach=None):
+    """The selection as a `VarkaTestReach` record, which `plan --reach` and a configuration's JVM
+    (`-Dvarka.matrix.reachFile`) read unchanged: each test's line names the configurations that
+    rerun it, cut to those the pull request's own reach record says move it, since the defaults
+    run in the pull request's Build checks a test that a configuration emits alike. Everything
+    reruns, through a broken record, when the selection is everything."""
+    if EVERYTHING in selected:
+        return ["#\tbroken\tselect: " + selected[EVERYTHING]]
+    covered = sorted({c for d in pr["digests"].values() for c in d} - {DEFAULTS})
+    moving = None
+    if reach is not None:
+        moving = {}
+        for line in Path(reach).read_text(encoding="utf-8").splitlines():
+            parts = line.split("\t")
+            if line.startswith("#\tbroken"):
+                return ["#\tbroken\tthe pull request's reach record is broken"]
+            if line.startswith("#") or len(parts) < 3:
+                continue
+            got = set() if parts[-1] == "-" else set(parts[-1].split(","))
+            key = (parts[0], "\t".join(parts[1:-1]))
+            moving.setdefault(key, set()).update(got)
+    lines = ["#\tcovers\t" + ",".join(covered)]
+    tests = sorted({(s, t) for s, t in pr["digests"] if s != "*" and t != "*"})
+    for suite, test in tests:
+        rerun = {c for (c, s, t) in selected if (s, t) == (suite, test) and c != DEFAULTS}
+        if moving is not None:
+            moved = moving.get((suite, test), {"*"}) | moving.get((suite, "*"), set())
+            moved |= moving.get(("*", "*"), set())
+            if "*" not in moved:
+                rerun &= moved
+        lines.append(f"{suite}\t{test}\t{','.join(sorted(rerun)) or '-'}")
+    return lines
+
+
+def select_main(args):
+    configurations = [
+        c.strip()
+        for c in Path(args.configurations).read_text(encoding="utf-8").splitlines()
+        if c.strip()
+    ]
+    if args.trees:
+        changed = tree_diff(*args.trees)
+    else:
+        changed = [
+            line.strip()
+            for line in Path(args.changed).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    base, pr = read_use(args.base), read_use(args.pr)
+    selected = select(base, pr, changed, configurations)
+    for (config, suite, test), why in sorted(selected.items()):
+        print(f"{config}\t{suite}\t{why}\t{test}")
+    if args.reach_out:
+        out = reach_record(selected, pr, args.reach) if pr is not None else ["#\tbroken\tno record"]
+        Path(args.reach_out).write_text("\n".join(out) + "\n", encoding="utf-8")
+    pairs = len({(s, t) for _, s, t in selected})
+    print(
+        f"{len(changed)} changed class files; {len(selected)} units of {pairs} tests rerun",
+        file=sys.stderr,
+    )
+    return 0
+
 
 def main(argv):
     if argv[:1] == ["--selftest"]:
@@ -535,7 +976,18 @@ def main(argv):
         metavar="FILE",
         help="also write each suite's whole runs under each configuration to FILE",
     )
+    s = sub.add_parser("select")
+    s.add_argument("--base", required=True, help="master's VarkaTestUse record (a directory)")
+    s.add_argument("--pr", required=True, help="the pull request's record")
+    s.add_argument("--configurations", required=True)
+    changes = s.add_mutually_exclusive_group(required=True)
+    changes.add_argument("--changed", help="a file of changed class files, one path a line")
+    changes.add_argument("--trees", nargs=2, metavar=("OLD", "NEW"), help="two class trees")
+    s.add_argument("--reach", help="the pull request's VarkaTestReach record, for --reach-out")
+    s.add_argument("--reach-out", help="write the selection as a reach record the matrix reads")
     args = parser.parse_args(argv)
+    if args.cmd == "select":
+        return select_main(args)
     if args.cmd == "times":
         reach = read_reach(args.reach) if args.reach and Path(args.reach).is_file() else None
         for name, seconds in sorted(times(args.dirs, reach).items()):
