@@ -57,9 +57,9 @@ import java.util.function.ToIntFunction;
 public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
-            VarkaVectorIR.IfElse, VarkaVectorIR.CondValue, VarkaVectorIR.Greatest,
-            VarkaVectorIR.Least, VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay,
-            VarkaVectorIR.DayOfWeekIso,
+            VarkaVectorIR.IfElse, VarkaVectorIR.CondValue, VarkaVectorIR.BoolOutput,
+            VarkaVectorIR.Greatest, VarkaVectorIR.Least, VarkaVectorIR.DayOfWeek,
+            VarkaVectorIR.WeekDay, VarkaVectorIR.DayOfWeekIso,
             VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
             VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
             VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.ConstDivide,
@@ -150,6 +150,7 @@ public sealed interface VarkaVectorIR
       case Least n -> n.left().laneType();
       case IfElse n -> n.thenNode().laneType();
       case CondValue n -> n.lane();
+      case BoolOutput n -> n.cond().laneType();
       case Compare n -> n.left().laneType();
       case NullSafeEqual n -> n.left().laneType();
       case BoolColumn n -> n.lane();
@@ -202,14 +203,26 @@ public sealed interface VarkaVectorIR
       case ColumnRef c -> c.ordinal();
       case BoolColumn b -> b.ordinal();
       case LiteralSlot _, IntArith _, IntNeg _, ConstDivide _, BoundedDivide _, BitOp _,
-          BitCount _, Greatest _, Least _, IfElse _, CondValue _, Compare _, NullSafeEqual _,
-          CondConst _,
+          BitCount _, Greatest _, Least _, IfElse _, CondValue _, BoolOutput _, Compare _,
+          NullSafeEqual _, CondConst _,
           BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, IsNotNull _,
           InRanges _, AddDays _, SubDays _, DateDiff _, GuardedDay _, GuardedRange _, WidenLane _,
           NarrowLane _, DayOfWeek _, WeekDay _, DayOfWeekIso _, NextDay _, ThursdayOf _,
           AddMonths _, MakeDate _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _,
           LastDay _, TruncDate _, TruncDateDynamic _, WeekOfYear _ -> -1;
     };
+  }
+
+  /**
+   * Whether an output root writes bitmaps rather than a lane value a row: a {@link Cond} root,
+   * a filter's selection bitmap, and a {@link BoolOutput} root, a {@code BitVector}'s two. Such a
+   * root has no stored width, maps no lane-width data segment, stores nothing under the
+   * epilogue's bounds mask, has no pure validity word for the bitmap pass to serve, and is never
+   * answered by the all-null shortcut. Every place that asks one of those questions of a root
+   * asks it here, so a third bitmap root is added in one place.
+   */
+  static boolean writesBitmaps(VarkaVectorIR root) {
+    return root instanceof Cond || root instanceof BoolOutput;
   }
 
   /**
@@ -269,11 +282,11 @@ public sealed interface VarkaVectorIR
       case LiteralSlot _, BoolColumn _, CondConst _ -> { }
       case WidenLane _, NarrowLane _, AddDays _, SubDays _, AddMonths _, MakeDate _,
           IntArith _, IntNeg _, GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _,
-          DateDiff _, Greatest _, Least _, IfElse _, CondValue _, DayOfWeek _, WeekDay _,
-          DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _,
-          LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _, BitOp _, BitCount _,
-          Compare _, NullSafeEqual _, BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _,
-          Not _, InRanges _ -> {
+          DateDiff _, Greatest _, Least _, IfElse _, CondValue _, BoolOutput _, DayOfWeek _,
+          WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _,
+          DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
+          BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolCompare _, CondIf _,
+          BoolNullSafeEq _, And _, Or _, Not _, InRanges _ -> {
         for (VarkaVectorIR child : childrenOf(node)) {
           narrowValuesIn(child, lanes, seen);
         }
@@ -313,8 +326,8 @@ public sealed interface VarkaVectorIR
       case NarrowLane n -> n.target().isNarrow() || needsNarrowSpecies(n.child(), seen);
       case WidenLane _, AddDays _, SubDays _, AddMonths _, MakeDate _, IntArith _, IntNeg _,
           GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _, DateDiff _, Greatest _,
-          Least _, IfElse _, CondValue _, DayOfWeek _, WeekDay _, DayOfWeekIso _, ThursdayOf _,
-          Year _,
+          Least _, IfElse _, CondValue _, BoolOutput _, DayOfWeek _, WeekDay _, DayOfWeekIso _,
+          ThursdayOf _, Year _,
           Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _, TruncDate _, WeekOfYear _,
           ConstDivide _, BoundedDivide _, BitOp _, BitCount _, Compare _, NullSafeEqual _,
           BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, InRanges _ -> {
@@ -1235,6 +1248,18 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * A condition as a {@code BOOLEAN} output column, a root only (`VARKA-27.md` 2.1): the output
+   * is an Arrow {@code BitVector} whose data bit is set where {@code cond} is known true and
+   * whose validity bit is set where it is known, true or false, so an unknown row is null, as
+   * Spark's three-valued answer has it. Its two bitmaps are the condition's known-true word
+   * {@code kt} and the known word {@code kt | kf}, written a lane group or a word at a time as a
+   * filter root writes its selection bitmap. It is not a {@link Cond}, so it does not hash like
+   * the filter root over the same condition, which writes one bitmap where this writes two; and
+   * {@code Analysis} refuses it anywhere but a root. Its lane is its condition's.
+   */
+  record BoolOutput(Cond cond) implements VarkaVectorIR { }
+
+  /**
    * Spark's null-skipping {@code greatest} over two operands: null only where both
    * inputs are null; where one side is null the other's value is taken, so the lane math is a
    * substitute-then-max.
@@ -1527,6 +1552,7 @@ public sealed interface VarkaVectorIR
       case IfElse n -> "(if " + canonical(n.cond()) + " " + canonical(n.thenNode()) + " "
           + canonical(n.elseNode()) + ")";
       case CondValue n -> "(condValue " + canonical(n.cond()) + ")";
+      case BoolOutput n -> "(bool-out " + canonical(n.cond()) + ")";
       case Greatest n -> "(greatest " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
@@ -1623,6 +1649,7 @@ public sealed interface VarkaVectorIR
       case IfElse n -> "(if " + lineOf.applyAsInt(n.cond()) + " "
           + lineOf.applyAsInt(n.thenNode()) + " " + lineOf.applyAsInt(n.elseNode()) + ")";
       case CondValue n -> "(condValue " + lineOf.applyAsInt(n.cond()) + ")";
+      case BoolOutput n -> "(bool-out " + lineOf.applyAsInt(n.cond()) + ")";
       case Greatest n -> "(greatest " + lineOf.applyAsInt(n.left()) + " "
           + lineOf.applyAsInt(n.right()) + ")";
       case Least n -> "(least " + lineOf.applyAsInt(n.left()) + " "
@@ -1708,6 +1735,7 @@ public sealed interface VarkaVectorIR
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
       case CondValue n -> new VarkaVectorIR[] {n.cond()};
+      case BoolOutput n -> new VarkaVectorIR[] {n.cond()};
       case Compare n -> new VarkaVectorIR[] {n.left(), n.right()};
       case NullSafeEqual n -> new VarkaVectorIR[] {n.left(), n.right()};
       case BoolColumn n -> new VarkaVectorIR[0];
@@ -1778,6 +1806,7 @@ public sealed interface VarkaVectorIR
       case Least n -> new Least(children[0], children[1]);
       case IfElse n -> new IfElse(asCond(children[0]), children[1], children[2]);
       case CondValue n -> new CondValue(asCond(children[0]), n.lane());
+      case BoolOutput n -> new BoolOutput(asCond(children[0]));
       case Compare n -> new Compare(n.op(), children[0], children[1]);
       case NullSafeEqual n -> new NullSafeEqual(children[0], children[1]);
       case BoolColumn n -> n;

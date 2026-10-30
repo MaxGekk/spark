@@ -169,7 +169,7 @@ public final class VarkaTypesSuite {
         VarkaTypes.declineReason(DataTypes.createDecimalType(10, 2)).orElseThrow());
     assertEquals("a timestamp column: its arithmetic is in the session time zone, which is not "
         + "lane arithmetic", VarkaTypes.declineReason(DataTypes.TimestampType).orElseThrow());
-    assertEquals("a boolean column read as a value, which row 27 builds; it is read as a "
+    assertEquals("a boolean column read as a value, which row 332 builds; it is read as a "
         + "condition", VarkaTypes.declineReason(DataTypes.BooleanType).orElseThrow());
     assertTrue(VarkaTypes.declineReason(DataTypes.IntegerType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.DoubleType).isEmpty());

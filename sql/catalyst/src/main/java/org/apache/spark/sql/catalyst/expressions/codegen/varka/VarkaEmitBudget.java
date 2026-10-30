@@ -627,6 +627,10 @@ final class VarkaEmitBudget {
       // The broadcast 0 and the add of 1 under the known-true mask; its validity, the OR of the
       // two known words, is scalar.
       case CondValue _ -> 2;
+      // Its writes are the mask's toLong in the dense body (kt, a scalar, in the masked one) and
+      // two bitmap stores, none a lane call; 1 is the connectives' floor, so that it is never
+      // free to join a group.
+      case BoolOutput _ -> 1;
       // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
       // connective is never free to join any group.
       case And _, Or _, Not _, IsNotNull _, BoolCompare _, BoolNullSafeEq _, CondIf _ -> 1;

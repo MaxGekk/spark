@@ -55,10 +55,10 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
       Option(c.getPermittedSubclasses).map(_.toSeq).getOrElse(Seq(c))
     }.filter(_.isRecord).map(_.getSimpleName).toSet
     // The null-safe equality is in no grammar yet (VARKA-336 6): it is rebuilt directly below.
-    // The boolean-column nodes (VARKA-331) and the condition as a value (VARKA-460) are rebuilt
-    // directly below.
+    // The boolean-column nodes (VARKA-331), the condition as a value (VARKA-460) and the
+    // boolean output (VARKA-27) are rebuilt directly below.
     val undrawn = permitted -- seen - "NullSafeEqual" - "BoolColumn" - "CondConst" -
-      "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue"
+      "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" - "BoolOutput"
     assert(undrawn.isEmpty, s"the grammars never drew: ${undrawn.toSeq.sorted.mkString(", ")}")
   }
 
@@ -97,7 +97,7 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     val c = new BoolColumn(2)
     val nodes = Seq[VarkaVectorIR](a, new CondConst(Truth.NULL),
       new BoolCompare(CompareOp.LE, a, b), new CondIf(a, b, c), new BoolNullSafeEq(a, b),
-      new CondValue(new CondIf(a, b, c), LaneType.INT))
+      new CondValue(new CondIf(a, b, c), LaneType.INT), new BoolOutput(new CondIf(a, b, c)))
     for (node <- nodes) {
       assert(VarkaVectorIR.withChildren(node, VarkaVectorIR.childrenOf(node): _*) == node)
     }
