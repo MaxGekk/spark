@@ -172,6 +172,12 @@ Results 7 has the numbers.
 
 ## 8. Open points for the lead
 
+*Settled, the lead, 30 October 2026:* point 1, change 3 (the audit suite starting only the probes
+something checks) is this row's, as 516d; point 2, the done-when compares the shards of Builds whose
+catalyst shards drew one CPU, so a runner draw alone cannot fail it; point 3, the weights are refit
+on the AMD EPYC 7763, the runners' most common CPU; point 4, sql's weights are not refit, since it
+gains no wall time there.
+
 1. **Is (c) part of this row?** (c) edits `VarkaWidthAuditSuite`, a test. On the census host it
    changes no assertion, but it does change which probes a runner forks.
    - (i) In row 516 as 516d, since without it the split cannot get below the audit (results 6).
