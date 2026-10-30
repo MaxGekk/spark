@@ -72,14 +72,17 @@ paths under `sql/catalyst/src/test/` or `sql/core/src/test/`.
   registry's like the others'.
 - **The literal reader is not new code** (item 3): the arm reads through `Info.bits`, given a form
   that declines instead of throwing.
-- **`INT` joins unless the arm excludes it** (item 5), and the decline test pins row 104's
-  arithmetic as well as `IN` (item 4): the row's "the test is gone" is read as "its `IN` half is
-  gone". Both are open for the lead and the owner.
+- **`INT` joins as well** (item 5): a lane-keyed arm reads it like the others, so this plan admits
+  it with its rows beside the three named types, which extends the done-when (question 1).
+- **The decline test is flipped, not deleted** (item 4): it pins row 104's arithmetic as well as
+  `IN`, so the row's "the test is gone" is read as "its `IN` half is gone"; the `Add` half stays,
+  retitled for row 104 (3.4).
 
 ## 1. Goal and non-goal
 
 `In` and `InSet` compile through one arm pair for every type `VarkaTypes.lane` answers, reading
-each literal through the registry, so that `BIGINT`, `TIME` and the day-time interval `IN` fuse,
+each literal through the registry, so that `BIGINT`, `TIME`, the day-time interval and `INT` `IN`
+fuse,
 the kernels of every existing `IN` shape are byte for byte what they are today, and a new type
 that reads on a lane gets `IN` with no compiler change when its registry entry can read its
 literals. Not this row: the decimal reader (348), the 128-bit pair's `IN` (359), `BOOLEAN`'s `IN`
@@ -169,12 +172,13 @@ and this row builds no hook for it.
    `t IN (TIME'12:00:00', TIME'06:00:00')` at precision 6, `dt IN (INTERVAL '2 00:00:00' DAY TO
    SECOND, INTERVAL '1 00:00:00' DAY TO SECOND)`, each a value the differential fixtures hold
    (`VarkaCoverageDifferentialSuite.scala:395-470`) because the cache prunes `In` (0.8), and each
-   with its eleven-literal `InSet` twin, a row of the same note as the existing ones. If question 1
-   is answered (a), `i IN (3, 1, 12)` and its twin join the "Predicates" family. Each row names
+   with its eleven-literal `InSet` twin, a row of the same note as the existing ones; and
+   `i IN (3, 1, 12)` with its twin in the "Predicates" family (question 1). Each row names
    its verification for row 490's check: `differential`, as the other `IN` rows do.
 4. **The flipped test.** `VarkaExpressionCompilerSuite.scala:2664-2672` keeps its `Add` half under
    a title that names row 104 alone, and its `IN` half becomes an assertion that `In(l, ...)`
-   beside a date comparison fuses both conjuncts at the long lane (question 2).
+   beside a date comparison fuses both conjuncts at the long lane; its title becomes "long
+   arithmetic stays declined: it is VARKA-104's".
 5. **The differential**, unchanged in kind: the coverage harness (`VarkaCoverageHarnessSuite`) over
    every fixture, the end-to-end suite's first row a family, the long-lane, floating and NTZ
    suites, and the two fuzzers that reach the compiler: `VarkaSparkFuzzSuite`, whose grammar's
@@ -183,8 +187,8 @@ and this row builds no hook for it.
    is that trap.
 6. **The generated files**, in `ADDING_AN_EXPRESSION.md`'s order: `coverage.json`,
    `docs/sql-varka.md`, `emitted_bytes.json` (new rows only), `width_audit.json`, and the census:
-   `census_curated.txt`'s `in` and `in_set` lines add `bigint`, `time` and `dt` (and `int` under
-   question 1) to the types fused today, and `census.tsv` is regenerated.
+   `census_curated.txt`'s `in` and `in_set` lines add `int`, `bigint`, `time` and `dt` to the
+   types fused today, and `census.tsv` is regenerated.
 
 ## 4. Predictions
 
@@ -192,7 +196,7 @@ and this row builds no hook for it.
 2. The new rows add shapes and move none: in `emitted_bytes.json` only their own entries and the
    `option_arms` digests change, and `width_audit.json` gains entries of the kinds the long lane's
    comparisons already have.
-3. The census's fused pair count moves by 6 (`in` and `in_set` for three types), or 8 with `INT`.
+3. The census's fused pair count moves by 8 (`in` and `in_set` for four types).
 4. The added test time is under a second: six to eight coverage rows at the observed cost of
    VARKA-317's row in the calibration table (its added rows came in at a small fraction of a
    second against a 10 s bound), plus one compile-only order test.
@@ -201,8 +205,15 @@ and this row builds no hook for it.
 
 1. **The merge** (2.1, 2.2): one arm, `laneBits`, `bitsSlot`, the four arms and their readers
    deleted, the order test (3.2); the three generated files byte-identical (3.1). Its own commit.
-2. **The admission** (2.3): the coverage rows, the flipped test, the stale comments rewritten, the
-   generated files and the census. Its own commit; the two go in one pull request.
+   The arm's guard still excludes the four types that decline today, `INT`, `BIGINT`, `TIME` and
+   the day-time interval, so the commit changes no answer and no decline either, and the proof is
+   of the refactor alone.
+2. **The admission** (2.3): the exclusion removed, the coverage rows of all four types, the
+   flipped test, the stale comments rewritten, the generated files and the census. Its own commit;
+   the two go in one pull request.
+3. **Row 499's (c) lands with this row or before it**: the new coverage rows move the seeded
+   fuzz draws (3.5), and without the `draws` skip kind a by-design `checkIntOverflow=false`
+   failure has no line that can hold it.
 
 | file | what |
 |---|---|
@@ -215,13 +226,17 @@ and this row builds no hook for it.
 | generated | `census.tsv` |
 | census | `census_curated.txt`'s `in` and `in_set` lines |
 
-**Size: small**, as the row says: about a day. The merge deletes more than it adds. Row 499's
-(c) should land first or with it (3.5), since the new rows move the seeded draws.
+**Size: small**, as the row says: about a day. The merge deletes more than it adds.
 
 ## 6. Out of this row
 
 The decimal reader and rows (348), the pair's `IN` (359), `BOOLEAN`'s `IN` (a condition, owned by
 333's census entry), the cap, and an `IN` whose elements are not literals.
+
+Row 348 builds no `IN` arm of its own: decimal `IN` within precision 18 comes through this one, and
+348 adds one case to `laneBits` (a `Decimal` at the value type's scale read as its unscaled long),
+its coverage rows and its census entries, as 2.4 says; the scale of a column under `IN`'s
+coercion stays 348's rescale.
 
 ## 8. Questions for the owner
 
@@ -230,16 +245,14 @@ The decimal reader and rows (348), the pair's `IN` (359), `BOOLEAN`'s `IN` (a co
    census entries. (b) The arm excludes `IntegerType`, which stays declined, naming the row that
    owns it. *Recommended: (a)*: the row's goal is that "one arm keyed on the registry's lane
    compiles every type a lane reads", and an exclusion would be the kind of per-type gate the row
-   removes; `INT` comparisons already fuse.
-2. **The decline test.** (a) Keep its `Add` half, retitled for row 104, and flip its `IN` half to
-   fused. (b) Delete the whole test. *Recommended: (a)*: row 104 has not landed, and its decline is
-   still a fact a test should hold.
+   removes; `INT` comparisons already fuse. The plan is written for (a); under (b) the merge
+   commit's exclusion of `IntegerType` stays and the `i IN` rows are dropped.
 
 ## 9. Done when
 
 One `In` and `InSet` arm pair remains in `VarkaConditionCompiler`, reading literals through the
 registry; the merge's commit leaves `emitted_bytes.json`, `coverage.json` and `width_audit.json`
-byte-identical; the `BIGINT`, `TIME` and day-time interval `IN` (and `INT`'s under question 1) fuse
+byte-identical; the `BIGINT`, `TIME`, day-time interval and `INT` `IN` (question 1) fuse
 with coverage rows in both forms and their census entries; the bigint `IN` decline is no longer
 pinned; the order test, the coverage harness, the fuzzers and the PR build pass, and the option
 matrix is dispatched on the branch.
