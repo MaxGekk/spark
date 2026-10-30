@@ -69,18 +69,49 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.NarrowLane {
 
   /**
-   * The physical lane a node's value occupies: {@code BYTE} is an 8-bit lane, {@code SHORT} a
-   * 16-bit one, {@code INT} a 32-bit one and {@code LONG} a 64-bit one. It is a property of the
-   * representation and not of the Spark type - {@code DATE} is epoch days, {@code INT} is an int
-   * and a year-month interval is a month count, and all three are the same 32-bit lane - which is
-   * why the lane rides the IR rather than being inferred from the type above it.
+   * The physical lane a node's value occupies, a kind and a width: {@code BYTE} is an 8-bit
+   * integral lane, {@code SHORT} a 16-bit one, {@code INT} a 32-bit one and {@code LONG} a 64-bit
+   * one; {@code FLOAT} and {@code DOUBLE} are the 32-bit and 64-bit floating lanes. It is a
+   * property of the representation and not of the Spark type - {@code DATE} is epoch days,
+   * {@code INT} is an int and a year-month interval is a month count, and all three are the same
+   * 32-bit lane - which is why the lane rides the IR rather than being inferred from the type
+   * above it.
    *
-   * <p>The declaration order is the width order, {@code BYTE < SHORT < INT < LONG}, which the
-   * conversion nodes read through {@link #isWiderThan(LaneType)} and the emitter's lane rules
-   * through {@link #isNarrow()}.
+   * <p>The integral lanes are declared in their width order, {@code BYTE < SHORT < INT < LONG},
+   * which the conversion nodes read through {@link #isWiderThan(LaneType)} and the emitter's lane
+   * rules through {@link #isNarrow()}. The floating lanes are outside that order: a floating value
+   * is not a wider integer, so no lane is wider than a floating one or narrower than it, and a
+   * conversion between the kinds is a cast of its own (VARKA-341, 343).
    */
   enum LaneType {
-    BYTE, SHORT, INT, LONG;
+    BYTE(Kind.INTEGRAL, 8), SHORT(Kind.INTEGRAL, 16), INT(Kind.INTEGRAL, 32),
+    LONG(Kind.INTEGRAL, 64), FLOAT(Kind.FLOATING, 32), DOUBLE(Kind.FLOATING, 64);
+
+    /** Whether a lane holds integers or floating values. */
+    public enum Kind { INTEGRAL, FLOATING }
+
+    private final Kind kind;
+    private final int bits;
+
+    LaneType(Kind kind, int bits) {
+      this.kind = kind;
+      this.bits = bits;
+    }
+
+    /** The kind of value the lane holds. */
+    public Kind kind() {
+      return kind;
+    }
+
+    /** The lane's width in bits: a value of it is this wide in a vector and in its column. */
+    public int bits() {
+      return bits;
+    }
+
+    /** Whether this lane holds floating values, {@code FLOAT} or {@code DOUBLE}. */
+    public boolean isFloating() {
+      return kind == Kind.FLOATING;
+    }
 
     /** Whether this lane is one of the two narrow ones, {@code BYTE} or {@code SHORT}. */
     public boolean isNarrow() {
@@ -88,12 +119,13 @@ public sealed interface VarkaVectorIR
     }
 
     /**
-     * Whether this lane's values are wider than {@code other}'s, which is the declaration order,
-     * narrowest first - the order the conversion nodes' rules are written in, and the reason the
-     * constants are declared as they are.
+     * Whether this lane's values are wider than {@code other}'s: both integral, and this one later
+     * in the declaration order, narrowest first - the order the conversion nodes' rules are
+     * written in. Never across the kinds, so a widening to or from a floating lane does not
+     * exist.
      */
     public boolean isWiderThan(LaneType other) {
-      return compareTo(other) > 0;
+      return kind == Kind.INTEGRAL && other.kind == Kind.INTEGRAL && compareTo(other) > 0;
     }
   }
 
@@ -1134,6 +1166,8 @@ public sealed interface VarkaVectorIR
             case SHORT -> "short";
             case INT -> "int";
             case LONG -> "long";
+            case FLOAT -> "float";
+            case DOUBLE -> "double";
           };
           throw VarkaErrors.illegalArgument("a range set at the " + name + " lane needs " + name
               + " bounds: [" + bounds.get(i) + ", " + bounds.get(i + 1) + "]");

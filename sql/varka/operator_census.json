@@ -504,6 +504,88 @@
         "intrinsics" : [ "load", "compare", "compressExpandOp", "store" ],
         "failed" : [ "compare", "compressExpandOp" ]
       },
+      "long.dec_rearrange" : {
+        "verdict" : "F",
+        "bytes_per_row" : 220.04,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend", "store" ],
+        "failed" : [ "compare", "convert", "rearrangeOp", "blend" ]
+      },
+      "long.dec_selectFrom2" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "selectFromTwoVectorOp", "store" ]
+      },
+      "long.dec_compress" : {
+        "verdict" : "F",
+        "bytes_per_row" : 236.04,
+        "intrinsics" : [ "load", "compressExpandOp", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ],
+        "failed" : [ "compressExpandOp", "compare", "rearrangeOp", "blend" ]
+      },
+      "long.dec_check_rearrange" : {
+        "verdict" : "F",
+        "bytes_per_row" : 584.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ],
+        "failed" : [ "fromBitsCoerced", "compare", "convert", "rearrangeOp", "blend", "binaryOp", "test" ]
+      },
+      "long.dec_check_rearrange_masked" : {
+        "verdict" : "F",
+        "bytes_per_row" : 648.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ],
+        "failed" : [ "fromBitsCoerced", "compare", "convert", "rearrangeOp", "blend", "binaryOp", "test" ]
+      },
+      "long.dec_check_compress" : {
+        "verdict" : "F",
+        "bytes_per_row" : 664.08,
+        "intrinsics" : [ "fromBitsCoerced", "binaryOp", "load", "compressExpandOp", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "store", "test" ],
+        "failed" : [ "fromBitsCoerced", "binaryOp", "compressExpandOp", "compare", "rearrangeOp", "blend", "test" ]
+      },
+      "long.dec_check_offset" : {
+        "verdict" : "F",
+        "bytes_per_row" : 544.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ],
+        "failed" : [ "fromBitsCoerced", "compare", "convert", "rearrangeOp", "blend", "binaryOp", "test" ]
+      },
+      "long.dec_check_offset_masked" : {
+        "verdict" : "F",
+        "bytes_per_row" : 672.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ],
+        "failed" : [ "fromBitsCoerced", "compare", "convert", "rearrangeOp", "blend", "binaryOp", "test" ]
+      },
+      "long.dec_tail" : {
+        "verdict" : "F",
+        "bytes_per_row" : 220.25,
+        "intrinsics" : [ "fromBitsCoerced", "indexPartiallyInUpperRange", "binaryOp", "loadMasked", "convert", "compare", "rearrangeOp", "blend", "test", "store", "storeMasked" ],
+        "failed" : [ "fromBitsCoerced", "indexPartiallyInUpperRange", "binaryOp", "loadMasked", "compare", "convert", "rearrangeOp", "blend", "test", "storeMasked" ]
+      },
+      "int.dec_int_splice" : {
+        "verdict" : "F",
+        "bytes_per_row" : 220.04,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend", "binaryOp", "store" ],
+        "failed" : [ "compare", "convert", "rearrangeOp", "blend" ]
+      },
+      "long.NE" : {
+        "verdict" : "F",
+        "bytes_per_row" : 92.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ],
+        "failed" : [ "compare", "blend" ]
+      },
+      "long.GT" : {
+        "verdict" : "F",
+        "bytes_per_row" : 92.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ],
+        "failed" : [ "compare", "blend" ]
+      },
+      "long.LT" : {
+        "verdict" : "F",
+        "bytes_per_row" : 92.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ],
+        "failed" : [ "compare", "blend" ]
+      },
+      "long.ASHR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "broadcastInt", "store" ]
+      },
       "byte.fromLong" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
@@ -1067,6 +1149,76 @@
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "compare", "compressExpandOp", "store" ]
       },
+      "long.dec_rearrange" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend", "store" ]
+      },
+      "long.dec_selectFrom2" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "selectFromTwoVectorOp", "store" ]
+      },
+      "long.dec_compress" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "compressExpandOp", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "long.dec_check_rearrange" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_check_rearrange_masked" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_check_compress" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "binaryOp", "load", "compressExpandOp", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "store", "test" ]
+      },
+      "long.dec_check_offset" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_check_offset_masked" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_tail" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "indexPartiallyInUpperRange", "binaryOp", "loadMasked", "convert", "compare", "rearrangeOp", "blend", "test", "store", "storeMasked" ]
+      },
+      "int.dec_int_splice" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend", "binaryOp", "store" ]
+      },
+      "long.NE" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "long.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "long.LT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "long.ASHR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "broadcastInt", "store" ]
+      },
       "byte.fromLong" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
@@ -1627,6 +1779,76 @@
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "compare", "compressExpandOp", "store" ]
+      },
+      "long.dec_rearrange" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend", "store" ]
+      },
+      "long.dec_selectFrom2" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "selectFromTwoVectorOp", "store" ]
+      },
+      "long.dec_compress" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "compressExpandOp", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "long.dec_check_rearrange" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_check_rearrange_masked" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_check_compress" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "binaryOp", "load", "compressExpandOp", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "store", "test" ]
+      },
+      "long.dec_check_offset" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_check_offset_masked" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "load", "convert", "compare", "rearrangeOp", "blend", "broadcastInt", "binaryOp", "store", "test" ]
+      },
+      "long.dec_tail" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "fromBitsCoerced", "indexPartiallyInUpperRange", "binaryOp", "loadMasked", "convert", "compare", "rearrangeOp", "blend", "test", "store", "storeMasked" ]
+      },
+      "int.dec_int_splice" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.04,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend", "binaryOp", "store" ]
+      },
+      "long.NE" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "long.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "long.LT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "long.ASHR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "broadcastInt", "store" ]
       },
       "byte.fromLong" : {
         "verdict" : "I",

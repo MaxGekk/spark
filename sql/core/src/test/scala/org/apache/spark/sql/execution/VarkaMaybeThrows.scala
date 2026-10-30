@@ -47,14 +47,31 @@ trait VarkaMaybeThrows extends QueryTest with VarkaSharedSessions {
     runOutcome(session, query)._1
 
   /**
+   * The row engine's outcome for `query`, over a cached table: its plan checked by
+   * [[sameCacheReads]] against `varkaPlan`, the plan Varka ran the same query with, when both got
+   * as far as a plan.
+   */
+  protected def expectedOutcome(query: String, varkaPlan: Option[SparkPlan]): Outcome = {
+    val (onSpark, sparkPlan) = runOutcome(spark, query)
+    for (expected <- sparkPlan; actual <- varkaPlan) {
+      sameCacheReads(expected, actual, query, mustRead = true)
+    }
+    onSpark
+  }
+
+  /**
    * Runs `query` on the row engine and on Varka, fails the test with how Varka's outcome differs
    * from Spark's, and returns the outcome they share - rows or one error - so that the caller
-   * can still say which it expected. It compares outcomes only: whether a kernel served the query
-   * is the caller's to assert, since a comparison no kernel took part in holds Spark to itself.
+   * can still say which it expected. Both plans must read the same cached tables
+   * ([[sameCacheReads]]); beyond that it compares outcomes only: whether a kernel served the
+   * query is the caller's to assert, since a comparison no kernel took part in holds Spark to
+   * itself.
    */
   protected def checkSparkAnswerMaybeThrows(query: String): Outcome = {
-    val onSpark = outcome(spark, query)
-    difference(onSpark, outcome(varkaSpark, query)).foreach(d => fail(s"$query\n$d"))
+    val (onVarka, varkaPlan) = runOutcome(varkaSpark, query)
+    val (onSpark, sparkPlan) = runOutcome(spark, query)
+    for (expected <- sparkPlan; actual <- varkaPlan) sameCacheReads(expected, actual, query)
+    difference(onSpark, onVarka).foreach(d => fail(s"$query\n$d"))
     onSpark
   }
 
@@ -126,8 +143,9 @@ object VarkaMaybeThrows {
         t.asInstanceOf[Throwable].getMessage, t.getClass.getName)
     }.getOrElse {
       val root = chain.last
-      Raised(root.getClass.getName, null, Map.empty, String.valueOf(root.getMessage),
-        root.getClass.getName)
+      // The message as it is, null included: the JVM's preallocated ArithmeticException has
+      // none, and sameError tells that case apart only by a real null.
+      Raised(root.getClass.getName, null, Map.empty, root.getMessage, root.getClass.getName)
     }
   }
 
@@ -135,10 +153,28 @@ object VarkaMaybeThrows {
    * How Varka's outcome differs from Spark's, or nothing. Rows are compared as rows, in any
    * order; errors field by field.
    */
+  /**
+   * Whether two errors are one, allowing for the JVM's preallocated `ArithmeticException`. Once
+   * a `Math.*Exact` overflow has trapped often enough at one call site, C2 throws a shared
+   * instance with no message there (`inline_math_mathExact`, under the default
+   * `OmitStackTraceInFastThrow`), so the row engine's own overflow reads "long overflow" in a cold
+   * JVM and null in a hot one. Which engine meets which depends on what ran before, not on Varka,
+   * so a missing message on an otherwise equal `ArithmeticException` is no difference; any other
+   * field, or a message both carry, still has to agree. What this can hide is two conditionless
+   * `ArithmeticException`s of different causes where the JVM erased one's message; Spark gives
+   * its other arithmetic errors a condition, such as `DIVIDE_BY_ZERO`, and those stay compared
+   * in full, as does every subclass.
+   */
+  private def sameError(s: Raised, v: Raised): Boolean = s == v ||
+    (s.exceptionClass == classOf[ArithmeticException].getName &&
+      (s.message == null || v.message == null) &&
+      s.copy(message = null) == v.copy(message = null))
+
   def difference(onSpark: Outcome, onVarka: Outcome): Option[String] =
     (onSpark, onVarka) match {
       case (Answered(s), Answered(v)) => QueryTest.sameRows(s, v).map(d => s"rows differ:\n$d")
-      case (s: Raised, v: Raised) => Option.when(s != v)(s"errors differ: Spark $s, Varka $v")
+      case (s: Raised, v: Raised) =>
+        Option.when(!sameError(s, v))(s"errors differ: Spark $s, Varka $v")
       case (s: Raised, v: Answered) => Some(s"only Spark raises: Spark $s, Varka $v")
       case (s: Answered, v: Raised) => Some(s"only Varka raises: Spark $s, Varka $v")
     }

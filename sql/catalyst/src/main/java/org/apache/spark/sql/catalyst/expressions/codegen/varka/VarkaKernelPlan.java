@@ -54,7 +54,9 @@ public final class VarkaKernelPlan {
     /** A narrow value the drive lane cannot lower or this width cannot widen. */
     NARROW,
     /** Two roots no one lane serves: a long root beside a narrow or int one. */
-    LANE_MISMATCH
+    LANE_MISMATCH,
+    /** A floating conjunct of a filter whose kernel is integral, which it cannot join yet. */
+    FLOATING_CONDITION
   }
 
   private final Optional<Refusal> refusal;
@@ -163,6 +165,14 @@ public final class VarkaKernelPlan {
    */
   static LaneType emissionLane(VarkaVectorIR root, VarkaEmitOptions options) {
     Set<LaneType> lanes = VarkaVectorIR.lanesIn(root);
+    // A floating tree holds its one lane: no node converts between a floating lane and another
+    // yet, and the IR's constructors refuse a mix, so the tree drives where its values are.
+    if (lanes.contains(LaneType.DOUBLE)) {
+      return LaneType.DOUBLE;
+    }
+    if (lanes.contains(LaneType.FLOAT)) {
+      return LaneType.FLOAT;
+    }
     if (lanes.contains(LaneType.LONG)) {
       return LaneType.LONG;
     }
@@ -186,8 +196,9 @@ public final class VarkaKernelPlan {
    * - the widened one, which the off arm uses for all of them - so a native narrow root beside
    * an int one, beside a root of the other narrow lane, or beside a tree holding a checked narrow
    * multiply joins them there rather than splitting the projection. A narrow or int root beside a
-   * long one has no shared lane: the long lane admits no narrow node, and an int root is a long
-   * kernel's only through a conversion its own tree holds.
+   * long one has no shared lane: the long lane admits no narrow value, and an int root is a long
+   * kernel's only through a conversion its own tree holds; such a root takes a kernel of its own
+   * (VARKA-480).
    */
   private static Optional<LaneType> kernelLane(List<VarkaVectorIR> roots,
       VarkaEmitOptions options) {
@@ -198,12 +209,18 @@ public final class VarkaKernelPlan {
     return lanesShare(lanes);
   }
 
-  /** The lane roots of these emission lanes share: theirs where one, the int lane but for long. */
+  /**
+   * The lane roots of these emission lanes share: theirs where one, the int lane but for long. A
+   * floating root shares with no root of another lane: it would join one only through a mask
+   * crossing between the kinds, which is not built (VARKA-341 2.4), so it takes a kernel of its
+   * own.
+   */
   private static Optional<LaneType> lanesShare(Set<LaneType> lanes) {
     if (lanes.size() <= 1) {
       return lanes.stream().findFirst();
     }
-    return lanes.contains(LaneType.LONG) ? Optional.empty() : Optional.of(LaneType.INT);
+    return lanes.contains(LaneType.LONG) || lanes.stream().anyMatch(LaneType::isFloating)
+        ? Optional.empty() : Optional.of(LaneType.INT);
   }
 
   /**
@@ -270,17 +287,18 @@ public final class VarkaKernelPlan {
       if (drive.isNarrow()) {
         continue;
       }
+      if (!VarkaVectorIR.needsNarrowSpecies(root)) {
+        // A narrow column whose only use is a validity word - `y1 IS NOT NULL`, or the same
+        // test lifted to a bigint kernel's lane - reads no value and needs no narrow species,
+        // so it emits at the kernel's lane whichever that is: the word is one bit per row at
+        // every lane. Refusing it would name a load the tree never emits.
+        continue;
+      }
       if (drive == LaneType.LONG) {
-        // Analysis admits no narrow node in a long-lane emission, not even one read only for
-        // its validity word, so the entry declines here rather than failing at emit.
+        // Analysis admits no narrow value in a long-lane emission, so the entry declines here
+        // rather than failing at emit.
         return Optional.of(new Refusal(Kind.NARROW,
             "a narrow value under a bigint kernel has no lowering"));
-      }
-      if (!VarkaVectorIR.needsNarrowSpecies(root)) {
-        // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
-        // value and needs no narrow species, so it emits at this int lane count. Refusing it
-        // would name a load the tree never emits.
-        continue;
       }
       int intLanes = Lane.emitLanes(options, Lane.INT);
       if (intLanes == 0) {
@@ -293,6 +311,26 @@ public final class VarkaKernelPlan {
               "a " + type + " column has no widening load at " + intLanes + " int lanes"));
         }
       }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * The refusal of a filter's conjunct on a floating lane, where the filter also reads an
+   * integral column: {@code x > 1.5 AND d > d2}. A filter kernel's conjuncts meet on one lane,
+   * and a floating conjunct fused first would leave the date or bigint conjuncts beside it no
+   * lane to meet on and send them to the row filter. So it declines, keeping the kernel for the
+   * integral conjuncts, until a mask crosses between the kinds. A filter that reads only
+   * floating columns fuses whole, and a choice's floating condition is no conjunct, so a
+   * projection's {@code CASE WHEN x > 1.5 THEN ...} fuses too.
+   */
+  public static Optional<Refusal> floatingConjunctRefusal(VarkaVectorIR conjunct,
+      boolean filterReadsIntegral) {
+    if (filterReadsIntegral && conjunct.laneType().isFloating()) {
+      return Optional.of(new Refusal(Kind.FLOATING_CONDITION, "a condition on the "
+          + conjunct.laneType() + " lane in a filter that also reads integral columns: its "
+          + "kernel meets on an integral lane, and a mask crossing from a floating lane is not "
+          + "built"));
     }
     return Optional.empty();
   }

@@ -144,6 +144,8 @@ consumers would otherwise have to agree on by hand.
 
 ### 3.4 A type registry: `VarkaTypes`
 
+*Built as row 494 (`VARKA-494.md` 10, 26 October 2026).*
+
 A closed `VarkaTypeId` enum - BOOLEAN, BYTE, SHORT, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME,
 TIMESTAMP_NTZ, YM_INTERVAL, DT_INTERVAL - with `of(DataType)` in one function, replacing `laneOf`
 and its siblings. Each id carries a small descriptor record, and only what has a reader today:
@@ -346,3 +348,6 @@ other or with the compiler while every test passed.
 | with floats (341) | 9.2.2, with the `Lane` split |
 | before decimal (347, 359) | row 489, 9.2.3 |
 | continuous | 9.2.4 and 9.2.5 in every review |
+
+*25 October 2026:* 3.4 with 9.2.1 is row 494 (`VARKA-494.md`), built before `TIMESTAMP_NTZ`
+by the owner's decision.

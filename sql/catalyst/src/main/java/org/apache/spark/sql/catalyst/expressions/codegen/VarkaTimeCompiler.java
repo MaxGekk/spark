@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.TimeToMillis;
 import org.apache.spark.sql.catalyst.expressions.TimeToSeconds;
 import org.apache.spark.sql.catalyst.expressions.TimeTrunc;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -83,10 +84,6 @@ import org.apache.spark.unsafe.types.UTF8String;
  */
 final class VarkaTimeCompiler {
 
-
-  private static final String TIMESTAMP_OUT_OF_MILESTONE =
-      "a timestamp column is outside milestone 5";
-
   /**
    * Every {@code TIME} is a count of nanoseconds of day, which is the bound its divisions
    * state.
@@ -105,7 +102,7 @@ final class VarkaTimeCompiler {
    * {@code DateTimeUtils.getNanosPerTimeUnit} and {@code parseTimeTruncLevel} spell them - the
    * same five names, and nothing coarser than an hour, because a {@code TIME} has no day.
    */
-  private static final Map<String, Long> NANOS_PER_TIME_UNIT = Map.of(
+  static final Map<String, Long> NANOS_PER_TIME_UNIT = Map.of(
       "MICROSECOND", DateTimeConstants.NANOS_PER_MICROS,
       "MILLISECOND", DateTimeConstants.NANOS_PER_MILLIS,
       "SECOND", DateTimeConstants.NANOS_PER_SECOND,
@@ -153,20 +150,19 @@ final class VarkaTimeCompiler {
       VarkaSlotTable literals,
       DeclineSink sink) {
     return switch (e) {
-      // The long lane's column leaf: a `bigint`, a `TIME(p)` and a day-time interval are one
-      // eight-byte lane, holding the value, nanoseconds of day and microseconds respectively (task
-      // 29). As with the interval leaf, Spark's own typing decides where such a value may
-      // appear - never in a date or an int position - so the leaf cannot put one there, and the
-      // IR's constructors refuse a tree that mixes it with the int lane anyway.
-      case BoundReference br when VarkaNodeCompiler.onLongLane(br.dataType()) ->
+      // The long lane's column leaf: a `bigint`, a `TIME(p)`, a day-time interval and a
+      // `TIMESTAMP_NTZ` are one eight-byte lane, holding the value, nanoseconds of day,
+      // microseconds and microseconds since the epoch respectively (VARKA-29, VARKA-338). As
+      // with the interval leaf, Spark's own typing decides where such a value may appear - never
+      // in a date or an int position - so the leaf cannot put one there, and the IR's
+      // constructors refuse a tree that mixes it with the int lane anyway.
+      case BoundReference br
+          when VarkaTypes.lane(br.dataType()).orElse(null) == LaneType.LONG ->
           () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));
-      // Ahead of the generic "non-date column" decline, so the reason is the decision.
-      case BoundReference br when isTimestamp(br.dataType()) ->
-          () -> sink.decline(TIMESTAMP_OUT_OF_MILESTONE, br);
       // The long lane's literals, beside the int ones: the value is already the long the lane
       // holds, so `l > 5000000000`, `t < TIME'12:00'` and `dt > INTERVAL '1' DAY` take a slot.
       case Literal l when l.value() instanceof Long
-          && VarkaNodeCompiler.onLongLane(l.dataType()) ->
+          && VarkaTypes.lane(l.dataType()).orElse(null) == LaneType.LONG ->
           () -> Optional.of(sink.longSlot((Long) l.value()));
       // TIME's precision cast. A `TIME(p)` value is stored truncated to `p` digits and
       // `Cast.castToTime` truncates again to the target precision, so a cast to an equal or wider
@@ -213,17 +209,6 @@ final class VarkaTimeCompiler {
   /** The number of TIME expressions the table holds, one key each. */
   static int timeTargetCount() {
     return TIME_TARGETS.size();
-  }
-
-  /**
-   * Whether the type is one of the two timestamps, which milestone 5 leaves out by decision
-   * ({@code m9/SCOPE.md} item 31): a zoned {@code TIMESTAMP}'s differences and interval additions
-   * are computed on local date-times in the session zone and are not lane arithmetic, and the
-   * NTZ family, whose arithmetic would be plain, waits with it. The decline names the milestone
-   * so EXPLAIN shows a decision rather than a gap.
-   */
-  private static boolean isTimestamp(DataType dataType) {
-    return dataType.equals(DataTypes.TimestampType) || dataType.equals(DataTypes.TimestampNTZType);
   }
 
   private static Map<TimeTarget, String> timeTargets() {

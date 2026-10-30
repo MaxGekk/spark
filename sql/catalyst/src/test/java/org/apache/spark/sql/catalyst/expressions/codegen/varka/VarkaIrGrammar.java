@@ -470,6 +470,8 @@ public final class VarkaIrGrammar {
       case SHORT -> new LaneType[] {LaneType.BYTE};
       case INT -> new LaneType[] {LaneType.BYTE, LaneType.SHORT};
       case LONG -> new LaneType[] {LaneType.BYTE, LaneType.SHORT, LaneType.INT};
+      // The grammar draws no floating lane yet (VARKA-341), and no lane converts to or from one.
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException("a floating root: " + root);
     };
     if (narrower.length == 0) {
       return new WidenLane(root, LaneType.SHORT);
@@ -487,6 +489,7 @@ public final class VarkaIrGrammar {
       // Unreachable: a narrowing target is always below the root's lane, and a LONG root is
       // the widest. The arm keeps the switch exhaustive over the enum.
       case LONG -> LaneType.LONG;
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException("a floating target: " + target);
     };
     return new WidenLane(narrow, out);
   }

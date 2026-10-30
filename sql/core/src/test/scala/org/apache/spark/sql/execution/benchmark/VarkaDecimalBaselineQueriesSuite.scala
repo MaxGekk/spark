@@ -1,0 +1,81 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.execution.benchmark
+
+import scala.jdk.CollectionConverters._
+
+import org.apache.spark.sql.QueryTest
+import org.apache.spark.sql.execution.VarkaSharedSessions
+import org.apache.spark.sql.types.DecimalType
+
+/**
+ * The decimal baseline's sections, run at a small scale on both sessions in every build, so a
+ * section that no longer parses or that the two sessions answer differently fails a pull request
+ * rather than the runner dispatch that times it (VARKA-377 5). It checks the answers only: whether
+ * a section fuses is the benchmark's own check, made when it is timed, since a lane row is meant
+ * to start fusing these queries.
+ *
+ * Two further checks keep the table what the benchmark claims: every column has the declared
+ * precision and scale, and a section over the columns with no null returns no null, so a value
+ * that overflowed its type into a null (with ANSI mode off) fails here rather than going into the
+ * timed run as a cheap null.
+ */
+class VarkaDecimalBaselineQueriesSuite extends QueryTest with VarkaSharedSessions {
+
+  test("every section of the decimal baseline runs, and both sessions answer it alike") {
+    for (session <- Seq(spark, varkaSpark)) {
+      session.sql(VarkaDecimalBaselineBenchmark.tableSql(2000))
+        .createOrReplaceTempView("varka_decimal")
+      session.catalog.cacheTable("varka_decimal")
+    }
+    try {
+      val expected = VarkaDecimalBaselineBenchmark.PRECISIONS.asScala.flatMap { p =>
+        Seq("x", "y", "z").flatMap { role =>
+          val name = role + p.suffix
+          Seq(name -> DecimalType(p.precision, p.scale), name + "n" ->
+            DecimalType(p.precision, p.scale))
+        }
+      }
+      val schema = spark.table("varka_decimal").schema
+      assert(schema.map(f => f.name -> f.dataType) === expected)
+
+      val sections = VarkaDecimalBaselineBenchmark.sections().asScala
+      assert(sections.size === 24)
+      // The result type of each shape, as Spark's decimal rules give it: the chain widens at each
+      // node and is capped at 38, and the cast is the one the precision names.
+      val chain = Map(9 -> DecimalType(21, 4), 18 -> DecimalType(38, 7), 38 -> DecimalType(38, 6))
+      val resultTypes = VarkaDecimalBaselineBenchmark.PRECISIONS.asScala.flatMap { p =>
+        val own = DecimalType(p.precision, p.scale)
+        val cast = spark.sql(s"SELECT CAST(NULL AS ${p.castTo}) AS c").schema.head.dataType
+        Seq(own, chain(p.precision), cast, own, own, chain(p.precision), cast, own)
+      }
+      assert(sections.map(s => spark.sql(s.query).schema.head.dataType) === resultTypes)
+      for (s <- sections) {
+        withClue(s.title) {
+          val answer = spark.sql(s.query)
+          checkAnswer(varkaSpark.sql(s.query), answer)
+          if (s.title.endsWith("no nulls")) {
+            assert(answer.where(answer.columns.head + " IS NULL").count() === 0)
+          }
+        }
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_decimal"))
+    }
+  }
+}

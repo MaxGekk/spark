@@ -1,275 +1,275 @@
 Narrow-width companion of VarkaLongLaneBenchmark-jdk25-results.txt: the same benchmark under
 -XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
   benchmark:   org.apache.spark.sql.VarkaLongLaneBenchmark
-  commit:      05f064f714c (working tree dirty)
-  date:        2026-10-25T14:24:22Z
+  commit:      179ddc21d0d
+  date:        2026-10-25T20:25:08Z
   jdk:         OpenJDK Runtime Environment (build 25.0.4.1+1-1-26.04.4-Ubuntu)
   kernel:      7.0.0-38-generic
   cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
   power:       governor=performance epp=performance profile=performance
   pinned to:   taskset -c 0,12,13,14,15,1,2,3
-  load at start: 0.92
-  canary:      ok (compute +0.2% cache +0.7% memory +1.0% )
+  load at start: 0.89
+  canary:      ok (compute +0.3% cache +3.1% memory -0.5% )
   wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaLongLaneBenchmark
   narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaLongLaneBenchmark"
 
 Running benchmark: 16384 rows - both arms in L2
   Running case: a column, copied, int32 lanes
-  Stopped after 2901330 iterations, 2000 ms
+  Stopped after 2873123 iterations, 2000 ms
   Running case: a column, copied, int64 lanes
-  Stopped after 1693236 iterations, 2000 ms
+  Stopped after 1685685 iterations, 2000 ms
   Running case: column + literal, wrapping, int32 lanes
-  Stopped after 3123984 iterations, 2000 ms
+  Stopped after 3108083 iterations, 2000 ms
   Running case: column + literal, wrapping, int64 lanes
-  Stopped after 1766832 iterations, 2000 ms
+  Stopped after 1745560 iterations, 2000 ms
   Running case: column + column, wrapping, int32 lanes
-  Stopped after 1962074 iterations, 2000 ms
+  Stopped after 1953440 iterations, 2000 ms
   Running case: column + column, wrapping, int64 lanes
-  Stopped after 1032002 iterations, 2000 ms
+  Stopped after 896918 iterations, 2000 ms
   Running case: column + literal, ANSI checked, int32 lanes
-  Stopped after 1565421 iterations, 2000 ms
+  Stopped after 1557621 iterations, 2000 ms
   Running case: column + literal, ANSI checked, int64 lanes
-  Stopped after 22210 iterations, 2000 ms
+  Stopped after 21168 iterations, 2000 ms
   Running case: column * column, wrapping, int32 lanes
-  Stopped after 1953025 iterations, 2000 ms
+  Stopped after 1949154 iterations, 2000 ms
   Running case: column * column, wrapping, int64 lanes
-  Stopped after 1020563 iterations, 2000 ms
+  Stopped after 891762 iterations, 2000 ms
   Running case: -column, wrapping, int32 lanes
-  Stopped after 3065699 iterations, 2000 ms
+  Stopped after 3060556 iterations, 2000 ms
   Running case: -column, wrapping, int64 lanes
-  Stopped after 1637196 iterations, 2000 ms
+  Stopped after 1626907 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int32 lanes
-  Stopped after 411980 iterations, 2000 ms
+  Stopped after 459144 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int64 lanes
-  Stopped after 207606 iterations, 2000 ms
+  Stopped after 233804 iterations, 2000 ms
   Running case: greatest(column, column), int32 lanes
-  Stopped after 1949389 iterations, 2000 ms
+  Stopped after 1965897 iterations, 2000 ms
   Running case: greatest(column, column), int64 lanes
-  Stopped after 1018929 iterations, 2000 ms
+  Stopped after 899833 iterations, 2000 ms
   Running case: a comparison, as a selection, int32 lanes
-  Stopped after 777086 iterations, 2000 ms
+  Stopped after 774902 iterations, 2000 ms
   Running case: a comparison, as a selection, int64 lanes
-  Stopped after 23343 iterations, 2000 ms
+  Stopped after 25958 iterations, 2000 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
-  Stopped after 1958670 iterations, 2000 ms
+  Stopped after 1950979 iterations, 2000 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
-  Stopped after 22191 iterations, 2000 ms
+  Stopped after 18146 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 16384 rows - both arms in L2:                          Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
 a column, copied, int32 lanes                                      0              0           0      27722.5           0.0       1.0X
-a column, copied, int64 lanes                                      0              0           0      15427.5           0.1       0.6X
-column + literal, wrapping, int32 lanes                            0              0           0      29205.0           0.0       1.1X
-column + literal, wrapping, int64 lanes                            0              0           0      15283.6           0.1       0.6X
-column + column, wrapping, int32 lanes                             0              0           0      16873.3           0.1       0.6X
-column + column, wrapping, int64 lanes                             0              0           0       8655.0           0.1       0.3X
+a column, copied, int64 lanes                                      0              0           0      15574.1           0.1       0.6X
+column + literal, wrapping, int32 lanes                            0              0           0      28693.5           0.0       1.0X
+column + literal, wrapping, int64 lanes                            0              0           0      15427.5           0.1       0.6X
+column + column, wrapping, int32 lanes                             0              0           0      16701.3           0.1       0.6X
+column + column, wrapping, int64 lanes                             0              0           0       7713.7           0.1       0.3X
 column + literal, ANSI checked, int32 lanes                        0              0           0      13861.3           0.1       0.5X
-column + literal, ANSI checked, int64 lanes                        0              0           0        197.1           5.1       0.0X
-column * column, wrapping, int32 lanes                             0              0           0      16701.3           0.1       0.6X
-column * column, wrapping, int64 lanes                             0              0           0       8564.6           0.1       0.3X
--column, wrapping, int32 lanes                                     0              0           0      29205.0           0.0       1.1X
+column + literal, ANSI checked, int64 lanes                        0              0           0        193.3           5.2       0.0X
+column * column, wrapping, int32 lanes                             0              0           0      16532.8           0.1       0.6X
+column * column, wrapping, int64 lanes                             0              0           0       7467.6           0.1       0.3X
+-column, wrapping, int32 lanes                                     0              0           0      28693.5           0.0       1.0X
 -column, wrapping, int64 lanes                                     0              0           0      15283.6           0.1       0.6X
-eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       3442.7           0.3       0.1X
-eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       1714.3           0.6       0.1X
-greatest(column, column), int32 lanes                              0              0           0      16873.3           0.1       0.6X
-greatest(column, column), int64 lanes                              0              0           0       8564.6           0.1       0.3X
-a comparison, as a selection, int32 lanes                          0              0           0       6514.5           0.2       0.2X
-a comparison, as a selection, int64 lanes                          0              0           0        204.4           4.9       0.0X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      16701.3           0.1       0.6X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0        199.8           5.0       0.0X
+eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       3829.8           0.3       0.1X
+eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       1935.3           0.5       0.1X
+greatest(column, column), int32 lanes                              0              0           0      16532.8           0.1       0.6X
+greatest(column, column), int64 lanes                              0              0           0       7536.3           0.1       0.3X
+a comparison, as a selection, int32 lanes                          0              0           0       6566.7           0.2       0.2X
+a comparison, as a selection, int64 lanes                          0              0           0        235.8           4.2       0.0X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      16516.1           0.1       0.6X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0        164.1           6.1       0.0X
 Running benchmark: 262144 rows - both arms in L3
   Running case: a column, copied, int32 lanes
-  Stopped after 128688 iterations, 2000 ms
+  Stopped after 126997 iterations, 2000 ms
   Running case: a column, copied, int64 lanes
-  Stopped after 62772 iterations, 2000 ms
+  Stopped after 59633 iterations, 2000 ms
   Running case: column + literal, wrapping, int32 lanes
-  Stopped after 129396 iterations, 2000 ms
+  Stopped after 125923 iterations, 2000 ms
   Running case: column + literal, wrapping, int64 lanes
-  Stopped after 62444 iterations, 2000 ms
+  Stopped after 59461 iterations, 2000 ms
   Running case: column + column, wrapping, int32 lanes
-  Stopped after 76633 iterations, 2000 ms
+  Stopped after 80927 iterations, 2000 ms
   Running case: column + column, wrapping, int64 lanes
-  Stopped after 36956 iterations, 2000 ms
+  Stopped after 38330 iterations, 2000 ms
   Running case: column + literal, ANSI checked, int32 lanes
-  Stopped after 93313 iterations, 2000 ms
+  Stopped after 92237 iterations, 2000 ms
   Running case: column + literal, ANSI checked, int64 lanes
-  Stopped after 1253 iterations, 2000 ms
+  Stopped after 1245 iterations, 2000 ms
   Running case: column * column, wrapping, int32 lanes
-  Stopped after 76560 iterations, 2000 ms
+  Stopped after 80432 iterations, 2000 ms
   Running case: column * column, wrapping, int64 lanes
-  Stopped after 36879 iterations, 2000 ms
+  Stopped after 38329 iterations, 2000 ms
   Running case: -column, wrapping, int32 lanes
-  Stopped after 128216 iterations, 2000 ms
+  Stopped after 126978 iterations, 2000 ms
   Running case: -column, wrapping, int64 lanes
-  Stopped after 62316 iterations, 2000 ms
+  Stopped after 59147 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int32 lanes
-  Stopped after 25342 iterations, 2000 ms
+  Stopped after 28759 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int64 lanes
-  Stopped after 12919 iterations, 2000 ms
+  Stopped after 14366 iterations, 2000 ms
   Running case: greatest(column, column), int32 lanes
-  Stopped after 77622 iterations, 2000 ms
+  Stopped after 80551 iterations, 2000 ms
   Running case: greatest(column, column), int64 lanes
-  Stopped after 37272 iterations, 2000 ms
+  Stopped after 38456 iterations, 2000 ms
   Running case: a comparison, as a selection, int32 lanes
-  Stopped after 47847 iterations, 2000 ms
+  Stopped after 47920 iterations, 2000 ms
   Running case: a comparison, as a selection, int64 lanes
-  Stopped after 1549 iterations, 2000 ms
+  Stopped after 1538 iterations, 2000 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
-  Stopped after 77013 iterations, 2000 ms
+  Stopped after 79791 iterations, 2000 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
-  Stopped after 1234 iterations, 2000 ms
+  Stopped after 1149 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 262144 rows - both arms in L3:                         Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      0              0           0      17513.6           0.1       1.0X
-a column, copied, int64 lanes                                      0              0           0       9669.3           0.1       0.6X
-column + literal, wrapping, int32 lanes                            0              0           0      17501.9           0.1       1.0X
-column + literal, wrapping, int64 lanes                            0              0           0       8354.1           0.1       0.5X
-column + column, wrapping, int32 lanes                             0              0           0      10445.2           0.1       0.6X
-column + column, wrapping, int64 lanes                             0              0           0       4889.8           0.2       0.3X
-column + literal, ANSI checked, int32 lanes                        0              0           0      12483.6           0.1       0.7X
-column + literal, ANSI checked, int64 lanes                        2              2           0        171.3           5.8       0.0X
-column * column, wrapping, int32 lanes                             0              0           0      10403.8           0.1       0.6X
-column * column, wrapping, int64 lanes                             0              0           0       4908.1           0.2       0.3X
--column, wrapping, int32 lanes                                     0              0           0      17432.1           0.1       1.0X
--column, wrapping, int64 lanes                                     0              0           0       8348.8           0.1       0.5X
-eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       3417.2           0.3       0.2X
-eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       1715.8           0.6       0.1X
-greatest(column, column), int32 lanes                              0              0           0      10512.3           0.1       0.6X
-greatest(column, column), int64 lanes                              0              0           0       4938.8           0.2       0.3X
-a comparison, as a selection, int32 lanes                          0              0           0       6402.0           0.2       0.4X
-a comparison, as a selection, int64 lanes                          1              1           0        212.4           4.7       0.0X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      11739.0           0.1       0.7X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              2              2           0        171.1           5.8       0.0X
+a column, copied, int32 lanes                                      0              0           0      18361.3           0.1       1.0X
+a column, copied, int64 lanes                                      0              0           0       7931.3           0.1       0.4X
+column + literal, wrapping, int32 lanes                            0              0           0      18518.2           0.1       1.0X
+column + literal, wrapping, int64 lanes                            0              0           0       9504.5           0.1       0.5X
+column + column, wrapping, int32 lanes                             0              0           0      10825.7           0.1       0.6X
+column + column, wrapping, int64 lanes                             0              0           0       5097.4           0.2       0.3X
+column + literal, ANSI checked, int32 lanes                        0              0           0      12394.5           0.1       0.7X
+column + literal, ANSI checked, int64 lanes                        2              2           0        171.7           5.8       0.0X
+column * column, wrapping, int32 lanes                             0              0           0      12447.5           0.1       0.7X
+column * column, wrapping, int64 lanes                             0              0           0       5226.8           0.2       0.3X
+-column, wrapping, int32 lanes                                     0              0           0      17102.3           0.1       0.9X
+-column, wrapping, int64 lanes                                     0              0           0       8004.2           0.1       0.4X
+eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       3807.0           0.3       0.2X
+eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       1903.8           0.5       0.1X
+greatest(column, column), int32 lanes                              0              0           0      10830.2           0.1       0.6X
+greatest(column, column), int64 lanes                              0              0           0       5137.6           0.2       0.3X
+a comparison, as a selection, int32 lanes                          0              0           0       6375.6           0.2       0.3X
+a comparison, as a selection, int64 lanes                          1              1           0        213.1           4.7       0.0X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      10812.3           0.1       0.6X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              2              2           0        160.0           6.3       0.0X
 Running benchmark: 1000000 rows - the long arm leaves L3
   Running case: a column, copied, int32 lanes
-  Stopped after 32296 iterations, 2000 ms
+  Stopped after 31768 iterations, 2000 ms
   Running case: a column, copied, int64 lanes
-  Stopped after 12129 iterations, 2000 ms
+  Stopped after 10062 iterations, 2000 ms
   Running case: column + literal, wrapping, int32 lanes
-  Stopped after 32095 iterations, 2000 ms
+  Stopped after 31897 iterations, 2000 ms
   Running case: column + literal, wrapping, int64 lanes
-  Stopped after 11416 iterations, 2000 ms
+  Stopped after 10163 iterations, 2000 ms
   Running case: column + column, wrapping, int32 lanes
-  Stopped after 20126 iterations, 2000 ms
+  Stopped after 21003 iterations, 2000 ms
   Running case: column + column, wrapping, int64 lanes
-  Stopped after 5491 iterations, 2000 ms
+  Stopped after 5531 iterations, 2000 ms
   Running case: column + literal, ANSI checked, int32 lanes
-  Stopped after 25791 iterations, 2000 ms
+  Stopped after 25711 iterations, 2000 ms
   Running case: column + literal, ANSI checked, int64 lanes
-  Stopped after 320 iterations, 2002 ms
+  Stopped after 325 iterations, 2005 ms
   Running case: column * column, wrapping, int32 lanes
-  Stopped after 20771 iterations, 2000 ms
+  Stopped after 20839 iterations, 2000 ms
   Running case: column * column, wrapping, int64 lanes
-  Stopped after 5195 iterations, 2000 ms
+  Stopped after 5538 iterations, 2000 ms
   Running case: -column, wrapping, int32 lanes
-  Stopped after 30630 iterations, 2000 ms
+  Stopped after 31905 iterations, 2000 ms
   Running case: -column, wrapping, int64 lanes
-  Stopped after 12138 iterations, 2000 ms
+  Stopped after 10343 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int32 lanes
-  Stopped after 6671 iterations, 2000 ms
+  Stopped after 7243 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int64 lanes
-  Stopped after 3117 iterations, 2000 ms
+  Stopped after 3328 iterations, 2000 ms
   Running case: greatest(column, column), int32 lanes
-  Stopped after 21269 iterations, 2000 ms
+  Stopped after 21080 iterations, 2000 ms
   Running case: greatest(column, column), int64 lanes
-  Stopped after 5408 iterations, 2000 ms
+  Stopped after 5475 iterations, 2000 ms
   Running case: a comparison, as a selection, int32 lanes
-  Stopped after 12876 iterations, 2000 ms
+  Stopped after 12581 iterations, 2000 ms
   Running case: a comparison, as a selection, int64 lanes
-  Stopped after 400 iterations, 2000 ms
+  Stopped after 401 iterations, 2000 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
-  Stopped after 20985 iterations, 2000 ms
+  Stopped after 20945 iterations, 2000 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
-  Stopped after 333 iterations, 2000 ms
+  Stopped after 298 iterations, 2005 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 1000000 rows - the long arm leaves L3:                 Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      0              0           0      18740.6           0.1       1.0X
-a column, copied, int64 lanes                                      0              0           0       6783.1           0.1       0.4X
-column + literal, wrapping, int32 lanes                            0              0           0      18779.7           0.1       1.0X
-column + literal, wrapping, int64 lanes                            0              0           0       6707.4           0.1       0.4X
-column + column, wrapping, int32 lanes                             0              0           0      12475.0           0.1       0.7X
-column + column, wrapping, int64 lanes                             0              0           0       2872.3           0.3       0.2X
-column + literal, ANSI checked, int32 lanes                        0              0           0      13148.7           0.1       0.7X
-column + literal, ANSI checked, int64 lanes                        6              6           0        169.8           5.9       0.0X
-column * column, wrapping, int32 lanes                             0              0           0      12518.9           0.1       0.7X
-column * column, wrapping, int64 lanes                             0              0           0       2727.6           0.4       0.1X
--column, wrapping, int32 lanes                                     0              0           0      17782.2           0.1       0.9X
--column, wrapping, int64 lanes                                     0              0           0       6667.1           0.1       0.4X
-eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       3370.6           0.3       0.2X
-eight times x = -(x + column2), wrapping, int64 lanes              1              1           0       1607.1           0.6       0.1X
-greatest(column, column), int32 lanes                              0              0           0      12331.7           0.1       0.7X
-greatest(column, column), int64 lanes                              0              0           0       2818.1           0.4       0.2X
-a comparison, as a selection, int32 lanes                          0              0           0       6478.0           0.2       0.3X
-a comparison, as a selection, int64 lanes                          5              5           0        208.6           4.8       0.0X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      12226.0           0.1       0.7X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              6              6           0        175.0           5.7       0.0X
+a column, copied, int32 lanes                                      0              0           0      18311.0           0.1       1.0X
+a column, copied, int64 lanes                                      0              0           0       6044.9           0.2       0.3X
+column + literal, wrapping, int32 lanes                            0              0           0      18432.8           0.1       1.0X
+column + literal, wrapping, int64 lanes                            0              0           0       6043.1           0.2       0.3X
+column + column, wrapping, int32 lanes                             0              0           0      11834.6           0.1       0.6X
+column + column, wrapping, int64 lanes                             0              0           0       2903.1           0.3       0.2X
+column + literal, ANSI checked, int32 lanes                        0              0           0      13131.6           0.1       0.7X
+column + literal, ANSI checked, int64 lanes                        6              6           0        171.6           5.8       0.0X
+column * column, wrapping, int32 lanes                             0              0           0      11903.8           0.1       0.7X
+column * column, wrapping, int64 lanes                             0              0           0       2907.3           0.3       0.2X
+-column, wrapping, int32 lanes                                     0              0           0      18270.8           0.1       1.0X
+-column, wrapping, int64 lanes                                     0              0           0       6084.3           0.2       0.3X
+eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       3814.6           0.3       0.2X
+eight times x = -(x + column2), wrapping, int64 lanes              1              1           0       1729.2           0.6       0.1X
+greatest(column, column), int32 lanes                              0              0           0      11769.1           0.1       0.6X
+greatest(column, column), int64 lanes                              0              0           0       2854.2           0.4       0.2X
+a comparison, as a selection, int32 lanes                          0              0           0       6356.3           0.2       0.3X
+a comparison, as a selection, int64 lanes                          5              5           0        212.0           4.7       0.0X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      11485.9           0.1       0.6X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              6              7           0        155.5           6.4       0.0X
 Running benchmark: 8388608 rows - both arms past L3
   Running case: a column, copied, int32 lanes
-  Stopped after 1389 iterations, 2000 ms
+  Stopped after 1383 iterations, 2000 ms
   Running case: a column, copied, int64 lanes
-  Stopped after 633 iterations, 2001 ms
+  Stopped after 559 iterations, 2001 ms
   Running case: column + literal, wrapping, int32 lanes
-  Stopped after 1382 iterations, 2001 ms
+  Stopped after 1375 iterations, 2001 ms
   Running case: column + literal, wrapping, int64 lanes
-  Stopped after 634 iterations, 2002 ms
+  Stopped after 556 iterations, 2003 ms
   Running case: column + column, wrapping, int32 lanes
-  Stopped after 902 iterations, 2000 ms
+  Stopped after 922 iterations, 2001 ms
   Running case: column + column, wrapping, int64 lanes
-  Stopped after 407 iterations, 2004 ms
+  Stopped after 416 iterations, 2001 ms
   Running case: column + literal, ANSI checked, int32 lanes
-  Stopped after 1360 iterations, 2001 ms
+  Stopped after 1327 iterations, 2001 ms
   Running case: column + literal, ANSI checked, int64 lanes
-  Stopped after 39 iterations, 2012 ms
+  Stopped after 39 iterations, 2044 ms
   Running case: column * column, wrapping, int32 lanes
-  Stopped after 901 iterations, 2000 ms
+  Stopped after 910 iterations, 2000 ms
   Running case: column * column, wrapping, int64 lanes
-  Stopped after 406 iterations, 2000 ms
+  Stopped after 412 iterations, 2002 ms
   Running case: -column, wrapping, int32 lanes
-  Stopped after 1373 iterations, 2000 ms
+  Stopped after 1374 iterations, 2000 ms
   Running case: -column, wrapping, int64 lanes
-  Stopped after 633 iterations, 2001 ms
+  Stopped after 559 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int32 lanes
-  Stopped after 728 iterations, 2002 ms
+  Stopped after 798 iterations, 2000 ms
   Running case: eight times x = -(x + column2), wrapping, int64 lanes
-  Stopped after 354 iterations, 2005 ms
+  Stopped after 374 iterations, 2002 ms
   Running case: greatest(column, column), int32 lanes
-  Stopped after 900 iterations, 2001 ms
+  Stopped after 915 iterations, 2000 ms
   Running case: greatest(column, column), int64 lanes
-  Stopped after 407 iterations, 2000 ms
+  Stopped after 414 iterations, 2002 ms
   Running case: a comparison, as a selection, int32 lanes
-  Stopped after 1392 iterations, 2000 ms
+  Stopped after 1386 iterations, 2000 ms
   Running case: a comparison, as a selection, int64 lanes
-  Stopped after 48 iterations, 2002 ms
+  Stopped after 48 iterations, 2040 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
-  Stopped after 892 iterations, 2000 ms
+  Stopped after 901 iterations, 2002 ms
   Running case: CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
-  Stopped after 41 iterations, 2023 ms
+  Stopped after 35 iterations, 2011 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 8388608 rows - both arms past L3:                      Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      1              1           0       5871.2           0.2       1.0X
-a column, copied, int64 lanes                                      3              3           0       2667.7           0.4       0.5X
-column + literal, wrapping, int32 lanes                            1              1           0       5846.2           0.2       1.0X
-column + literal, wrapping, int64 lanes                            3              3           0       2670.2           0.4       0.5X
-column + column, wrapping, int32 lanes                             2              2           0       3824.4           0.3       0.7X
-column + column, wrapping, int64 lanes                             5              5           0       1714.4           0.6       0.3X
-column + literal, ANSI checked, int32 lanes                        1              1           0       5761.6           0.2       1.0X
-column + literal, ANSI checked, int64 lanes                       51             52           1        165.7           6.0       0.0X
-column * column, wrapping, int32 lanes                             2              2           0       3825.4           0.3       0.7X
-column * column, wrapping, int64 lanes                             5              5           0       1717.7           0.6       0.3X
--column, wrapping, int32 lanes                                     1              1           0       5862.5           0.2       1.0X
--column, wrapping, int64 lanes                                     3              3           0       2666.4           0.4       0.5X
-eight times x = -(x + column2), wrapping, int32 lanes              3              3           0       3069.6           0.3       0.5X
-eight times x = -(x + column2), wrapping, int64 lanes              6              6           0       1489.3           0.7       0.3X
-greatest(column, column), int32 lanes                              2              2           0       3795.2           0.3       0.6X
-greatest(column, column), int64 lanes                              5              5           0       1718.1           0.6       0.3X
-a comparison, as a selection, int32 lanes                          1              1           0       5909.3           0.2       1.0X
-a comparison, as a selection, int64 lanes                         41             42           0        203.2           4.9       0.0X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              2              2           0       3780.9           0.3       0.6X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes             49             49           0        172.9           5.8       0.0X
+a column, copied, int32 lanes                                      1              1           0       5847.4           0.2       1.0X
+a column, copied, int64 lanes                                      4              4           0       2382.9           0.4       0.4X
+column + literal, wrapping, int32 lanes                            1              1           0       5828.3           0.2       1.0X
+column + literal, wrapping, int64 lanes                            4              4           0       2360.6           0.4       0.4X
+column + column, wrapping, int32 lanes                             2              2           0       3900.9           0.3       0.7X
+column + column, wrapping, int64 lanes                             5              5           0       1758.4           0.6       0.3X
+column + literal, ANSI checked, int32 lanes                        1              2           0       5736.7           0.2       1.0X
+column + literal, ANSI checked, int64 lanes                       51             52           1        163.0           6.1       0.0X
+column * column, wrapping, int32 lanes                             2              2           0       3879.8           0.3       0.7X
+column * column, wrapping, int64 lanes                             5              5           0       1760.0           0.6       0.3X
+-column, wrapping, int32 lanes                                     1              1           0       5826.0           0.2       1.0X
+-column, wrapping, int64 lanes                                     4              4           0       2391.1           0.4       0.4X
+eight times x = -(x + column2), wrapping, int32 lanes              2              3           0       3380.2           0.3       0.6X
+eight times x = -(x + column2), wrapping, int64 lanes              5              5           0       1583.2           0.6       0.3X
+greatest(column, column), int32 lanes                              2              2           0       3885.8           0.3       0.7X
+greatest(column, column), int64 lanes                              5              5           0       1748.9           0.6       0.3X
+a comparison, as a selection, int32 lanes                          1              1           0       5884.1           0.2       1.0X
+a comparison, as a selection, int64 lanes                         42             43           1        201.1           5.0       0.0X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              2              2           0       3828.6           0.3       0.7X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes             56             57           1        148.5           6.7       0.0X

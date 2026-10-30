@@ -641,6 +641,16 @@ runs of `VarkaSizeLadderJitSuite` on the fork CI (#473, 27 September 2026).
   use `in` and `split(MARKER, 1)`); the Scala suites had each written their own stricter loop.
   `VarkaProbeOutputSuite` is the parser test to extend when a new marker shape appears.
 
+## A log appender on a class's own logger hides that class's warnings from later suites
+
+`withLogAppender(appender, loggerNames = Seq(cls))` gives the logger of `cls` a log4j
+configuration of its own when it had none; removing the appender afterwards leaves that
+configuration in place for the rest of the JVM. A later suite in the same JVM that listens on the
+root logger, as `VarkaProjectExecSuite` and `VarkaErrorContextSuite` do for the fallback warning,
+then sees nothing from `cls`, and passes alone while failing in a combined run. Listen on the root
+with a threshold (`appender.setThreshold(Level.WARN)`) and filter the events by
+`getLoggerName`.
+
 ## `failAfter` without a signaler cannot stop a test, so a hang holds the CI slot
 
 `SparkFunSuite` wraps every test in ScalaTest's `failAfter(20 minutes)`, and it reads as a cap.
@@ -1326,9 +1336,10 @@ Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
 - **The class takes `@VarkaSuite`, each test a `@DisplayName` sentence.** The annotation registers
   `VarkaSuiteExtension`, the JUnit face of what `VarkaTestWatchdog` gives a ScalaTest suite: the
   matrix's skip list around each test, the watchdog inside it, the Arrow allocator check around
-  the class. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`; `@VarkaSuite(watchdogMinutes = 0)`
-  runs with no watchdog and `@VarkaSuite(ownJvm = true)` is `VarkaOwnJvm`. The sentence is the
-  test's name in the printed lines, the JUnit XML, `skips.tsv` and `fused.tsv`, and the suite is
+  the class. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults` and `@Tag(VarkaSuite.C2_CODE)` is
+  `C2Code`; `@VarkaSuite(watchdogMinutes = 0)` runs with no watchdog and
+  `@VarkaSuite(ownJvm = true)` is `VarkaOwnJvm`. The sentence is the test's name in the printed
+  lines, the JUnit XML, `skips.tsv` and `fused.tsv`, and the suite is
   the class's simple name, so a skip-list line is written as for a ScalaTest test. The extension
   fails the class before its tests run (an aborted suite) when two tests share one name, as
   ScalaTest refuses them; when a test is not a plain `@Test` (`@ParameterizedTest`,

@@ -193,12 +193,20 @@ final class DeclineSink {
 
   /** Interns {@code value} in the long lane's per-distinct-value table and wraps it as its slot. */
   LiteralSlot longSlot(long value) {
-    Integer slot = longLiterals.get(value);
+    return longSlot(value, LaneType.LONG);
+  }
+
+  /**
+   * {@link #longSlot(long)} on another 64-bit lane: a {@code DOUBLE} literal is its bits in the
+   * same table (VARKA-341 2.3), so a bigint and a double with one bit pattern share a slot.
+   */
+  LiteralSlot longSlot(long bits, LaneType lane) {
+    Integer slot = longLiterals.get(bits);
     if (slot == null) {
       slot = longLiterals.size();
-      longLiterals.put(value, slot);
+      longLiterals.put(bits, slot);
     }
-    return new LiteralSlot(slot, LaneType.LONG);
+    return new LiteralSlot(slot, lane);
   }
 
   int longMark() {

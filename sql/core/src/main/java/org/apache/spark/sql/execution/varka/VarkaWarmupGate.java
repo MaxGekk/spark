@@ -25,7 +25,6 @@ import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 /**
@@ -88,7 +87,7 @@ public final class VarkaWarmupGate {
     try {
       runner.fill(input, len);
       VarkaKernelWarmup.start(runner.warmth, runner.shapeHash, runner.newKernel(),
-          runner.lane == LaneType.LONG, runner.srcData, runner.srcValidity, runner.srcNullCount,
+          runner.lane.bits() == Long.SIZE, runner.srcData, runner.srcValidity, runner.srcNullCount,
           inputWidths.of(input), anyNullableInput, len, runner.dstData.length, runner.scalarArgs,
           runner.longArgs);
       settled = true;

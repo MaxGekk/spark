@@ -56,10 +56,19 @@ final class VarkaProofFiles {
   /**
    * The int-lane constant divisors the multiply-high proof and {@code VarkaEmitterDivisionSuite}'s
    * sweep and matrix cover: {@code extract(YEAR FROM ym)}'s 12, the fuzz grammar's list
-   * ({@code VarkaIrGrammar.Shapes.CONST_DIVIDE_DIVISORS}), the {@code TIME} split form's 60 and
-   * 3600, and
-   * two edges of {@link VarkaDivisionLowering#signedMagic}: 196611, the first divisor whose shift
-   * Theorem 5.1 raises past the book's, and {@code Integer.MIN_VALUE}, the magnitude 2^31.
+   * ({@code VarkaIrGrammar.Shapes.CONST_DIVIDE_DIVISORS}), 60 and 3600, and two edges of
+   * {@link VarkaDivisionLowering#signedMagic}: 196611, the first divisor whose shift Theorem 5.1
+   * raises past the book's, and {@code Integer.MIN_VALUE}, the magnitude 2^31.
+   *
+   * <p>No compiler site builds an int-lane division by 60 or 3600 (checked 27 October 2026,
+   * VARKA-496): the only int-lane {@code ConstDivide}s are the interval compiler's, by 12 and by
+   * {@code ym / d}'s literal, and {@code TIME}'s divisions by 60 are on the long lane. They were
+   * put here for the {@code TIME} split form ({@code m9/SCOPE.md}'s catalogue row of a
+   * {@code TIME} as seconds and nanoseconds), which is not built and would divide through
+   * {@code BoundedDivide}, a lowering this proof does not state. They stay as two of the open set
+   * {@code ym / d} can divide by, as every divisor here is, and because the rendered range proofs
+   * and {@code VarkaEmitterDivisionSuite}'s sweep iterate this list; proving that set whole is
+   * {@code m9/SCOPE.md} item 116.
    */
   static final List<Integer> INT_DIVISORS =
       List.of(12, 2, 3, 7, 100, -3, -12, 60, 3600, 196611, Integer.MIN_VALUE);
@@ -191,11 +200,22 @@ final class VarkaProofFiles {
   // -----------------------------------------------------------------------------------------
 
   /**
+   * The odd part of a day's microseconds, {@code 86,400,000,000 = 2^13 * 10,546,875}: the
+   * divisor of the {@code ConstDivide} under {@code CAST(ntz AS DATE)}'s floor division
+   * ({@code VarkaNodeCompiler.floorDivLong}, VARKA-338).
+   */
+  static final long NTZ_DAY_ODD = DateTimeConstants.MICROS_PER_DAY
+      >> Long.numberOfTrailingZeros(DateTimeConstants.MICROS_PER_DAY);
+
+  /**
    * The long-lane constant divisors: every one the {@code TIME} compiler divides by
    * ({@code VarkaTimeCompiler}'s {@code subtractTimes}, {@code timeDiff}, {@code timeTrunc}, the
    * conversions to milliseconds and microseconds, the field extracts and
    * {@code remainderOfSixty}), which are all a long-lane {@code ConstDivide} the compiler builds,
-   * and -60, which takes the sign branch a positive divisor does not.
+   * -60, which takes the sign branch a positive divisor does not, and {@link #NTZ_DAY_ODD}.
+   * {@code VarkaDivisorProofSuite} holds the list to the compiler (VARKA-496): it fails on a
+   * long-lane divisor the coverage rows or the cast matrix compile that is missing here, and on
+   * one here that none compiles, -60 apart.
    */
   static final List<Long> LONG_DIVISORS = List.of(
       DateTimeConstants.NANOS_PER_MICROS,
@@ -205,7 +225,8 @@ final class VarkaProofFiles {
       DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE
           * DateTimeConstants.MINUTES_PER_HOUR,
       (long) DateTimeConstants.SECONDS_PER_MINUTE,
-      -60L);
+      -60L,
+      NTZ_DAY_ODD);
 
   private static final long P52 = 1L << 52;
   private static final long P53 = 1L << 53;
@@ -285,10 +306,60 @@ final class VarkaProofFiles {
       long m = Math.abs(d);
       out.append("\n; d = ").append(d).append("\n");
       conversionExact(out, d, m);
-      conversionBound(out, d, m);
+      // Where the conversion form first goes wrong past 2^53 is a fact about the TIME divisors,
+      // whose dividends reach the bound. The day's odd part is still exact at the dividend the
+      // rule renders - both solvers say so - and its caller states a bound near 2^50.
+      if (d != NTZ_DAY_ODD) {
+        conversionBound(out, d, m);
+      }
       magicExact(out, d, m);
     }
+    floorDivDay(out);
     return out.toString();
+  }
+
+  /**
+   * {@code CAST(ntz AS DATE)}'s floor division by a day's microseconds, as
+   * {@code VarkaNodeCompiler.floorDivLong} builds it (VARKA-338): {@code y = x >> 13}, then
+   * {@code y' = y + ((y >> 63) & (1 - m))} with {@code m} the odd part, then the truncating
+   * {@code y' / m}. Over every long {@code x} it is {@code Math.floorDiv(x, 86.4e9)}, its dividend
+   * {@code y'} is under the bound the compiler states to {@code ConstDivide}, which the checks
+   * above prove the division exact under, and its quotient fits an int, so the narrowing to a
+   * {@code DATE} is exact. The integer identity only: the shift and the AND are the prelude's
+   * Java operators.
+   */
+  private static void floorDivDay(StringBuilder out) {
+    long day = DateTimeConstants.MICROS_PER_DAY;
+    int k = Long.numberOfTrailingZeros(day);
+    long m = NTZ_DAY_ODD;
+    long bound = (1L << (63 - k)) + m;
+    out.append("\n; CAST(ntz AS DATE): floorDiv(x, ").append(day).append(") = (y' / ").append(m)
+        .append("), y = x >> ").append(k).append(", y' = y + ((y >> 63) & ").append(1 - m)
+        .append(")\n");
+    check(out, "a long shifted right by 63 is -1 where it is negative and 0 elsewhere", "unsat",
+        List.of("(declare-const y Int)", "(assert (jlong.in y))",
+            "(assert (not (= (jlong.shr y 63) (ite (< y 0) (- 1) 0))))"));
+    // The AND of -1 or 0 with a constant is the constant or 0: the product below.
+    var steps = List.of("(declare-const x Int)", "(assert (jlong.in x))",
+        "(define-fun y () Int (jlong.shr x " + k + "))",
+        "(define-fun y1 () Int (jlong.add y (* (- (jlong.shr y 63)) " + lit(1 - m) + ")))",
+        "(define-fun q () Int (jlong.div y1 " + m + "))");
+    var identity = new ArrayList<>(steps);
+    identity.add("(assert (not (= q (jlong.floorDiv x " + day + "))))");
+    check(out, "it is Math.floorDiv(x, " + day + ") for every long x", "unsat", identity);
+    var bounded = new ArrayList<>(steps);
+    bounded.add("(assert (not (< (abs y1) " + bound + ")))");
+    check(out, "its dividend y' is under " + bound + ", the bound the compiler states, which is "
+        + "at most 2^52", "unsat", bounded);
+    var fits = new ArrayList<>(steps);
+    fits.add("(assert (not (and (<= " + lit(Long.MIN_VALUE / day - 1) + " q) (<= q "
+        + Long.MAX_VALUE / day + "))))");
+    check(out, "its quotient is a day in [" + (Long.MIN_VALUE / day - 1) + ", "
+        + Long.MAX_VALUE / day + "], which an int holds", "unsat", fits);
+    if (bound > P52) {
+      throw new IllegalStateException("the floor division's dividend bound " + bound
+          + " is past ConstDivide's 2^52");
+    }
   }
 
   /** The conversion form, for every {@code 0 < |v| < 2^53}: one check per quotient binade. */

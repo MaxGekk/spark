@@ -85,7 +85,10 @@ read, built with `ArrowCachedBatchSerializer`), at a fixed row count and two nul
 0.1): a **comparison** (`x < y` as a filter), an **arithmetic chain** of three nodes (`(x + y) *
 z - x`, or for `BOOLEAN` `(a AND b) OR NOT c`), a **cast** (to the type's widest neighbour in the
 matrix: `TINYINT` to `INT`, `TIMESTAMP_NTZ` to `DATE`, `DOUBLE` to `BIGINT`, a decimal to the
-next precision), and a **choice** (`CASE WHEN x < y THEN x ELSE y END`). Each section has two
+next precision, and `DECIMAL(38, 10)`, which has none, down to `DECIMAL(18, 4)`: the one decimal
+cast from 38 that crosses the 18-to-19 boundary, rounding six digits away `ROUND_HALF_UP` as
+Spark does, the baseline of row 364's narrowing cast; owner's decision, 27 October 2026), and a
+**choice** (`CASE WHEN x < y THEN x ELSE y END`). Each section has two
 arms, named so the labels survive the lanes landing: `spark row path (varka off)` and `varka on`.
 The decimal class runs its sections at each of the three precisions, so the 18-to-19 boundary
 the lane pair crosses is in the baseline.

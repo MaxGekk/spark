@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 
 import org.apache.spark.sql.catalyst.expressions.Abs;
 import org.apache.spark.sql.catalyst.expressions.Add;
+import org.apache.spark.sql.catalyst.expressions.BinaryArithmetic;
 import org.apache.spark.sql.catalyst.expressions.BitmapExpressionUtils;
 import org.apache.spark.sql.catalyst.expressions.BitwiseAnd;
 import org.apache.spark.sql.catalyst.expressions.BitwiseCount;
@@ -34,25 +35,46 @@ import org.apache.spark.sql.catalyst.expressions.BitwiseNot;
 import org.apache.spark.sql.catalyst.expressions.BitwiseOr;
 import org.apache.spark.sql.catalyst.expressions.BitwiseXor;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
+import org.apache.spark.sql.catalyst.expressions.CaseWhen;
 import org.apache.spark.sql.catalyst.expressions.Cast;
+import org.apache.spark.sql.catalyst.expressions.Coalesce;
+import org.apache.spark.sql.catalyst.expressions.DivideDTInterval;
+import org.apache.spark.sql.catalyst.expressions.DivideYMInterval;
+import org.apache.spark.sql.catalyst.expressions.EqualNullSafe;
+import org.apache.spark.sql.catalyst.expressions.EqualTo;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.GreaterThan;
+import org.apache.spark.sql.catalyst.expressions.GreaterThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.Greatest;
+import org.apache.spark.sql.catalyst.expressions.If;
+import org.apache.spark.sql.catalyst.expressions.In;
+import org.apache.spark.sql.catalyst.expressions.InSet;
+import org.apache.spark.sql.catalyst.expressions.IsNaN;
+import org.apache.spark.sql.catalyst.expressions.IsNotNull;
+import org.apache.spark.sql.catalyst.expressions.IsNull;
 import org.apache.spark.sql.catalyst.expressions.Least;
+import org.apache.spark.sql.catalyst.expressions.LessThan;
+import org.apache.spark.sql.catalyst.expressions.LessThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.Multiply;
+import org.apache.spark.sql.catalyst.expressions.MultiplyDTInterval;
+import org.apache.spark.sql.catalyst.expressions.MultiplyYMInterval;
+import org.apache.spark.sql.catalyst.expressions.NaNvl;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.ShiftLeft;
 import org.apache.spark.sql.catalyst.expressions.ShiftRight;
 import org.apache.spark.sql.catalyst.expressions.ShiftRightUnsigned;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
+import org.apache.spark.sql.catalyst.expressions.UnaryPositive;
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
@@ -60,6 +82,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -70,11 +93,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
-import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
 
 /**
  * The recursive node compiler of the Varka expression compiler: the chain of families that
@@ -221,6 +240,10 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
+    Optional<String> floating = floatingDecline(expr);
+    if (floating.isPresent()) {
+      return sink.decline(floating.get(), expr);
+    }
     for (Family family : FAMILIES) {
       VarkaFamilyArm arm;
       try {
@@ -298,6 +321,61 @@ final class VarkaNodeCompiler {
     return e instanceof BoundReference || e instanceof Literal;
   }
 
+  /**
+   * Why {@code e} declines because it reads or makes a {@code FLOAT} or {@code DOUBLE} value
+   * that no lowering serves yet, or empty. The floating lanes serve two kinds of node. Some move
+   * a value's bits - a column, a literal, a null test and the choices, {@code IF},
+   * {@code CASE WHEN} and {@code coalesce} - and answer the same bits whatever the value means.
+   * The others order values - the comparisons, {@code <=>}, {@code greatest}, {@code least},
+   * {@code IN}, {@code isnan} and {@code nanvl} - and are lowered in Spark's order, in which NaN
+   * equals NaN and is greater than every other value and {@code -0.0} equals {@code 0.0}, not
+   * the vector compare's or {@code max}'s. Arithmetic and the casts are rows of their own. So
+   * the list is of what is served, not of what is refused, and a node no one has thought of
+   * declines. Both compile entries ask it before any arm claims, so no arm sees a floating
+   * operand it was not written for. A {@link RuntimeReplaceable} passes, to be asked again as its
+   * replacement.
+   */
+  static Optional<String> floatingDecline(Expression e) {
+    if (!touchesFloating(e) || e instanceof BoundReference || e instanceof Literal
+        || e instanceof If || e instanceof CaseWhen || e instanceof Coalesce
+        || e instanceof IsNull || e instanceof IsNotNull || e instanceof RuntimeReplaceable
+        // The six comparisons by name rather than as BinaryComparison, so that a comparison
+        // class Spark adds later declines until someone has written its lowering.
+        || e instanceof EqualTo || e instanceof EqualNullSafe || e instanceof LessThan
+        || e instanceof LessThanOrEqual || e instanceof GreaterThan
+        || e instanceof GreaterThanOrEqual || e instanceof Greatest || e instanceof Least
+        || e instanceof In || e instanceof InSet || e instanceof IsNaN || e instanceof NaNvl) {
+      return Optional.empty();
+    }
+    String what = switch (e) {
+      case Cast _ -> "a cast to or from a floating type (row 343)";
+      // The interval products and quotients by a floating factor are arithmetic too.
+      case BinaryArithmetic _, UnaryMinus _, UnaryPositive _, Abs _, MultiplyYMInterval _,
+          DivideYMInterval _, MultiplyDTInterval _, DivideDTInterval _ ->
+          "floating arithmetic (row 342)";
+      default -> "an operation over floating values that no floating lowering serves";
+    };
+    return Optional.of(what);
+  }
+
+  /** Whether {@code e} or one of its operands is of a floating type. */
+  private static boolean touchesFloating(Expression e) {
+    if (isFloating(e.dataType())) {
+      return true;
+    }
+    var children = e.children().iterator();
+    while (children.hasNext()) {
+      if (isFloating(children.next().dataType())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isFloating(org.apache.spark.sql.types.DataType t) {
+    return DataTypes.FloatType.equals(t) || DataTypes.DoubleType.equals(t);
+  }
+
   /** The chain, for the suite that holds no node is claimed twice. */
   static List<Family> families() {
     return FAMILIES;
@@ -325,9 +403,10 @@ final class VarkaNodeCompiler {
   }
 
   /**
-   * The column leaves: a date column, a date literal, the identity date cast, and the narrow ones
-   * (a bare {@code tinyint} or {@code smallint} column and its literal, VARKA-329). First in the
-   * chain, ahead of every family.
+   * The column leaves: a date column, a date literal, the identity date cast, the narrow ones
+   * (a bare {@code tinyint} or {@code smallint} column and its literal, VARKA-329) and the
+   * floating ones (a bare {@code float} or {@code double} column and its literal, VARKA-341).
+   * First in the chain, ahead of every family.
    */
   private static VarkaFamilyArm leafArm(
       Expression e,
@@ -345,6 +424,19 @@ final class VarkaNodeCompiler {
           () -> Optional.of(columnRef(br, inputs, LaneType.BYTE));
       case BoundReference br when DataTypes.ShortType.equals(br.dataType()) ->
           () -> Optional.of(columnRef(br, inputs, LaneType.SHORT));
+      // A floating column is read at its own lane (VARKA-341), and a floating literal is its
+      // bits in the table of its width: a float's in the int table, a double's in the long one,
+      // which the emitter reinterprets where it broadcasts the literal.
+      case BoundReference br when DataTypes.FloatType.equals(br.dataType()) ->
+          () -> Optional.of(columnRef(br, inputs, LaneType.FLOAT));
+      case BoundReference br when DataTypes.DoubleType.equals(br.dataType()) ->
+          () -> Optional.of(columnRef(br, inputs, LaneType.DOUBLE));
+      case Literal l when l.value() instanceof Float f
+          && DataTypes.FloatType.equals(l.dataType()) ->
+          () -> Optional.of(slot(Float.floatToRawIntBits(f), LaneType.FLOAT, literals));
+      case Literal l when l.value() instanceof Double d
+          && DataTypes.DoubleType.equals(l.dataType()) ->
+          () -> Optional.of(sink.longSlot(Double.doubleToRawLongBits(d), LaneType.DOUBLE));
       // A narrow literal's value fits an int exactly, so it takes a slot in the same
       // per-distinct-value table, on the narrow lane the comparison with a column needs.
       case Literal l when l.value() instanceof Byte b && DataTypes.ByteType.equals(l.dataType()) ->
@@ -425,6 +517,15 @@ final class VarkaNodeCompiler {
       case Cast c when DataTypes.LongType.equals(c.dataType()) && isInt(c.child()) ->
           () -> intOperand(c.child(), inputs, literals, sink)
               .map(x -> (VarkaVectorIR) new WidenLane(x));
+      // The casts between DATE and TIMESTAMP_NTZ (VARKA-338), and with them the coercion that
+      // makes `d < ntz` a comparison of `CAST(d AS TIMESTAMP_NTZ)` with the NTZ value. Neither
+      // reads the session zone: Spark converts at UTC both ways. The identity cast is its child.
+      case Cast c when isNtz(c) && DataTypes.DateType.equals(c.child().dataType()) ->
+          () -> ntzOfDate(c, inputs, literals, sink);
+      case Cast c when DataTypes.DateType.equals(c.dataType()) && isNtz(c.child()) ->
+          () -> dateOfNtz(c, inputs, literals, sink);
+      case Cast c when isNtz(c) && isNtz(c.child()) ->
+          () -> compileNode(c.child(), inputs, literals, sink);
       // A narrow value promoted to the int lane, which is what Catalyst's coercion inserts where
       // a TINYINT or SMALLINT meets an int - `greatest(y1, y2) < i` arrives as
       // `CAST(greatest(y1, y2) AS INT) < i`, and `y1 + i` as an int add of the cast (VARKA-329).
@@ -446,7 +547,7 @@ final class VarkaNodeCompiler {
       // try_negative here either, so the mode is WRAP or FAIL; ANSI always keeps the check,
       // since a narrow column's range contains the minimum that overflows.
       case UnaryMinus n when isNarrow(n) -> () -> narrowOperand(
-          n.child(), laneOf(n.dataType()).orElseThrow(), inputs, literals, sink)
+          n.child(), VarkaTypes.lane(n.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               n.failOnError() ? Overflow.FAIL : Overflow.WRAP, x));
       // `abs` over a narrow lane is the negation's node with its `abs` flag: Spark's
@@ -454,7 +555,7 @@ final class VarkaNodeCompiler {
       // is `-128Y` there. Its one overflowing input is the negation's, the lane's minimum, so
       // under ANSI the check is the negation's too. There is no try_abs in Spark.
       case Abs a when isNarrow(a) -> () -> narrowOperand(
-          a.child(), laneOf(a.dataType()).orElseThrow(), inputs, literals, sink)
+          a.child(), VarkaTypes.lane(a.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               a.failOnError() ? Overflow.FAIL : Overflow.WRAP, x, true));
       // The bitwise family (VARKA-335): one lane-wise operation at the operand's width, which
@@ -618,6 +719,96 @@ final class VarkaNodeCompiler {
     });
   }
 
+  /** Microseconds in a day: a {@code DATE}'s unit in a {@code TIMESTAMP_NTZ}'s. */
+  private static final long MICROS_PER_DAY = 86_400_000_000L;
+
+  /**
+   * The last day whose midnight is a long count of microseconds, and so the bound of the days
+   * {@code CAST(d AS TIMESTAMP_NTZ)} converts without overflow: {@code Long.MAX_VALUE / 86.4e9}.
+   */
+  private static final long LAST_NTZ_DAY = Long.MAX_VALUE / MICROS_PER_DAY;
+
+  /**
+   * {@code CAST(d AS TIMESTAMP_NTZ)}: the day widened to the long lane and multiplied by the
+   * microseconds of a day, which is Spark's {@code daysToMicros(d, UTC)}. Spark computes it with
+   * {@code Math.multiplyExact} in every evaluation mode, so a day past {@link #LAST_NTZ_DAY}
+   * raises under LEGACY and ANSI and is null under TRY ({@code try_cast} catches the throw), and
+   * so does one before {@code -LAST_NTZ_DAY}. The long lane has no checked multiply, so the day is
+   * guarded instead: a batch holding a live day outside the bound goes to the row engine, which
+   * raises or nulls on that row, and inside it the wrapping multiply is exact. Under TRY that is a
+   * correct answer computed slower.
+   */
+  private static Optional<VarkaVectorIR> ntzOfDate(
+      Cast c,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    return compileNode(c.child(), inputs, literals, sink).flatMap(d -> {
+      if (d.laneType() != LaneType.INT) {
+        return sink.decline("a date operand that is not on the int lane", c);
+      }
+      VarkaVectorIR day = new GuardedRange(new WidenLane(d), -LAST_NTZ_DAY, LAST_NTZ_DAY);
+      return Optional.of((VarkaVectorIR) new IntArith(IntOp.MUL, Overflow.WRAP, day,
+          sink.longSlot(MICROS_PER_DAY)));
+    });
+  }
+
+  /**
+   * {@code CAST(ntz AS DATE)}: the UTC date of the microsecond count, Spark's
+   * {@code microsToDays(t, UTC)}, which is {@code floorDiv(t, 86.4e9)} ({@link #floorDivLong}).
+   * Every quotient is a day in {@code [-106,751,992, 106,751,991]}, so the narrowing to the int
+   * lane is exact, and the cast cannot fail in any mode.
+   */
+  private static Optional<VarkaVectorIR> dateOfNtz(
+      Cast c,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    return compileNode(c.child(), inputs, literals, sink).flatMap(t -> {
+      if (t.laneType() != LaneType.LONG) {
+        return sink.decline("a timestamp_ntz operand that is not on the long lane", c);
+      }
+      return Optional.of((VarkaVectorIR) new NarrowLane(floorDivLong(t, MICROS_PER_DAY, sink)));
+    });
+  }
+
+  /**
+   * {@code Math.floorDiv(x, divisor)} over every long {@code x}, for a positive even divisor: a
+   * power of two is the shift alone, and any other needs its odd part to keep the shifted dividend
+   * inside {@link ConstDivide}'s exact range (`VARKA-338.md`
+   * 2.3, `long_divide.smt2`). The divisor is {@code 2^k * m} with {@code m} odd: an arithmetic
+   * shift right by {@code k} is the floor division by {@code 2^k} and leaves a magnitude of at
+   * most {@code 2^(63 - k)}; a negative value is then moved down by {@code m - 1}, so that the
+   * truncating {@code ConstDivide} by {@code m} floors; and two floor divisions by positive
+   * integers are one, by their product. {@code 86,400,000,000 = 2^13 * 10,546,875}, whose shifted
+   * magnitude is under {@code 2^50 + 2^24}. An odd divisor is refused: unshifted, the dividend
+   * is every long, past that range.
+   */
+  static VarkaVectorIR floorDivLong(VarkaVectorIR x, long divisor, DeclineSink sink) {
+    if (divisor <= 0 || (divisor & 1) == 1) {
+      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
+          + ": the divisor must be positive and even");
+    }
+    int k = Long.numberOfTrailingZeros(divisor);
+    long odd = divisor >> k;
+    VarkaVectorIR y = new BitOp(BitOpKind.SHR, x, sink.longSlot(k));
+    if (odd == 1) {
+      return y;
+    }
+    long bound = (1L << (63 - k)) + odd;
+    if (bound > ConstDivide.EXACT_DIVIDEND_BOUND) {
+      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
+          + ": its odd part leaves the shifted dividend past the exact range");
+    }
+    VarkaVectorIR down = new BitOp(BitOpKind.AND, new BitOp(BitOpKind.SHR, y, sink.longSlot(63)),
+        sink.longSlot(1 - odd));
+    return new ConstDivide(new IntArith(IntOp.ADD, Overflow.WRAP, y, down), odd, bound);
+  }
+
+  private static boolean isNtz(Expression e) {
+    return DataTypes.TimestampNTZType.equals(e.dataType());
+  }
+
   private static VarkaVectorIR greatest(VarkaVectorIR left, VarkaVectorIR right) {
     return new VarkaVectorIR.Greatest(left, right);
   }
@@ -636,7 +827,7 @@ final class VarkaNodeCompiler {
    * sixteen bits rather than at the int lane's thirty-two.
    */
   private static boolean isNarrow(Expression e) {
-    return laneOf(e.dataType()).filter(LaneType::isNarrow).isPresent();
+    return VarkaTypes.lane(e.dataType()).filter(LaneType::isNarrow).isPresent();
   }
 
   /**
@@ -649,10 +840,13 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    // A column of any other type: eligible to be forwarded as a whole entry, never to be read by
-    // the int32 lanes of a kernel.
+    // A column no arm read: eligible to be forwarded as a whole entry. A type the registry holds
+    // and no lane reads names its type and why - the row that builds an owed one, the decision
+    // for a declined one (VARKA-494); any other column, an int one in a position that takes no
+    // bare int among them, keeps the general reason.
     if (e instanceof BoundReference br) {
-      return sink.decline("non-date column of type " + br.dataType().simpleString(), br);
+      return sink.decline(VarkaTypes.declineReason(br.dataType())
+          .orElse("non-date column of type " + br.dataType().simpleString()), br);
     }
     // Defensive: a real query never carries an unreplaced RuntimeReplaceable this far (the
     // optimizer's ReplaceExpressions runs long before physical planning), but hand-built
@@ -661,38 +855,6 @@ final class VarkaNodeCompiler {
       return compileNode(r.replacement(), inputs, literals, sink);
     }
     return sink.decline("unsupported expression", e);
-  }
-
-  /**
-   * The lane a Spark type's values occupy in a kernel, or empty for a type no kernel reads. The
-   * int side is what the leaf arms admit - a date, an int and a year-month interval are all one
-   * 32-bit lane - and the long side is milestone 5's: {@code bigint}, {@code TIME} (nanoseconds
-   * of day) and a day-time interval (microseconds) are one 64-bit lane ({@code VARKA-29.md} 3.1).
-   * The two timestamp types are that lane physically and are deliberately absent. The narrow
-   * lanes are milestone 8's ({@code VARKA-329.md} 2.2): a {@code tinyint} is one byte a row and a
-   * {@code smallint} two, each read as its own lane and widened to the int lane for computation.
-   */
-  static Optional<LaneType> laneOf(DataType dataType) {
-    if (DataTypes.ByteType.equals(dataType)) {
-      return Optional.of(LaneType.BYTE);
-    }
-    if (DataTypes.ShortType.equals(dataType)) {
-      return Optional.of(LaneType.SHORT);
-    }
-    if (DataTypes.IntegerType.equals(dataType) || DataTypes.DateType.equals(dataType)
-        || dataType instanceof YearMonthIntervalType) {
-      return Optional.of(LaneType.INT);
-    }
-    if (DataTypes.LongType.equals(dataType) || dataType instanceof TimeType
-        || dataType instanceof DayTimeIntervalType) {
-      return Optional.of(LaneType.LONG);
-    }
-    return Optional.empty();
-  }
-
-  /** Whether {@code dataType} is one of the types the 64-bit lane carries. */
-  static boolean onLongLane(DataType dataType) {
-    return laneOf(dataType).filter(lane -> lane == LaneType.LONG).isPresent();
   }
 
   /**
@@ -889,7 +1051,7 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    LaneType lane = laneOf(whole.dataType()).orElseThrow();
+    LaneType lane = VarkaTypes.lane(whole.dataType()).orElseThrow();
     int mark = literals.size();
     Optional<VarkaVectorIR> x = narrowOperand(l, lane, inputs, literals, sink);
     if (x.isEmpty()) {
@@ -926,13 +1088,15 @@ final class VarkaNodeCompiler {
    * has no cheap overflow test for {@code *}, so one that keeps its check declines and
    * {@code literals} is rolled back to {@code mark} so a declining entry leaves no slot behind.
    *
-   * <p>A narrow node keeps the mode it was given ({@code VARKA-329.md} 2.1, review 9.1). The
-   * proof {@link #cannotOverflow} runs is against the int32 range, and two narrow operands always
-   * satisfy it, so rewriting their {@code FAIL} to {@code WRAP} would turn `127Y + 1Y` under ANSI
-   * into a silent wrap. Their bound is the node lane's own, and it is the emitter that applies it:
-   * the narrowed arm's range compare, or the native arm's saturating difference
-   * ({@code VARKA-329.md} 4.2, 4.3). A narrow multiply therefore never declines for overflow
-   * either, its product being exact at the int lane.
+   * <p>A narrow node keeps the mode it was given ({@code VARKA-329.md} 2.1, review 9.1): the
+   * proof {@link #cannotOverflow} runs asks the range of the candidate node, which is on the
+   * operands' narrow lane, and the range analysis does not range narrow arithmetic, so the proof
+   * fails and a checked narrow operation keeps its check. Its bound is the node lane's own, and it
+   * is the emitter that applies it: the narrowed arm's range compare, or the native arm's
+   * saturating difference ({@code VARKA-329.md} 4.2, 4.3). Were narrow arithmetic ranged, the int32
+   * proof would hold for every narrow pair and turn `127Y + 1Y` under ANSI into a silent wrap;
+   * {@code VarkaEmitterNarrowArithSuite} pins that it raises. A narrow multiply never declines for
+   * overflow either, its product being exact at the int lane.
    */
   static Optional<VarkaVectorIR> arithOver(
       IntOp op,
@@ -949,8 +1113,7 @@ final class VarkaNodeCompiler {
           + y.laneType() + " lanes", whole);
     }
     boolean narrow = x.laneType().isNarrow();
-    Overflow overflow = !narrow && declared != Overflow.WRAP
-        && cannotOverflow(op, x, y, literals, sink)
+    Overflow overflow = declared != Overflow.WRAP && cannotOverflow(op, x, y, literals, sink)
         ? Overflow.WRAP
         : declared;
     if (op == IntOp.MUL && overflow != Overflow.WRAP && !narrow) {
@@ -978,6 +1141,16 @@ final class VarkaNodeCompiler {
    */
   static LiteralSlot slot(int value, LaneType lane, VarkaSlotTable literals) {
     return new LiteralSlot(literals.intern(value), lane);
+  }
+
+  /** The quiet NaN as a literal of a floating lane: its bits in the table of the lane's width. */
+  static LiteralSlot nanSlot(LaneType lane, VarkaSlotTable literals, DeclineSink sink) {
+    return switch (lane) {
+      case FLOAT -> slot(Float.floatToRawIntBits(Float.NaN), LaneType.FLOAT, literals);
+      case DOUBLE -> sink.longSlot(Double.doubleToRawLongBits(Double.NaN), LaneType.DOUBLE);
+      case BYTE, SHORT, INT, LONG -> throw VarkaErrors.illegalArgument(
+          "no NaN on the integral lane " + lane);
+    };
   }
 
   /**

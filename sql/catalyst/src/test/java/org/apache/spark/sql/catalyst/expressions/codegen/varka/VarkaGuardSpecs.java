@@ -291,6 +291,10 @@ public final class VarkaGuardSpecs {
       case SHORT -> pair(Short.MIN_VALUE, Short.MAX_VALUE);
       case INT -> pair(Integer.MIN_VALUE, Integer.MAX_VALUE);
       case LONG -> pair(Long.MIN_VALUE, Long.MAX_VALUE);
+      // A floating node overflows to an infinity, not past a range, and no checked floating
+      // node exists before VARKA-342.
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException(
+          "an integer range at a floating lane (" + lane + ")");
     };
   }
 

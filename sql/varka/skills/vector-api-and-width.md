@@ -528,6 +528,12 @@ bytes a row for the laptop.
 | math | double | `ATAN2`, `HYPOT` | I | I | I | 345, 356 to 358 |
 | unsigned long compares | long | `ULT`, `UGT`, `ULE`, `UGE` | I | I | F | 359, 360 |
 | de-interleave | long | `rearrange2`, `selectFrom`, `compress` | I | I | F | 347, 359 |
+| de-interleave, from decimal slots | long | `dec_rearrange`, `dec_compress` (with its `unslice` splice), `dec_tail` (masked loads and store) | I | I | F | 347 |
+| de-interleave, from decimal slots | long | `dec_selectFrom2` (the two-vector `selectFrom`) | I | I | I | 347 |
+| de-interleave, from decimal slots | int | `dec_int_splice` (two de-interleaves, `L2I` parts 0 and -1, `or`) | I | I | F | 347 |
+| decimal check | long | `dec_check_rearrange`, `dec_check_compress`, `dec_check_offset`, and the masked `dec_check_rearrange_masked`, `dec_check_offset_masked` | I | I | F | 347 |
+| long lanewise | long | `NE`, `GT`, `LT` | I | I | F | 347 |
+| long lanewise | long | `ASHR` | I | I | I | 347 |
 | masks | byte | `fromLong`, `toLong` | I | I | I | 331, 375, 27 |
 | masks | int | `fromLong`, `toLong` | I | I | I | 331, 375, 27 |
 | masks | long | `fromLong`, `toLong` | I | I | F | 331, 375, 27 |
@@ -557,12 +563,20 @@ What it says on the laptop (AMD Ryzen AI 9 HX PRO 370, JDK 25.0.4.1):
   load beside a full compare in either order, both in one loop) read `I` at 512 and 256 bits. The
   box of the section above needs more than a second species in the JVM; a planted escaping vector
   reads `I+A` at 6 bytes a row in the suite's self-test, so the allocation reading can see a box.
-* **Thirteen of the 128-bit column's fourteen `F` cells are the 64-bit lane at two lanes** (the
-  fourteenth is `POW`): `m7` row 374's finding, that x86 C2 lowers no two-lane mask, now read per
-  operator. Every compare that makes a
-  mask, `compress`, `selectFrom`, the two-vector `rearrange`, `fromLong` and `toLong` on longs, and
-  the double compares and `IS_NAN`, are the Java fallback there and allocate 68 to 220 bytes a row;
-  the byte and int versions of the same operators are intrinsic.
+* **Thirteen of the fourteen `F` cells row 376 found at 128 bits are the 64-bit lane at two
+  lanes** (the fourteenth is `POW`): `m7` row 374's finding, that x86 C2 lowers no two-lane
+  mask, now read per operator. Every compare that makes a mask, `compress`, `selectFrom`, the
+  two-vector `rearrange`, `fromLong` and `toLong` on longs, and the double compares and
+  `IS_NAN`, are the Java fallback there and allocate 68 to 220 bytes a row; the byte and int
+  versions of the same operators are intrinsic.
+* **The decimal load reads as the array cells did** (VARKA-347 step 2, 27 October 2026): every
+  form of `VARKA-347.md` 2.2, read from sixteen-byte slots in native memory with its check, is
+  `I` at 512 and 256 bits, and at 128 bits each is the two-lane fallback, 220 to 672 bytes a row,
+  except the two-vector `selectFrom`, which `x86.ad` matches as one instruction on an AVX-512VL
+  CPU at any width. An `I` for that operator does not say native: where the CPU has no
+  `SelectFromTwoVector`, C2 lowers it inside the intrinsic to two rearranges and a blend
+  (`vectorIntrinsics.cpp`), so only the assembly tells the two apart. The segment cells' one
+  allocation is the segment each call maps, under a tenth of a byte a row.
 * **`POW` has no vector stub below 512 bits**: the loop never reaches `libraryBinaryOp`, so the
   Java fallback runs at 256 and 128 (40 and 56 bytes a row). The other math operators, `ATAN2` and `HYPOT` among them, reach
   their library calls at every width.

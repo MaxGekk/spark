@@ -207,7 +207,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           lane.loadScalar(cb, s.scalarArgs(lane)[l.index()]);
-          lane.narrowScalar(cb);
+          lane.literalScalar(cb);
           cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
         }
       }
@@ -697,13 +697,13 @@ final class VarkaVectorWalk {
     cb.aload(a);
     cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? r : b);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
     cb.getstatic(VECTOR_OPERATORS, "AND", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? b : a);
     cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(r);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
     lane.pushScalar(cb, 0);
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
@@ -745,7 +745,7 @@ final class VarkaVectorWalk {
       cb.aload(b);
       cb.getstatic(VECTOR_OPERATORS, n.op() == IntOp.ADD ? "SADD" : "SSUB", VO_BINARY);
       cb.swap();
-      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+      cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
       cb.aload(r);
       cb.getstatic(VECTOR_OPERATORS, "NE", VO_COMPARISON);
       cb.swap();
@@ -771,19 +771,18 @@ final class VarkaVectorWalk {
     }
     cb.getstatic(VECTOR_OPERATORS, "LSHL", VO_BINARY);
     cb.loadConstant(shift);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
     cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
     cb.loadConstant(shift);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
   }
 
   /**
-   * {@code IntNeg}, emitted on the int and long lanes as a multiply by -1, and on a narrow node as
-   * the lanewise {@code NEG}: the two agree on every lane, {@link Integer#MIN_VALUE} included,
-   * where both return the input. A narrow node takes {@code NEG} because x86 has no byte
-   * multiply, so a {@code ByteVector} multiply is an eight-instruction sequence where {@code NEG}
-   * is one subtract from zero; whether the int and long lanes gain from it too is unmeasured, and
-   * their emitted bytes stay as they are until it is. That single value
+   * {@code IntNeg}, emitted as the lanewise {@code NEG}, one subtract from zero, on every lane: a
+   * multiply by -1 agrees with it on every lane, the lane's minimum ({@link Integer#MIN_VALUE},
+   * {@link Long#MIN_VALUE}) included, where both return the input, but costs a multiply - eight
+   * instructions on x86's byte lanes, which have no byte multiply, and an emulated sequence on an
+   * AVX2 host's long lane, which has no 64-bit multiply. The overflowing value, the lane's minimum,
    * is the whole of the overflow test, so the check is one compare rather than the four ops
    * {@link #emitIntArith} needs, and it reads the operand rather than the result - no scratch slot
    * at all.
@@ -811,15 +810,11 @@ final class VarkaVectorWalk {
       cb.invokevirtual(lane.vector, "compare", lane.compareVI);
       emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
-    if (n.laneType().isNarrow()) {
-      cb.getstatic(VECTOR_OPERATORS, n.abs() ? "ABS" : "NEG", VO_UNARY);
-      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
-    } else if (n.abs()) {
+    if (n.abs() && !n.laneType().isNarrow()) {
       throw VarkaErrors.illegalArgument("abs is a narrow lane's node only: " + n);
-    } else {
-      lane.pushScalar(cb, -1);
-      cb.invokevirtual(lane.vector, "mul", lane.lanewiseVI);
     }
+    cb.getstatic(VECTOR_OPERATORS, n.abs() ? "ABS" : "NEG", VO_UNARY);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseUnary());
     if (n.laneType().isNarrow() && analysis.wrapAt.contains(n)) {
       emitWrapToNarrow(cb, lane, n.laneType());
     }
@@ -850,7 +845,7 @@ final class VarkaVectorWalk {
     // [left, right, op] -> [left, op, right], the receiver's argument order.
     cb.swap();
     Lane lane = analysis.laneOf(n);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
     if (!dense && s.ownWord.contains(n)) {
       emitAndWord(cb, s, s.wordRef.get(n), s.wordRef.get(n.left()), s.wordRef.get(n.right()));
     }
@@ -870,16 +865,17 @@ final class VarkaVectorWalk {
     Lane lane = analysis.laneOf(n);
     if (lane == Lane.LONG) {
       cb.getstatic(VECTOR_OPERATORS, "BIT_COUNT", VO_UNARY);
-      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
+      cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseUnary());
       return;
     }
     cb.dup();                                                       // [x, x]
     cb.getstatic(VECTOR_OPERATORS, "BIT_COUNT", VO_UNARY);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);  // [x, pop32(x)]
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseUnary());  // [x, pop32(x)]
     cb.swap();                                                      // [pop32(x), x]
     cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
     cb.loadConstant(Integer.SIZE - 1);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);  // [pop32(x), x >> 31]
+    // [pop32(x), x >> 31]
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
     cb.loadConstant(Integer.SIZE);
     cb.invokevirtual(lane.vector, "and", lane.lanewiseVI);          // [pop32(x), high]
     cb.invokevirtual(lane.vector, "add", lane.lanewiseVV);
@@ -1236,14 +1232,14 @@ final class VarkaVectorWalk {
       VarkaVectorIR right, String op, boolean dense, Analysis analysis, Slots s,
       Set<VarkaVectorIR> computed) {
     Lane lane = analysis.laneOf(node);
+    int[] tmp = s.pairTmp.get(node);
     if (dense) {
       emitValue(cb, left, dense, analysis, s, computed);
       emitValue(cb, right, dense, analysis, s, computed);
       line(cb, analysis, node);
-      cb.invokevirtual(lane.vector, op, lane.lanewiseVV);
+      emitPickOp(cb, lane, op, tmp);
       return;
     }
-    int[] tmp = s.pairTmp.get(node);
     emitValue(cb, left, dense, analysis, s, computed);
     cb.astore(tmp[0]);
     emitValue(cb, right, dense, analysis, s, computed);
@@ -1265,7 +1261,7 @@ final class VarkaVectorWalk {
     cb.lxor();
     emitMaskOfWord(cb, analysis);
     cb.invokevirtual(lane.vector, "blend", lane.blend);
-    cb.invokevirtual(lane.vector, op, lane.lanewiseVV);
+    emitPickOp(cb, lane, op, tmp);
     if (s.ownWord.contains(node)) {
       loadWord(cb, s, s.wordRef.get(left));
       loadWord(cb, s, s.wordRef.get(right));
@@ -1370,12 +1366,123 @@ final class VarkaVectorWalk {
   private static void emitLaneCompare(CodeBuilder cb, String op, VarkaVectorIR left,
       VarkaVectorIR right, Cond node, boolean dense, Analysis analysis, Slots s,
       Set<VarkaVectorIR> computed) {
+    Lane lane = analysis.laneOf(node);
+    if (lane.laneType.isFloating()) {
+      int[] tmp = s.pairTmp.get(node);
+      emitValue(cb, left, dense, analysis, s, computed);
+      cb.astore(tmp[0]);
+      emitValue(cb, right, dense, analysis, s, computed);
+      cb.astore(tmp[1]);
+      line(cb, analysis, node);
+      emitFloatingCompare(cb, lane, op, tmp[0], tmp[1]);
+      return;
+    }
     emitValue(cb, left, dense, analysis, s, computed);
     cb.getstatic(VECTOR_OPERATORS, op, VO_COMPARISON);
     emitValue(cb, right, dense, analysis, s, computed);
     line(cb, analysis, node);
-    Lane lane = analysis.laneOf(node);
     cb.invokevirtual(lane.vector, "compare", lane.compareVV);
+  }
+
+  /**
+   * Leaves the mask of {@code l op r} in Spark's floating order, the operands in the locals
+   * {@code l} and {@code r}. Spark's order is IEEE's compare with NaN placed
+   * ({@code SQLOrderingUtil.compareDoubles}): NaN equals NaN and is greater than every other
+   * value, and {@code -0.0} equals {@code 0.0}, which IEEE's {@code ==} already says. So each
+   * operator is the IEEE compare corrected for NaN alone:
+   * <ul>
+   *   <li>{@code l = r} is {@code (isNaN(l) & isNaN(r)) | l == r};
+   *   <li>{@code l < r} is {@code !(isNaN(l) | l >= r)}: a NaN {@code l} is less than nothing,
+   *       and a NaN {@code r} with an ordinary {@code l} fails {@code l >= r}, so it is true;
+   *   <li>{@code l <= r} is {@code isNaN(r) | l <= r};
+   *   <li>{@code >} and {@code >=} are {@code <} and {@code <=} with the operands swapped, and
+   *       {@code <>} is the negation of {@code =}.
+   * </ul>
+   * The comparison stays one null-intolerant node: its validity is both operands', as at every
+   * lane, which composing it from null tests and connectives would not keep.
+   */
+  private static void emitFloatingCompare(CodeBuilder cb, Lane lane, String op, int l, int r) {
+    switch (op) {
+      case "EQ", "NE" -> {
+        emitIsNaN(cb, lane, l);
+        emitIsNaN(cb, lane, r);
+        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+        emitIeeeCompare(cb, lane, "EQ", l, r);
+        cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+        if (op.equals("NE")) {
+          cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+        }
+      }
+      case "LT" -> emitFloatingLess(cb, lane, l, r);
+      case "GT" -> emitFloatingLess(cb, lane, r, l);
+      case "LE" -> emitFloatingLessOrEqual(cb, lane, l, r);
+      case "GE" -> emitFloatingLessOrEqual(cb, lane, r, l);
+      default -> throw VarkaErrors.illegalArgument("no floating comparison " + op);
+    }
+  }
+
+  /** {@code !(isNaN(l) | l >= r)}: Spark's {@code l < r}. */
+  private static void emitFloatingLess(CodeBuilder cb, Lane lane, int l, int r) {
+    emitIsNaN(cb, lane, l);
+    emitIeeeCompare(cb, lane, "GE", l, r);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+  }
+
+  /** {@code isNaN(r) | l <= r}: Spark's {@code l <= r}. */
+  private static void emitFloatingLessOrEqual(CodeBuilder cb, Lane lane, int l, int r) {
+    emitIsNaN(cb, lane, r);
+    emitIeeeCompare(cb, lane, "LE", l, r);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+  }
+
+  /** The IEEE compare {@code l op r} of two vector locals, NaN unordered. */
+  private static void emitIeeeCompare(CodeBuilder cb, Lane lane, String op, int l, int r) {
+    cb.aload(l);
+    cb.getstatic(VECTOR_OPERATORS, op, VO_COMPARISON);
+    cb.aload(r);
+    cb.invokevirtual(lane.vector, "compare", lane.compareVV);
+  }
+
+  /** The lanes of a vector local that hold a NaN. */
+  private static void emitIsNaN(CodeBuilder cb, Lane lane, int v) {
+    cb.aload(v);
+    cb.getstatic(VECTOR_OPERATORS, "IS_NAN", VO_TEST);
+    cb.invokevirtual(lane.vector, "test", VECTOR_TEST);
+  }
+
+  /**
+   * The pick of the two values on the stack: the vector {@code max} or {@code min} at an integral
+   * lane, and at a floating lane Spark's order through {@link #emitFloatingPick}, which parks
+   * the values in the node's two temporary locals ({@code tmp}, free again by then).
+   */
+  private static void emitPickOp(CodeBuilder cb, Lane lane, String op, int[] tmp) {
+    if (lane.laneType.isFloating()) {
+      emitFloatingPick(cb, lane, op.equals("max"), tmp[0], tmp[1]);
+    } else {
+      cb.invokevirtual(lane.vector, op, lane.lanewiseVV);
+    }
+  }
+
+  /**
+   * Replaces the two values on the stack, {@code x} under {@code y}, with Spark's
+   * {@code greatest(x, y)} or {@code least(x, y)} at a floating lane: {@code y} where it is
+   * greater (or less) than {@code x} in Spark's order, and {@code x} otherwise, so the first of
+   * two equal operands is kept, as {@code Greatest.eval} keeps it. The vector {@code max} and
+   * {@code min} answer IEEE's question instead, which differs on NaN and on the two zeros.
+   */
+  private static void emitFloatingPick(CodeBuilder cb, Lane lane, boolean greatest, int x,
+      int y) {
+    cb.astore(y);
+    cb.astore(x);
+    cb.aload(x);
+    cb.aload(y);
+    if (greatest) {
+      emitFloatingLess(cb, lane, x, y);
+    } else {
+      emitFloatingLess(cb, lane, y, x);
+    }
+    cb.invokevirtual(lane.vector, "blend", lane.blend);
   }
 
   /** Leaves this lane group's data bits of a boolean column: one long, lane 0 in bit 0. */

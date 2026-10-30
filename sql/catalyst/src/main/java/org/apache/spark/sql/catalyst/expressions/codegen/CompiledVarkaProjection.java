@@ -87,8 +87,8 @@ public record CompiledVarkaProjection(
         int stored = switch (root.laneType()) {
           case BYTE -> 1;
           case SHORT -> 2;
-          case INT -> 4;
-          case LONG -> 8;
+          case INT, FLOAT -> 4;
+          case LONG, DOUBLE -> 8;
         };
         if (stored != outputTypes.get(i).defaultSize()) {
           throw VarkaErrors.illegalArgument("output " + i + " is stored " + stored
@@ -116,9 +116,12 @@ public record CompiledVarkaProjection(
     return plan.drive();
   }
 
-  /** Whether a plan drives its kernel at the long lane; a refused one drives at none. */
+  /**
+   * Whether a plan drives its kernel at a 64-bit lane, the long or the {@code DOUBLE} one, whose
+   * {@code run} takes the long table; a refused one drives at none.
+   */
   private static boolean drivesLong(VarkaKernelPlan plan) {
-    return plan.refusal().isEmpty() && plan.drive() == LaneType.LONG;
+    return plan.refusal().isEmpty() && plan.drive().bits() == Long.SIZE;
   }
 
   /**

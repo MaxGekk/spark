@@ -6,100 +6,100 @@ OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 16384 rows - both arms in L2:                          Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      0              0           0      28693.5           0.0       1.0X
-a column, copied, int64 lanes                                      0              0           0      15283.6           0.1       0.5X
-column + literal, wrapping, int32 lanes                            0              0           0      29205.0           0.0       1.0X
-column + literal, wrapping, int64 lanes                            0              0           0      15283.6           0.1       0.5X
-column + column, wrapping, int32 lanes                             0              0           0      19956.2           0.1       0.7X
-column + column, wrapping, int64 lanes                             0              0           0       8384.9           0.1       0.3X
-column + literal, ANSI checked, int32 lanes                        0              0           0      24786.7           0.0       0.9X
-column + literal, ANSI checked, int64 lanes                        0              0           0      13298.7           0.1       0.5X
-column * column, wrapping, int32 lanes                             0              0           0      19716.0           0.1       0.7X
-column * column, wrapping, int64 lanes                             0              0           0       8258.1           0.1       0.3X
--column, wrapping, int32 lanes                                     0              0           0      28199.7           0.0       1.0X
--column, wrapping, int64 lanes                                     0              0           0      14867.5           0.1       0.5X
-eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       8564.6           0.1       0.3X
-eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       4130.1           0.2       0.1X
-greatest(column, column), int32 lanes                              0              0           0      19716.0           0.1       0.7X
-greatest(column, column), int64 lanes                              0              0           0       8299.9           0.1       0.3X
-a comparison, as a selection, int32 lanes                          0              0           0      21222.8           0.0       0.7X
-a comparison, as a selection, int64 lanes                          0              0           0      12780.0           0.1       0.4X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      19716.0           0.1       0.7X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0       8304.1           0.1       0.3X
+a column, copied, int32 lanes                                      0              0           0      33436.7           0.0       1.0X
+a column, copied, int64 lanes                                      0              0           0      14099.8           0.1       0.4X
+column + literal, wrapping, int32 lanes                            0              0           0      34859.6           0.0       1.0X
+column + literal, wrapping, int64 lanes                            0              0           0      13979.5           0.1       0.4X
+column + column, wrapping, int32 lanes                             0              0           0      23710.6           0.0       0.7X
+column + column, wrapping, int64 lanes                             0              0           0       7903.5           0.1       0.2X
+column + literal, ANSI checked, int32 lanes                        0              0           0      24381.0           0.0       0.7X
+column + literal, ANSI checked, int64 lanes                        0              0           0      12982.6           0.1       0.4X
+column * column, wrapping, int32 lanes                             0              0           0      23372.3           0.0       0.7X
+column * column, wrapping, int64 lanes                             0              0           0       7865.6           0.1       0.2X
+-column, wrapping, int32 lanes                                     0              0           0      34785.6           0.0       1.0X
+-column, wrapping, int64 lanes                                     0              0           0      13733.4           0.1       0.4X
+eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       8475.9           0.1       0.3X
+eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       4326.4           0.2       0.1X
+greatest(column, column), int32 lanes                              0              0           0      23710.6           0.0       0.7X
+greatest(column, column), int64 lanes                              0              0           0       8098.9           0.1       0.2X
+a comparison, as a selection, int32 lanes                          0              0           0      28199.7           0.0       0.8X
+a comparison, as a selection, int64 lanes                          0              0           0      11055.3           0.1       0.3X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      23372.3           0.0       0.7X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0       7941.8           0.1       0.2X
 
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 262144 rows - both arms in L3:                         Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      0              0           0      17525.3           0.1       1.0X
-a column, copied, int64 lanes                                      0              0           0       9672.9           0.1       0.6X
-column + literal, wrapping, int32 lanes                            0              0           0      17537.1           0.1       1.0X
-column + literal, wrapping, int64 lanes                            0              0           0       9737.9           0.1       0.6X
-column + column, wrapping, int32 lanes                             0              0           0      11073.1           0.1       0.6X
-column + column, wrapping, int64 lanes                             0              0           0       6431.9           0.2       0.4X
-column + literal, ANSI checked, int32 lanes                        0              0           0      17214.6           0.1       1.0X
-column + literal, ANSI checked, int64 lanes                        0              0           0       8110.6           0.1       0.5X
-column * column, wrapping, int32 lanes                             0              0           0      11073.1           0.1       0.6X
-column * column, wrapping, int64 lanes                             0              0           0       6422.6           0.2       0.4X
--column, wrapping, int32 lanes                                     0              0           0      17716.0           0.1       1.0X
--column, wrapping, int64 lanes                                     0              0           0       9640.8           0.1       0.6X
-eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       7768.6           0.1       0.4X
-eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       3848.4           0.3       0.2X
-greatest(column, column), int32 lanes                              0              0           0      11105.9           0.1       0.6X
-greatest(column, column), int64 lanes                              0              0           0       6392.7           0.2       0.4X
-a comparison, as a selection, int32 lanes                          0              0           0      16772.9           0.1       1.0X
-a comparison, as a selection, int64 lanes                          0              0           0       8078.1           0.1       0.5X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      11073.1           0.1       0.6X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0       6333.8           0.2       0.4X
+a column, copied, int32 lanes                                      0              0           0      17247.5           0.1       1.0X
+a column, copied, int64 lanes                                      0              0           0       9477.0           0.1       0.5X
+column + literal, wrapping, int32 lanes                            0              0           0      17169.5           0.1       1.0X
+column + literal, wrapping, int64 lanes                            0              0           0       9480.1           0.1       0.5X
+column + column, wrapping, int32 lanes                             0              0           0      10830.2           0.1       0.6X
+column + column, wrapping, int64 lanes                             0              0           0       6389.5           0.2       0.4X
+column + literal, ANSI checked, int32 lanes                        0              0           0      16913.6           0.1       1.0X
+column + literal, ANSI checked, int64 lanes                        0              0           0       7992.0           0.1       0.5X
+column * column, wrapping, int32 lanes                             0              0           0      10843.6           0.1       0.6X
+column * column, wrapping, int64 lanes                             0              0           0       6414.7           0.2       0.4X
+-column, wrapping, int32 lanes                                     0              0           0      17179.6           0.1       1.0X
+-column, wrapping, int64 lanes                                     0              0           0       9388.4           0.1       0.5X
+eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       7855.0           0.1       0.5X
+eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       3906.4           0.3       0.2X
+greatest(column, column), int32 lanes                              0              0           0      10821.2           0.1       0.6X
+greatest(column, column), int64 lanes                              0              0           0       6163.9           0.2       0.4X
+a comparison, as a selection, int32 lanes                          0              0           0      17595.9           0.1       1.0X
+a comparison, as a selection, int64 lanes                          0              0           0       9331.6           0.1       0.5X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      12278.4           0.1       0.7X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0       6370.9           0.2       0.4X
 
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 1000000 rows - the long arm leaves L3:                 Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      0              0           0      18765.2           0.1       1.0X
-a column, copied, int64 lanes                                      0              0           0       6548.1           0.2       0.3X
-column + literal, wrapping, int32 lanes                            0              0           0      18857.6           0.1       1.0X
-column + literal, wrapping, int64 lanes                            0              0           0       6561.5           0.2       0.3X
-column + column, wrapping, int32 lanes                             0              0           0      12072.2           0.1       0.6X
-column + column, wrapping, int64 lanes                             0              0           0       3372.3           0.3       0.2X
-column + literal, ANSI checked, int32 lanes                        0              0           0      18518.2           0.1       1.0X
-column + literal, ANSI checked, int64 lanes                        0              0           0       6077.3           0.2       0.3X
-column * column, wrapping, int32 lanes                             0              0           0      12076.6           0.1       0.6X
-column * column, wrapping, int64 lanes                             0              0           0       3357.8           0.3       0.2X
--column, wrapping, int32 lanes                                     0              0           0      18673.8           0.1       1.0X
--column, wrapping, int64 lanes                                     0              0           0       6563.6           0.2       0.3X
-eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       7658.5           0.1       0.4X
-eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       2519.6           0.4       0.1X
-greatest(column, column), int32 lanes                              0              0           0      12092.6           0.1       0.6X
-greatest(column, column), int64 lanes                              0              0           0       3368.2           0.3       0.2X
-a comparison, as a selection, int32 lanes                          0              0           0      14899.6           0.1       0.8X
-a comparison, as a selection, int64 lanes                          0              0           0       6594.4           0.2       0.4X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      12002.5           0.1       0.6X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0       3384.9           0.3       0.2X
+a column, copied, int32 lanes                                      0              0           0      18843.4           0.1       1.0X
+a column, copied, int64 lanes                                      0              0           0       6369.3           0.2       0.3X
+column + literal, wrapping, int32 lanes                            0              0           0      18797.3           0.1       1.0X
+column + literal, wrapping, int64 lanes                            0              0           0       6355.9           0.2       0.3X
+column + column, wrapping, int32 lanes                             0              0           0      12083.9           0.1       0.6X
+column + column, wrapping, int64 lanes                             0              0           0       3392.8           0.3       0.2X
+column + literal, ANSI checked, int32 lanes                        0              0           0      18381.7           0.1       1.0X
+column + literal, ANSI checked, int64 lanes                        0              0           0       5940.9           0.2       0.3X
+column * column, wrapping, int32 lanes                             0              0           0      12086.9           0.1       0.6X
+column * column, wrapping, int64 lanes                             0              0           0       3403.2           0.3       0.2X
+-column, wrapping, int32 lanes                                     0              0           0      18821.8           0.1       1.0X
+-column, wrapping, int64 lanes                                     0              0           0       6377.8           0.2       0.3X
+eight times x = -(x + column2), wrapping, int32 lanes              0              0           0       8073.6           0.1       0.4X
+eight times x = -(x + column2), wrapping, int64 lanes              0              0           0       2501.0           0.4       0.1X
+greatest(column, column), int32 lanes                              0              0           0      12095.6           0.1       0.6X
+greatest(column, column), int64 lanes                              0              0           0       3395.5           0.3       0.2X
+a comparison, as a selection, int32 lanes                          0              0           0      14522.4           0.1       0.8X
+a comparison, as a selection, int64 lanes                          0              0           0       6544.2           0.2       0.3X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              0              0           0      11960.9           0.1       0.6X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              0              0           0       3401.7           0.3       0.2X
 
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-38-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 8388608 rows - both arms past L3:                      Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------
-a column, copied, int32 lanes                                      1              1           0       5870.4           0.2       1.0X
-a column, copied, int64 lanes                                      3              3           0       2682.3           0.4       0.5X
-column + literal, wrapping, int32 lanes                            1              1           0       5885.8           0.2       1.0X
-column + literal, wrapping, int64 lanes                            3              3           0       2675.3           0.4       0.5X
-column + column, wrapping, int32 lanes                             2              2           0       3869.8           0.3       0.7X
-column + column, wrapping, int64 lanes                             5              5           0       1754.9           0.6       0.3X
-column + literal, ANSI checked, int32 lanes                        1              1           0       5806.9           0.2       1.0X
-column + literal, ANSI checked, int64 lanes                        3              3           0       2655.4           0.4       0.5X
-column * column, wrapping, int32 lanes                             2              2           0       3871.1           0.3       0.7X
-column * column, wrapping, int64 lanes                             5              5           0       1756.8           0.6       0.3X
--column, wrapping, int32 lanes                                     1              1           0       5883.4           0.2       1.0X
--column, wrapping, int64 lanes                                     3              3           0       2684.3           0.4       0.5X
-eight times x = -(x + column2), wrapping, int32 lanes              2              2           0       3717.8           0.3       0.6X
-eight times x = -(x + column2), wrapping, int64 lanes              5              5           0       1681.8           0.6       0.3X
-greatest(column, column), int32 lanes                              2              2           0       3867.7           0.3       0.7X
-greatest(column, column), int64 lanes                              5              5           0       1760.6           0.6       0.3X
-a comparison, as a selection, int32 lanes                          1              1           0       7227.4           0.1       1.2X
-a comparison, as a selection, int64 lanes                          2              2           0       3505.4           0.3       0.6X
-CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              2              2           0       3889.8           0.3       0.7X
-CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              5              5           0       1773.4           0.6       0.3X
+a column, copied, int32 lanes                                      1              1           0       5850.2           0.2       1.0X
+a column, copied, int64 lanes                                      3              3           0       2675.8           0.4       0.5X
+column + literal, wrapping, int32 lanes                            1              1           0       5846.5           0.2       1.0X
+column + literal, wrapping, int64 lanes                            3              3           0       2686.6           0.4       0.5X
+column + column, wrapping, int32 lanes                             2              2           0       3922.6           0.3       0.7X
+column + column, wrapping, int64 lanes                             5              5           0       1822.4           0.5       0.3X
+column + literal, ANSI checked, int32 lanes                        1              1           0       5803.5           0.2       1.0X
+column + literal, ANSI checked, int64 lanes                        3              3           0       2486.5           0.4       0.4X
+column * column, wrapping, int32 lanes                             2              2           0       3919.6           0.3       0.7X
+column * column, wrapping, int64 lanes                             5              5           0       1830.0           0.5       0.3X
+-column, wrapping, int32 lanes                                     1              1           0       5866.6           0.2       1.0X
+-column, wrapping, int64 lanes                                     3              3           0       2685.5           0.4       0.5X
+eight times x = -(x + column2), wrapping, int32 lanes              2              2           0       3803.8           0.3       0.7X
+eight times x = -(x + column2), wrapping, int64 lanes              5              5           0       1792.3           0.6       0.3X
+greatest(column, column), int32 lanes                              2              2           0       3929.0           0.3       0.7X
+greatest(column, column), int64 lanes                              5              5           0       1830.8           0.5       0.3X
+a comparison, as a selection, int32 lanes                          1              1           0       7147.1           0.1       1.2X
+a comparison, as a selection, int64 lanes                          3              3           0       3307.9           0.3       0.6X
+CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes              2              2           0       3916.3           0.3       0.7X
+CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes              5              5           0       1840.2           0.5       0.3X
 
 

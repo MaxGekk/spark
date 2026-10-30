@@ -50,11 +50,13 @@ import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ForwardedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompileObserver;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
@@ -152,6 +154,21 @@ public final class VarkaExpressionCompiler {
   public static Optional<PartialVarkaProjection> compilePartial(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
+    Optional<PartialVarkaProjection> compiled =
+        compilePartialUnobserved(projectList, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of(projectList, childOutput, familiesOff), options,
+          compiled, o -> compilePartialUnobserved(projectList, childOutput, o, familiesOff));
+    }
+    return compiled;
+  }
+
+  /** {@link #compilePartial} itself, which the recording run repeats under its configurations. */
+  private static Optional<PartialVarkaProjection> compilePartialUnobserved(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
     return planning(
         () -> classifyKernels(entries(projectList), childOutput, options, familiesOff).partial(),
         () -> projectionIdentity(projectList, childOutput), options);
@@ -175,6 +192,21 @@ public final class VarkaExpressionCompiler {
 
   /** {@link #declines(Seq, Seq, VarkaEmitOptions)} with the families switched off. */
   public static SortedMap<Integer, VarkaDecline> declines(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
+    SortedMap<Integer, VarkaDecline> declines =
+        declinesUnobserved(projectList, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of("declines", projectList, childOutput, familiesOff),
+          options, declines, o -> declinesUnobserved(projectList, childOutput, o, familiesOff));
+    }
+    return declines;
+  }
+
+  /** {@link #declines} itself, which the recording run repeats. */
+  private static SortedMap<Integer, VarkaDecline> declinesUnobserved(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
     return planning(() -> Collections.unmodifiableSortedMap(
@@ -231,15 +263,6 @@ public final class VarkaExpressionCompiler {
     return explainAndCompilePredicate(condition, childOutput, options).specs();
   }
 
-  /**
-   * Whether a kernel can read a column of {@code dataType}: one of the int lane's types (date,
-   * int, year-month interval) or the long lane's (bigint, TIME, day-time interval). A test
-   * harness that feeds Varka asks this rather than keeping its own list, so the two cannot drift.
-   */
-  public static boolean readsColumnOf(DataType dataType) {
-    return VarkaNodeCompiler.laneOf(dataType).isPresent();
-  }
-
   // ---------------------------------------------------------------------------------------------
   // The planning-time catch
   // ---------------------------------------------------------------------------------------------
@@ -273,6 +296,15 @@ public final class VarkaExpressionCompiler {
    */
   public static void setFailInFamilyForTesting(@Nullable VarkaFamily family) {
     VarkaNodeCompiler.setFailInFamilyForTesting(family);
+  }
+
+  /**
+   * The units {@code time_diff} and {@code time_trunc} accept, each with its nanoseconds, as
+   * {@code VarkaTimeCompiler} reads them: a suite compiles every unit from here, not only the
+   * ones a coverage row names, so a unit added to the table is tested without a row (VARKA-496).
+   */
+  public static Map<String, Long> timeUnitsForTesting() {
+    return VarkaTimeCompiler.NANOS_PER_TIME_UNIT;
   }
 
   /**
@@ -550,7 +582,8 @@ public final class VarkaExpressionCompiler {
     private final DeclineSink sink;
     private final UnaryOperator<Expression> bind;
     private final SortedMap<Integer, VarkaDecline> declines = new TreeMap<>();
-    // Entries over the budgets beside the others that fit them alone: another kernel's.
+    // Entries that fit a kernel alone but not beside the others - over the budgets, or on a lane
+    // the others do not share (VARKA-480) - and so another kernel's.
     private final Set<Integer> alone = new HashSet<>();
 
     EntryPass(Seq<Attribute> childOutput, Map<Integer, String> demoted,
@@ -630,11 +663,17 @@ public final class VarkaExpressionCompiler {
         // and its reason says why, though it may hold no narrow value itself.
         List<VarkaVectorIR> with = new ArrayList<>(outputs);
         with.add(ir);
-        Optional<String> refused = admission(ir, with, options);
+        Optional<Admission> refused = admission(ir, with, options);
         if (refused.isPresent()) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(refused.get(), e);
+          sink.note(refused.get().reason(), e);
+          // An entry that plans alone and is refused only beside the others - a bigint entry
+          // after a narrow or an int one, say - is set aside for a kernel of its own, as an
+          // entry over the budgets is (VARKA-480).
+          if (refused.get().joining()) {
+            alone.add(position);
+          }
           return residual(position);
         }
         // An accepted entry must also fit the emitter's structural budgets together with the
@@ -722,6 +761,19 @@ public final class VarkaExpressionCompiler {
   public static Explained explainAndCompilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
+    Explained explained = explainUnobserved(condition, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of(condition, childOutput, familiesOff), options,
+          explained, o -> explainUnobserved(condition, childOutput, o, familiesOff));
+    }
+    return explained;
+  }
+
+  /** {@link #explainAndCompilePredicate} itself, which the recording run repeats. */
+  private static Explained explainUnobserved(Expression condition, Seq<Attribute> childOutput,
+      VarkaEmitOptions options, Set<VarkaFamily> familiesOff) {
     return planning(() -> predicate(condition, childOutput, options, familiesOff),
         () -> "condition " + condition + " over " + childOutput.mkString("[", ", ", "]"),
         options);
@@ -858,6 +910,13 @@ public final class VarkaExpressionCompiler {
     List<VarkaConjunctSpec> specs = new ArrayList<>();
     UnaryOperator<Expression> bind = binder(childOutput);
     List<Expression> conjuncts = conjuncts(condition);
+    // Whether any conjunct reads a column that an integral lane reads, which decides whether a
+    // floating conjunct can share the kernel (VarkaKernelPlan.floatingConjunctRefusal). A column
+    // no lane reads, a string say, puts its conjunct on the row path and so does not count.
+    boolean readsIntegral = false;
+    for (Attribute a : CollectionConverters.asJava(condition.references().toSeq())) {
+      readsIntegral |= VarkaTypes.lane(a.dataType()).filter(l -> !l.isFloating()).isPresent();
+    }
     for (int index = 0; index < conjuncts.size(); index++) {
       Expression conjunct = conjuncts.get(index);
       Expression bound = bind.apply(conjunct);
@@ -874,7 +933,9 @@ public final class VarkaExpressionCompiler {
           .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
-        Optional<String> narrow = VarkaKernelPlan.of(List.of(cond), options).refusal()
+        Cond planned = cond;
+        Optional<String> narrow = VarkaKernelPlan.floatingConjunctRefusal(planned, readsIntegral)
+            .or(() -> VarkaKernelPlan.of(List.of(planned), options).refusal())
             .map(VarkaKernelPlan.Refusal::reason);
         if (narrow.isPresent()) {
           marks.restore(inputs, literals, sink);
@@ -1207,20 +1268,27 @@ public final class VarkaExpressionCompiler {
   }
 
   /**
+   * Why an entry cannot join its kernel, and whether it is the joining that fails: the entry
+   * plans alone and is refused only beside the others, so a kernel of its own can take it.
+   */
+  private record Admission(String reason, boolean joining) { }
+
+  /**
    * Why {@code entry} cannot join the kernel {@code with} holds it in, or empty when it can: the
    * plan of the entry alone, then the plan of the kernel with it, whose narrow refusal says the
    * joining is what moved the kernel to the int lane.
    */
-  private static Optional<String> admission(VarkaVectorIR entry, List<VarkaVectorIR> with,
+  private static Optional<Admission> admission(VarkaVectorIR entry, List<VarkaVectorIR> with,
       VarkaEmitOptions options) {
     Optional<VarkaKernelPlan.Refusal> alone =
         VarkaKernelPlan.of(List.of(entry), options).refusal();
     if (alone.isPresent()) {
-      return Optional.of(alone.get().reason());
+      return Optional.of(new Admission(alone.get().reason(), false));
     }
-    return VarkaKernelPlan.of(with, options).refusal().map(r ->
+    return VarkaKernelPlan.of(with, options).refusal().map(r -> new Admission(
         r.kind() == VarkaKernelPlan.Kind.LANE_MISMATCH ? r.reason()
-            : "joining drives the kernel's narrow entries at the int lane, where " + r.reason());
+            : "joining drives the kernel's narrow entries at the int lane, where " + r.reason(),
+        true));
   }
 
   /** The {@code AND} spine of a condition, in query order: the split the predicate works. */

@@ -1321,8 +1321,9 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(declineReason(DivideYMInterval(ymm, Literal(2L)), withIntervals) ===
       "interval divisor of type bigint takes LongMath.divide, which the int lane does not " +
         "lower")
+    // A floating divisor is floating arithmetic, which every floating operand declines as.
     assert(declineReason(DivideYMInterval(ymm, Literal(2.5d)), withIntervals) ===
-      "interval divisor of type double is not an integral literal")
+      "floating arithmetic (row 342)")
     assert(declineReason(DivideYMInterval(ymm, Literal(BigDecimal("2.5"))), withIntervals) ===
       "interval divisor of type decimal(2,1) is not an integral literal")
     assert(declineReason(DivideYMInterval(ymm, i), withIntervals) ===
@@ -1374,10 +1375,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(byLiteral.outputTypes.asScala.toSeq === Seq(YearMonthIntervalType()))
     assert(declineReason(MultiplyYMInterval(ymm, i), withIntervals) ===
       "checked int multiply whose operands do not rule out overflow")
-    for ((mult, name) <- Seq(Literal(3L) -> "bigint", Literal(2.5d) -> "double")) {
-      assert(declineReason(MultiplyYMInterval(ymm, mult), withIntervals) ===
-        s"interval multiplier of type $name is not an int32 lane")
-    }
+    assert(declineReason(MultiplyYMInterval(ymm, Literal(3L)), withIntervals) ===
+      "interval multiplier of type bigint is not an int32 lane")
+    // A floating factor is floating arithmetic, which every floating operand declines as.
+    assert(declineReason(MultiplyYMInterval(ymm, Literal(2.5d)), withIntervals) ===
+      "floating arithmetic (row 342)")
   }
 
   test("a literal day shift fuses at the bound and declines one day past it") {
@@ -2062,6 +2064,20 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "a narrow value under a bigint kernel has no lowering")
   }
 
+  test("a narrow column's null test beside a bigint conjunct fuses in the bigint kernel") {
+    // VARKA-480: a null test reads the narrow column's validity word alone, one bit per row at
+    // every lane, so it joins the conjunction lifted to the long lane, where the narrow value of
+    // the test above still declines. Which conjuncts of `isnotnull(y) AND ... AND y = 3` fuse
+    // moves with it: the null test now fuses beside the bigint ones.
+    val options = VarkaMatrix.base.withLanesOverride(16).withValidityByWidth(true)
+    val ll = AttributeReference("ll", LongType)()
+    val pred = And(GreaterThan(ll, Literal(0L)), IsNotNull(by))
+    val compiled = VarkaExpressionCompiler.compilePredicate(pred, childOutput :+ ll, options)
+      .toScala
+    assert(compiled.isDefined, "the bigint conjunct should fuse")
+    assert(compiled.get.specs.asScala.map(_.fused) === Seq(true, true))
+  }
+
   test("a boolean equality of two narrow conditions lifts into an int-lane conjunction") {
     // A comparison of two boolean conditions is a mask over them, so one over two narrow
     // comparisons is itself narrow - `compare` builds the BoolCompare with narrow operands -
@@ -2566,39 +2582,58 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "day-time interval narrowed to a coarser end field, which truncates")
   }
 
-  test("a timestamp column declines with the milestone's reason, in both forms") {
-    for (col <- Seq(ts, ntz)) {
-      val predicate = VarkaExpressionCompiler.compilePredicate(
-        And(GreaterThan(d, d2), GreaterThan(col, col)), withLong).get
-      assert(predicate.specs.asScala.toSeq.map(_.fused) === Seq(true, false))
-      assert(predicate.specs.get(1).decline.get.reason ===
-          "a timestamp column is outside milestone 5")
-      val projection = VarkaExpressionCompiler.compilePartial(
-        Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(col, col)))), withLong).get
-      assert(projection.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
-      assert(projection.declines.asScala(1).reason === "a timestamp column is outside milestone 5")
-    }
+  test("a zoned timestamp column declines with its type's reason, and an NTZ one fuses") {
+    // The zoned type is out by decision (VarkaTypes, VARKA-494), and its reason names the type,
+    // so EXPLAIN tells a decision from a gap. NTZ is read on the long lane (VARKA-338): its
+    // comparison and its greatest each fuse into a kernel driven at the long lane.
+    val reason =
+      "a timestamp column: its arithmetic is in the session time zone, which is not lane arithmetic"
+    val predicate = VarkaExpressionCompiler.compilePredicate(
+      And(GreaterThan(d, d2), GreaterThan(ts, ts)), withLong).get
+    assert(predicate.specs.asScala.toSeq.map(_.fused) === Seq(true, false))
+    assert(predicate.specs.get(1).decline.get.reason === reason)
+    val projection = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(ts, ts)))), withLong).get
+    assert(projection.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
+    assert(projection.declines.asScala(1).reason === reason)
+
+    val ntzPredicate = VarkaExpressionCompiler.compilePredicate(
+      GreaterThan(ntz, Literal(0L, TimestampNTZType)), withLong).get
+    assert(ntzPredicate.specs.asScala.toSeq.map(_.fused) === Seq(true))
+    assert(ntzPredicate.fused.lane(VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    val ntzProjection = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Greatest(Seq(ntz, ntz)))), withLong).get
+    assert(ntzProjection.specs.asScala.toSeq === Seq(new FusedOutput(0)))
+    assert(ntzProjection.fused.lane(VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
   }
 
-  test("a projection that mixes lanes fuses the first lane and names the lane for the other") {
-    val partial = VarkaExpressionCompiler.compilePartial(
-      Seq(out(Greatest(Seq(d, d2))), out(Greatest(Seq(l, l2))), out(DateAdd(d, Literal(1)))),
-      withLong).get
-    assert(partial.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL,
+  test("a projection that mixes lanes fuses each lane in a kernel of its own") {
+    // VARKA-480: an entry no lane beside the others serves, which plans alone, is set aside for
+    // another kernel as an entry over the budgets is, rather than left to the row engine.
+    val entries =
+      Seq(out(Greatest(Seq(d, d2))), out(Greatest(Seq(l, l2))), out(DateAdd(d, Literal(1))))
+    val partial = VarkaExpressionCompiler.compilePartial(entries, withLong).get
+    assert(partial.specs.asScala.toSeq === Seq(new FusedOutput(0), new KernelOutput(1, 0),
         new FusedOutput(1)))
-    assert(partial.declines.asScala(1).reason === laneReason)
-    // The demoted entry left nothing behind: no long literal, no long input.
+    assert(partial.declines.isEmpty)
+    // The first kernel holds nothing of the long entry: no long literal, no long input.
     assert(partial.fused.longLiterals.asScala.toSeq === Nil)
     assert(partial.fused.inputOrdinals.asScala.toSeq === Seq(0, 1))
     assert(partial.fused.lane(VarkaEmitOptions.DEFAULTS) === LaneType.INT)
-    // The first entry fixes the lane, whichever lane it is.
+    assert(partial.more.asScala.map(_.lane(VarkaEmitOptions.DEFAULTS)) === Seq(LaneType.LONG))
+    // The first entry fixes the first kernel's lane, whichever lane it is.
     val longFirst = VarkaExpressionCompiler.compilePartial(
       Seq(out(Greatest(Seq(l, Literal(3L)))), out(Greatest(Seq(d, d2)))), withLong).get
-    assert(longFirst.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
-    assert(longFirst.declines.asScala(1).reason ===
-      "the INT lane in a kernel on the LONG lane: one kernel holds one lane")
+    assert(longFirst.specs.asScala.toSeq === Seq(new FusedOutput(0), new KernelOutput(1, 0)))
     assert(longFirst.fused.literals.asScala.toSeq === Nil)
     assert(longFirst.fused.longLiterals.asScala.toSeq === Seq(3L))
+    // With one kernel only, the entry the first lane does not serve is the row engine's, and its
+    // reason names the lanes.
+    val single = VarkaExpressionCompiler.compilePartial(entries, withLong,
+      VarkaEmitOptions.DEFAULTS.withSeveralKernels(false)).get
+    assert(single.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL,
+        new FusedOutput(1)))
+    assert(single.declines.asScala(1).reason === laneReason)
   }
 
   test("a predicate that mixes lanes fuses every conjunct on the long lane, the int ones widened") {

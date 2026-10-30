@@ -139,6 +139,19 @@ INTERVAL_ROWS = [
     ),
 ]
 
+# TIMESTAMP_NTZ is signed microseconds. CAST(ntz AS DATE) floors by a day's microseconds as a
+# shift by 13 and then a truncating division by the odd part, 10546875, of the shifted value
+# moved down by 10546874 where it is negative (VARKA-338): a dividend under 2^50 + 10546875.
+NTZ_ROWS = [
+    (
+        "ntz/date",
+        10_546_875,
+        -(1 << 50) - 10_546_874,
+        (1 << 50) + 1,
+        "CAST(ntz AS DATE) step 2: /10546875 over the shifted, floor-corrected micros",
+    ),
+]
+
 # The verdict each row must have, as (recip_ok, div_ok). The emitter's table is transcribed
 # from this output, so a row that moves fails the run rather than drifting.
 EXPECTED = {
@@ -164,6 +177,7 @@ EXPECTED = {
     "time/trunc_ms": (True, True),
     "time/trunc_us": (True, True),
     "dt/days": (True, True),
+    "ntz/date": (True, True),
 }
 
 
@@ -337,6 +351,13 @@ def main():
         run(
             INTERVAL_ROWS,
             "Day-time intervals, signed microseconds - only the day extract divides at all:",
+        )
+    )
+
+    results.update(
+        run(
+            NTZ_ROWS,
+            "TIMESTAMP_NTZ, signed microseconds - the cast to DATE's floor division:",
         )
     )
 

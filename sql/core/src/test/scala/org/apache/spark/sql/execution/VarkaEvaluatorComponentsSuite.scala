@@ -23,6 +23,7 @@ import java.nio.file.Files
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
+import org.apache.logging.log4j.Level
 import org.mockito.Mockito.{doAnswer, doThrow, mock, never, verify}
 
 import org.apache.spark.{SparkFunSuite, TaskContext}
@@ -149,6 +150,40 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     counted.nonArrowBatch()
     counted.allocationSample(1L << 30, 1)
     assert(Seq(kernel, rowPath, declined, nonArrow, suspect).map(_.value) === Seq(1, 1, 2, 1, 1))
+  }
+
+  test("a kernel that fails on every batch warns once and is counted on every batch") {
+    // Catches: a warning per batch, which under one-row batches wrote a stack trace for each of
+    // a million rows; and a once-only rule so broad that a second kernel's failure, or the
+    // row path's, goes unwarned.
+    def metric(): SQLMetric = new SQLMetric("sum")
+    val Seq(kernel, rowPath) = Seq.fill(2)(metric())
+    val accounting = new VarkaFallbackAccounting(
+      new VarkaFallbackAccounting.Counters(kernel, rowPath, null, null, null), () => "kernel",
+      () => "")
+    // On the root logger, as the suites that read these warnings listen: an appender on the
+    // class's own logger gives it a configuration of its own, which outlives the test and keeps
+    // its warnings from a later suite's root appender.
+    val appender = new LogAppender("varka fallback")
+    appender.setThreshold(Level.WARN)
+    withLogAppender(appender) {
+      (1 to 3).foreach(_ => accounting.kernelFailure(new RuntimeException("boom"), null, null))
+      (1 to 2).foreach { _ =>
+        accounting.kernelFailure(new RuntimeException("boom"), "further kernel", null)
+      }
+      (1 to 2).foreach(_ => accounting.rowPathFailure(new RuntimeException("boom"), null))
+    }
+    val warnings = appender.loggingEvents
+      .filter(_.getLoggerName == classOf[VarkaFallbackAccounting].getName)
+      .map(_.getMessage.getFormattedMessage).toSeq
+    assert(warnings.size === 3, warnings.mkString("\n"))
+    assert(warnings.count(_.startsWith("The Varka SIMD kernels kernel failed")) === 1, warnings)
+    assert(warnings.count(_.startsWith("The Varka SIMD kernels further kernel failed")) === 1,
+      warnings)
+    assert(warnings.count(_.startsWith("The per-row machinery")) === 1, warnings)
+    assert(warnings.forall(_.contains("Later failures of this kind in this evaluator are " +
+      "counted")), warnings)
+    assert(Seq(kernel, rowPath).map(_.value) === Seq(5, 2))
   }
 
   test("a declined batch counts against each reason its status names, and the status bits are " +

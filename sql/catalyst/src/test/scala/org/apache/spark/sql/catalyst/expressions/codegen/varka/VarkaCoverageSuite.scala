@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.{MICROS_PER_DAY, NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, DecimalType, DoubleType, FloatType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -109,16 +109,26 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
   private val s2 = AttributeReference("s2", ShortType)()
+  // TIMESTAMP_NTZ columns (VARKA-338), microseconds on the long lane, two so a comparison can be
+  // column against column.
+  private val ntz = AttributeReference("ntz", TimestampNTZType)()
+  private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
+  // The floating lanes' columns (VARKA-341): DOUBLE `x`, `x2` and FLOAT `f`, `f2`, two of each
+  // so a comparison or a pick can be column against column.
+  private val x = AttributeReference("x", DoubleType)()
+  private val x2 = AttributeReference("x2", DoubleType)()
+  private val f = AttributeReference("f", FloatType)()
+  private val f2 = AttributeReference("f2", FloatType)()
 
-  private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2,
+    y1, y2, s1, s2, ntz, ntz2, x, x2, f, f2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
    * compiles, except where `built` overrides it - the one case is `InSet`, which no SQL
    * spelling produces directly because Spark's optimizer, not its parser, creates it. Such a
    * row also gives `executable`, SQL that a query can run and that the optimizer turns into the
-   * same expression, so that `VarkaCoverageDifferentialSuite` can run every row of the table.
+   * same expression, so that `VarkaCoverageHarnessSuite` can run every row of the table.
    *
    * `domain` is the predicate inside which the row's kernel answers, for a row whose kernel can
    * decline a batch (VARKA-279 3.3): outside it the batch goes to the row engine, which answers
@@ -166,6 +176,63 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def dayOf(nanosPerUnit: Long): Long = (NANOS_PER_DAY - 1) / nanosPerUnit
   /** The largest day count whose microseconds are a long: `date - date`'s range guard. */
   private val maxDateDiffDays = Long.MaxValue / MICROS_PER_DAY
+  /** The days `CAST(d AS TIMESTAMP_NTZ)` converts without overflow: the cast's range guard. */
+  private val ntzDayBound = s"unix_date(d) BETWEEN -$maxDateDiffDays AND $maxDateDiffDays"
+  /**
+   * NTZ literals the differential fixtures hold (a date column at a time column's value): under
+   * one-row batches the cache's statistics drop every batch a literal cannot match, and a literal
+   * no row holds would leave no batch for a kernel.
+   */
+  private val ntzHeld = "TIMESTAMP_NTZ '2021-06-01 12:00:00'"
+  private val ntzHeld2 = "TIMESTAMP_NTZ '1969-12-31 18:00:00'"
+
+  /**
+   * The predicate rows of a floating column pair, `a` and `b`, whose literals carry `suffix`
+   * (`D` or `F`, so that a literal is of the column's type and needs no cast): the comparisons,
+   * `<=>`, `isnan`, the null tests, a literal on the right and `IN` in both its forms. The
+   * column pairs meet NaN against NaN and against every other value, and both zeros both ways
+   * round, in the differential fixtures. Both `IN` lists hold `0.0` and NaN, so the fixtures'
+   * `-0.0` and NaNs of either sign are in them, as Spark's equality says.
+   */
+  private def floatingPredicates(a: String, b: String, suffix: String,
+      dataType: DataType): Seq[Row] = {
+    // SQL has no NaN literal: the cast is one the optimizer folds, as `VarkaSqlResolve` does.
+    val nan = s"CAST('NaN' AS ${dataType.sql})"
+    // The value of `v` in the column's type.
+    def value(v: Double): Any = if (dataType == DoubleType) v else v.toFloat
+    // Eleven literals of one integer digit or NaN, past the optimizer's InSet threshold of ten.
+    val manyNumbers = (1 to 8).map(k => k + 0.5) ++ Seq(-2.5, 0.0)
+    val many = manyNumbers.map(v => s"$v$suffix") :+ nan
+    val manyValues: Set[Any] = (manyNumbers :+ Double.NaN).map(value).toSet
+    val column = if (a == x.name) x else f
+    Seq(
+      Row(s"$a < $b"),
+      Row(s"$a <= $b"),
+      Row(s"$a > $b"),
+      Row(s"$a >= $b"),
+      Row(s"$a = $b", "NaN equals NaN, and -0.0 equals 0.0"),
+      Row(s"$a <> $b"),
+      Row(s"$a <=> $b", "null-safe equality under the lane's own equality"),
+      Row(s"$a < 1.5$suffix", "the literal is its bits in the table of the lane's width"),
+      Row(s"$a = 1.5$suffix"),
+      Row(s"$a IN (1.5$suffix, -2.5$suffix, 0.0$suffix, $nan)",
+        "an equality chain under the lane's equality"),
+      Row(s"$a IN (11 literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(column, manyValues)), executable = Some(many.mkString(s"$a IN (", ", ", ")"))),
+      Row(s"isnan($a)", "never null: false on a null row"),
+      Row(s"$a IS NULL"),
+      Row(s"$a IS NOT NULL"))
+  }
+
+  /** The value rows of a floating column pair: the picks, which move bits and order them. */
+  private def floatingChoices(a: String, b: String): Seq[Row] = Seq(
+    Row(s"greatest($a, $b)", "Spark's order, the first of two equal operands kept"),
+    Row(s"least($a, $b)"),
+    Row(s"nanvl($a, $b)", "an IF over isnan, null where the first operand is"),
+    Row(s"CASE WHEN $a < $b THEN $a ELSE $b END"),
+    Row(s"if($a IS NULL, $b, $a)"),
+    Row(s"coalesce($a, $b)"))
 
   private val families: Seq[Family] = Seq(
     Family("Day arithmetic", predicates = false, Seq(
@@ -230,6 +297,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("ym - ymm", "exact in every mode: a difference outside the month count's int declines",
         domain = Some("CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN "
           + s"${Int.MinValue} AND ${Int.MaxValue}")),
+      Row("ym + ym", "the sum, exact in every mode as the difference is",
+        domain = Some("CAST(ym AS BIGINT) + CAST(ym AS BIGINT) BETWEEN "
+          + s"${Int.MinValue} AND ${Int.MaxValue}")),
       Row("CAST(ymy AS INTERVAL MONTH)"),
       Row("CAST(i AS INTERVAL MONTH)",
         "a relabel of the count; `CAST(i AS INTERVAL YEAR)` multiplies by twelve, checked, and "
@@ -263,6 +333,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "a multiply is checked, and only bounded operands take the check off: `i * 2` over "
           + "a bare int column declines", domain = Some(dayBound)),
       Row("-i", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
+      Row("try_add(i, 1)", "an overflowing lane is null, so the kernel declines nothing"),
+      Row("try_subtract(i, 1)", "an overflowing lane is null"),
       Row("year(d) + i", "checked under ANSI; the lower bound is out of reach, since a year is "
         + "at least 1", domain = Some(s"$dayBound AND i <= ${Int.MaxValue} - year(d)")))),
 
@@ -337,7 +409,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
           + "own validity (VARKA-336)"),
       Row("coalesce(d, d2)"),
       Row("greatest(d, d2)"),
-      Row("least(d, d2)"))),
+      Row("least(d, d2)"),
+      // The year-month interval is a month count on the int lane, chosen as a date is.
+      Row("if(ym IS NULL, INTERVAL '1-2' YEAR TO MONTH, ym)"),
+      Row("CASE WHEN ym IS NULL THEN INTERVAL '1-2' YEAR TO MONTH ELSE ym END"),
+      Row("coalesce(ym, INTERVAL '1-2' YEAR TO MONTH)"),
+      Row("greatest(ym, INTERVAL '1-2' YEAR TO MONTH)"),
+      Row("least(ym, INTERVAL '-1-2' YEAR TO MONTH)"))),
 
     Family("Predicates", predicates = true, Seq(
       Row("d IS NULL"),
@@ -557,7 +635,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     Family("TINYINT and SMALLINT widened to int, as values", predicates = false, Seq(
       Row("y1 + i", "an int add over a widened byte load, checked under ANSI as any int add is",
         domain = Some(s"CAST(y1 AS BIGINT) + i BETWEEN ${Int.MinValue} AND ${Int.MaxValue}")),
-      Row("CAST(s1 AS INT)", "the widening alone, stored four bytes a row"))),
+      Row("CAST(s1 AS INT)", "the widening alone, stored four bytes a row"),
+      Row("CAST(y1 AS INT) * CAST(y2 AS INT)", "an int multiply that cannot overflow, the byte "
+        + "columns' range bounding the product by 2^14, so it needs no check (VARKA-480)"),
+      Row("CAST(s1 AS INT) * CAST(s2 AS INT)", "the short twin: a product of at most 2^30"))),
 
     // Both lanes in one kernel (VARKA-28): the casts between int and bigint, and the widening
     // Catalyst's type coercion puts under every operator that meets the two.
@@ -588,8 +669,65 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("least(l, 5000000000)"),
       Row("CASE WHEN l < l2 THEN l ELSE l2 END"),
       Row("if(l IS NULL, l2, l)"),
+      Row("if(y1 IS NULL, l, l2)", "a byte column read for its validity alone, which joins the "
+        + "bigint kernel: the word is a bit per row at every lane (VARKA-480)"),
+      Row("if(s1 IS NULL, l, l2)", "the short twin"),
       Row("greatest(t, t2)"),
-      Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END"))),
+      Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END"),
+      Row("coalesce(l, l2)"),
+      Row("least(t, t2)"),
+      Row("CASE WHEN t < t2 THEN t ELSE t2 END"),
+      Row("if(t < t2, t, t2)"),
+      Row("coalesce(t, t2)"),
+      Row("greatest(dt, dt2)"),
+      Row("least(dt, dt2)"),
+      Row("if(dt < dt2, dt, dt2)"),
+      Row("coalesce(dt, dt2)"))),
+
+    // TIMESTAMP_NTZ on the long lane (VARKA-338): microseconds since the epoch with no zone,
+    // compared and chosen by the long lane's nodes as a bigint is; its arithmetic is row 339's.
+    Family("TIMESTAMP_NTZ columns", predicates = true, Seq(
+      Row("ntz < ntz2"),
+      Row("ntz <= ntz2"),
+      Row("ntz > ntz2"),
+      Row("ntz >= ntz2"),
+      Row("ntz = ntz2"),
+      Row(s"ntz = $ntzHeld", "an NTZ literal takes a slot in the long lane's table"),
+      Row("ntz <=> ntz2", "null-safe equality at the long lane"),
+      Row(s"ntz IN ($ntzHeld, $ntzHeld2)"),
+      Row("ntz IN (11 to 16 NTZ literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(ntz, (1 to 11).map(h => (h * 3600000000L).asInstanceOf[Any]).toSet)),
+        executable = Some((1 to 11).map(h =>
+          f"TIMESTAMP_NTZ '1970-01-01 $h%02d:00:00'").mkString("ntz IN (", ", ", ")"))),
+      Row("ntz IS NULL"),
+      Row("ntz IS NOT NULL"),
+      Row("d < ntz", "type coercion casts the date to TIMESTAMP_NTZ, its midnight; the day is " +
+        "guarded so that the multiply is exact, and a batch with a day past it goes to the row " +
+        "engine, which raises", domain = Some(ntzDayBound)),
+      Row("CAST(ntz AS DATE) = d", "the UTC date of the count: an exact floor division by the " +
+        "microseconds of a day, a shift and a bounded division, for every count"))),
+
+    Family("TIMESTAMP_NTZ columns choosing values", predicates = false, Seq(
+      Row("greatest(ntz, ntz2)"),
+      Row("least(ntz, ntz2)"),
+      Row("CASE WHEN ntz < ntz2 THEN ntz ELSE ntz2 END"),
+      Row("if(ntz IS NULL, ntz2, ntz)"),
+      Row("coalesce(ntz, ntz2)"),
+      Row("CAST(d AS TIMESTAMP_NTZ)", "Spark multiplies with multiplyExact in every mode, so " +
+        "a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row " +
+        "engine the guard sends its batch to", domain = Some(ntzDayBound)),
+      Row("CAST(ntz AS DATE)", "cannot fail: every quotient is a day an int holds"))),
+
+    // DOUBLE and FLOAT on their own lanes (VARKA-341), in Spark's order: NaN equals NaN and is
+    // above every other value, and -0.0 equals 0.0. A comparison is the IEEE compare corrected
+    // for NaN, and every pick moves the bits, so a NaN's payload and a zero's sign pass
+    // through. The literals are ones the differential fixtures hold.
+    Family("DOUBLE columns", predicates = true, floatingPredicates("x", "x2", "D",
+      DoubleType)),
+    Family("DOUBLE columns choosing values", predicates = false, floatingChoices("x", "x2")),
+    Family("FLOAT columns", predicates = true, floatingPredicates("f", "f2", "F", FloatType)),
+    Family("FLOAT columns choosing values", predicates = false, floatingChoices("f", "f2")),
 
     Family("Time arithmetic", predicates = false, Seq(
       Row("t - t2", "a day-time interval, the nanosecond difference divided by a thousand"),
@@ -1135,6 +1273,12 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "year(d) + i" -> Refined("year(d), month(d), day(d)", "a + b"),
     "bitmap_bucket_number(l)" -> Proved("bitmap.smt2"),
     "bitmap_bit_position(l)" -> Proved("bitmap.smt2"),
+    // The casts with TIMESTAMP_NTZ (VARKA-338): the floor division proven over every long, and
+    // the multiply's guard and factor, read from the compiled tree, held to multiplyExact over
+    // every int day (the kernel itself runs at the guard's edges).
+    "CAST(ntz AS DATE)" -> Proved("long_divide.smt2"),
+    "CAST(d AS TIMESTAMP_NTZ)" -> Exhausted("VarkaTimestampNtzCastSuite",
+      "the guard of DATE to NTZ admits exactly the days multiplyExact converts"),
     "b" -> connectives,
     "NOT b" -> connectives,
     // A boolean beside a date, int or long comparison: the connective is swept over the
@@ -1416,35 +1560,17 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "the row engine. An empty domain means every input of the column types is answered. " +
         "The switches are the family settings that keep the row off Varka, the families whose " +
         "nodes its kernel holds; empty for a row that compiles to a bare column read."),
+      // Each column's type as SQL, which the readers parse back (`VarkaCoverageRows.read`).
       "columns" -> ordered(
-        "d" -> "date", "d2" -> "date", "i" -> "int",
-        "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
-        "l" -> "bigint", "l2" -> "bigint", "t" -> "time(6)", "t2" -> "time(6)",
-        "dt" -> "interval day to second", "dt2" -> "interval day to second",
-        "b" -> "boolean", "b2" -> "boolean",
-        "y1" -> "tinyint", "y2" -> "tinyint", "s1" -> "smallint", "s2" -> "smallint"),
+        columns.map(a => a.name -> a.dataType.sql.toLowerCase(java.util.Locale.ROOT)): _*),
       "expressions" -> rows.asJava,
       "catalyst_classes_admitted" -> (admittedByCompiler -- infrastructure).toSeq.sorted.asJava)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"
   }
 
-  /** A type's name in milestone 8's census and cast matrix (`dev/varka_census.py`), if any. */
-  private def censusType(t: DataType): Option[String] = t match {
-    case BooleanType => Some("bool")
-    case ByteType => Some("byte")
-    case ShortType => Some("short")
-    case IntegerType => Some("int")
-    case LongType => Some("bigint")
-    case FloatType => Some("float")
-    case DoubleType => Some("double")
-    case _: DecimalType => Some("dec")
-    case DateType => Some("date")
-    case TimestampNTZType => Some("ntz")
-    case _: TimeType => Some("time")
-    case _: YearMonthIntervalType => Some("ym")
-    case _: DayTimeIntervalType => Some("dt")
-    case _ => None
-  }
+  /** A type's name in milestone 8's census and cast matrix, if any: the type registry's. */
+  private def censusType(t: DataType): Option[String] =
+    VarkaTypes.of(t).toScala.flatMap(id => Option(VarkaTypes.info(id).census))
 
   /**
    * The operand types of each class in a row, as `Class:type` in the census's type names: what

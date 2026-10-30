@@ -267,4 +267,23 @@ class VarkaFilterRaiseOrderSuite extends QueryTest with VarkaMaybeThrows with Va
         assert(explain.contains("kernel 2 of 2"), explain)
       })(raises(month))
   }
+
+  test("an error comparison allows only the JVM's messageless ArithmeticException") {
+    val arith = classOf[ArithmeticException].getName
+    def raised(cls: String, message: String): Raised = Raised(cls, null, Map.empty, message, cls)
+    assert(difference(raised(arith, "long overflow"), raised(arith, null)).isEmpty)
+    assert(difference(raised(arith, null), raised(arith, "long overflow")).isEmpty)
+    assert(difference(raised(arith, "long overflow"), raised(arith, "/ by zero")).isDefined)
+    val other = classOf[IllegalStateException].getName
+    assert(difference(raised(other, "boom"), raised(other, null)).isDefined)
+    // Through the companion's raised, as a query's outcome is built: a job failure wrapping the
+    // JVM's messageless ArithmeticException against one carrying its message.
+    val hot = VarkaMaybeThrows.raised(
+      new org.apache.spark.SparkException("Job aborted", new ArithmeticException()))
+    val cold = VarkaMaybeThrows.raised(new ArithmeticException("long overflow"))
+    assert(hot.message == null, hot)
+    assert(difference(cold, hot).isEmpty)
+    assert(difference(hot, cold).isEmpty)
+  }
+
 }

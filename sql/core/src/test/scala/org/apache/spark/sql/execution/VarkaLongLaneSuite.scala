@@ -135,8 +135,8 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
    * a fused long output into an Arrow batch.
    */
   private def checkFused(query: String, fixture: String, predicate: Boolean): Unit = {
-    val expected = spark.sql(query)
     val actual = varkaSpark.sql(query)
+    val expected = expectedSql(query, actual)
     val plan = actual.queryExecution.executedPlan
     withClue(s"row consumer, $fixture: $query") {
       assertFused(plan)
@@ -158,7 +158,8 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
         assert(cached.isDefined, "expected the view to be served from the cache")
         assert(cached.get.find(isColumnarVarkaNode).isDefined,
           s"expected a columnar Varka node under the cache:\n${cached.get.treeString}")
-        checkAnswer(varkaSpark.table(view), spark.table(view))
+        val served = varkaSpark.table(view)
+        checkAnswer(served, expectedOf(spark.table(view), served, view))
       }
     } finally {
       for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable(view)
@@ -243,32 +244,41 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
       val actual = varkaSpark.sql(query)
       withClue(s"$fixture: $query") {
         assertFused(actual.queryExecution.executedPlan)
-        checkAnswer(actual, spark.sql(query))
+        checkAnswer(actual, expectedSql(query, actual))
       }
     }
   }
 
-  test("a timestamp comparison stays on the row engine and answers what the row engine does") {
-    // Both timestamp types are the same eight-byte lane physically and are outside this
-    // milestone by decision; a predicate on one alone fuses nothing, and beside a date
-    // conjunct it stays as the residual row filter above the Varka node. The rows straddle a
-    // DST transition in the session zone, which is the case a wrongly admitted zoned kernel
-    // would get wrong - on these rows there is nothing to get wrong yet, since no kernel runs.
+  test("a zoned timestamp comparison stays on the row engine, and an NTZ one fuses") {
+    // Both timestamp types are the same eight-byte count physically. The zoned one is read by no
+    // lane, by decision (VarkaTypes): a predicate on it alone fuses nothing, and beside a date
+    // conjunct it stays as the residual row filter above the Varka node. TIMESTAMP_NTZ is read
+    // on the long lane (VARKA-338), so its predicate fuses alone and beside the date conjunct.
+    // The rows straddle a DST transition in the session zone, which is the case a wrongly
+    // admitted zoned kernel would get wrong, and which an NTZ value, having no zone, ignores.
     withSQLConf("spark.sql.session.timeZone" -> "America/Los_Angeles") {
       fixtures.foreach { case (fixture, _) =>
         for ((col, prefix) <- Seq("ts" -> "TIMESTAMP", "ntz" -> "TIMESTAMP_NTZ")) {
           val alone = s"SELECT l FROM $fixture WHERE $col > $prefix'2021-03-14 02:00:00'"
           val aloneActual = varkaSpark.sql(alone)
           withClue(s"$fixture: $alone") {
-            assertNotFused(aloneActual.queryExecution.executedPlan)
-            checkAnswer(aloneActual, spark.sql(alone))
+            if (col == "ntz") {
+              assertFused(aloneActual.queryExecution.executedPlan)
+            } else {
+              assertNotFused(aloneActual.queryExecution.executedPlan)
+            }
+            checkAnswer(aloneActual, expectedSql(alone, aloneActual))
           }
           val beside = s"SELECT l FROM $fixture WHERE d > d2 AND $col > " +
             s"$prefix'2021-03-14 02:00:00'"
           val besideActual = varkaSpark.sql(beside)
           withClue(s"$fixture: $beside") {
-            assertFused(besideActual.queryExecution.executedPlan)
-            checkAnswer(besideActual, spark.sql(beside))
+            val plan = besideActual.queryExecution.executedPlan
+            assertFused(plan)
+            // A conjunct the kernel does not take is a row filter above the Varka node.
+            val residual = collect(plan) { case f: FilterExec => f }
+            assert(residual.isEmpty === (col == "ntz"), plan.treeString)
+            checkAnswer(besideActual, expectedSql(beside, besideActual))
           }
         }
       }
@@ -285,7 +295,7 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
       val actual = varkaSpark.sql(query)
       withClue(s"$fixture: $query") {
         assertFused(actual.queryExecution.executedPlan)
-        checkAnswer(actual, spark.sql(query))
+        checkAnswer(actual, expectedSql(query, actual))
       }
     }
   }

@@ -47,9 +47,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
+import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.ShortVector;
@@ -121,9 +123,34 @@ final class VarkaWarmupReach {
 
   // --- what HotSpot counts ---------------------------------------------------------------------
 
-  /** The five lane types the engine emits vectors of, by their vector class. */
-  private static final List<Class<?>> LANES = List.of(ByteVector.class, ShortVector.class,
-      IntVector.class, LongVector.class, DoubleVector.class);
+  /**
+   * The lane types the engine emits vectors of, by their vector class: each lane the type
+   * registry says some type's kernels reach (VARKA-494), in width order, and the double lane in
+   * any case, which the long lane's divisions convert through even where no type is read on it.
+   */
+  private static final List<Class<?>> LANES = lanes();
+
+  private static List<Class<?>> lanes() {
+    var reached = new TreeSet<VarkaVectorIR.LaneType>();
+    for (VarkaTypes.Info i : VarkaTypes.all()) {
+      reached.addAll(i.lanes());
+    }
+    var out = new ArrayList<Class<?>>();
+    for (VarkaVectorIR.LaneType lane : reached) {
+      out.add(switch (lane) {
+        case BYTE -> ByteVector.class;
+        case SHORT -> ShortVector.class;
+        case INT -> IntVector.class;
+        case LONG -> LongVector.class;
+        case FLOAT -> FloatVector.class;
+        case DOUBLE -> DoubleVector.class;
+      });
+    }
+    if (!out.contains(DoubleVector.class)) {
+      out.add(DoubleVector.class);
+    }
+    return List.copyOf(out);
+  }
 
   /**
    * The classes a receiver of one lane type can be in this JVM: the vector, the mask and the
@@ -140,6 +167,7 @@ final class VarkaWarmupReach {
         : lane == ShortVector.class ? ShortVector.SPECIES_PREFERRED
         : lane == IntVector.class ? IntVector.SPECIES_PREFERRED
         : lane == LongVector.class ? LongVector.SPECIES_PREFERRED
+        : lane == FloatVector.class ? FloatVector.SPECIES_PREFERRED
         : DoubleVector.SPECIES_PREFERRED;
     var out = new ArrayList<Class<?>>(
         List.of(s.zero().getClass(), s.maskAll(true).getClass(), s.getClass()));

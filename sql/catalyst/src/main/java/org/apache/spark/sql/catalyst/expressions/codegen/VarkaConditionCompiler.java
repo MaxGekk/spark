@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.BinaryOperator;
 import java.util.function.Supplier;
@@ -45,16 +46,19 @@ import org.apache.spark.sql.catalyst.expressions.GreaterThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.If;
 import org.apache.spark.sql.catalyst.expressions.In;
 import org.apache.spark.sql.catalyst.expressions.InSet;
+import org.apache.spark.sql.catalyst.expressions.IsNaN;
 import org.apache.spark.sql.catalyst.expressions.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.IsNull;
 import org.apache.spark.sql.catalyst.expressions.LessThan;
 import org.apache.spark.sql.catalyst.expressions.LessThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.Literal;
+import org.apache.spark.sql.catalyst.expressions.NaNvl;
 import org.apache.spark.sql.catalyst.expressions.Not;
 import org.apache.spark.sql.catalyst.expressions.Or;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -125,6 +129,9 @@ final class VarkaConditionCompiler {
       case Coalesce c when c.children().nonEmpty() ->
           () -> compileCoalesce(CollectionConverters.asJava(c.children()), 0, inputs, literals,
               sink);
+      // `nanvl(a, b)` is `IF(isnan(a), b, a)`: `isnan` is false on a null `a`, so the answer is
+      // `a` and null there, as `NaNvl.eval` has it.
+      case NaNvl n -> () -> nanvl(n, inputs, literals, sink);
       default -> null;
     };
   }
@@ -276,7 +283,7 @@ final class VarkaConditionCompiler {
    * returned as it is (VARKA-329).
    */
   private static VarkaVectorIR storedNarrow(VarkaVectorIR node, DataType type) {
-    Optional<LaneType> narrow = VarkaNodeCompiler.laneOf(type).filter(LaneType::isNarrow);
+    Optional<LaneType> narrow = VarkaTypes.lane(type).filter(LaneType::isNarrow);
     if (narrow.isEmpty() || node.laneType() != LaneType.INT) {
       return node;
     }
@@ -368,7 +375,7 @@ final class VarkaConditionCompiler {
       // A narrow condition beside an int one - `rid < 0 AND (y1 < y2)`, or two narrow types -
       // joins it on the int lane (VARKA-329): the long lift below would give the kernel a long
       // lane a narrow value has no lowering for.
-      if (in.stream().noneMatch(c -> c.laneType() == LaneType.LONG)) {
+      if (in.stream().allMatch(c -> c.laneType() == LaneType.INT || c.laneType().isNarrow())) {
         return Optional.of(onIntLaneAll(in));
       }
       List<Cond> lifted = new ArrayList<>();
@@ -468,6 +475,12 @@ final class VarkaConditionCompiler {
     if (cond.laneType() == VarkaVectorIR.LaneType.LONG) {
       return Optional.of(cond);
     }
+    // A floating condition - a null test of a FLOAT or DOUBLE value - has no long-lane form: a
+    // floating value is not a narrower integer to widen, and a mask crossing between a floating
+    // lane and an integral one is not built yet (VARKA-341 2.4).
+    if (cond.laneType().isFloating()) {
+      return Optional.empty();
+    }
     return switch (cond) {
       case Compare c -> Optional.of(new Compare(c.op(), new VarkaVectorIR.WidenLane(c.left()),
           new VarkaVectorIR.WidenLane(c.right())));
@@ -550,6 +563,108 @@ final class VarkaConditionCompiler {
     return sink.decline("coalesce operand before the last is not a bare date column", head);
   }
 
+  /** Whether {@code t} is {@code FLOAT} or {@code DOUBLE}. */
+  private static boolean isFloating(DataType t) {
+    return DataTypes.FloatType.equals(t) || DataTypes.DoubleType.equals(t);
+  }
+
+  /** A floating literal's raw bits, for a deterministic order of a set's elements. */
+  private static long floatingBits(Expression literal) {
+    Object v = ((Literal) literal).value();
+    return v instanceof Float f ? Float.floatToRawIntBits(f)
+        : v instanceof Double d ? Double.doubleToRawLongBits(d) : Long.MAX_VALUE;
+  }
+
+  /**
+   * {@code isnan(x)}, which is total: true where {@code x} is NaN and false everywhere else, a
+   * null {@code x} included. It is {@code x = NaN} under the lane's equality, which is true
+   * exactly where {@code x} is NaN and unknown where {@code x} is null, made total by
+   * {@code (x = NaN) IS NOT NULL AND x = NaN}: the test of a condition is whether it is known,
+   * and the comparison node is shared, so it is computed once.
+   */
+  private static Optional<Cond> isNaN(
+      Expression child,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    Optional<VarkaVectorIR> x = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
+    if (x.isEmpty()) {
+      return Optional.empty();
+    }
+    Cond equal = new Compare(CompareOp.EQ, x.get(),
+        VarkaNodeCompiler.nanSlot(x.get().laneType(), literals, sink));
+    return Optional.of(new VarkaVectorIR.And(new VarkaVectorIR.IsNotNull(equal), equal));
+  }
+
+  /** {@code nanvl(a, b)}: {@code b} where {@code a} is NaN, and {@code a} everywhere else. */
+  private static Optional<VarkaVectorIR> nanvl(
+      NaNvl n,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    Optional<Cond> test = isNaN(n.left(), inputs, literals, sink);
+    if (test.isEmpty()) {
+      return Optional.empty();
+    }
+    Optional<VarkaVectorIR> right =
+        VarkaNodeCompiler.compileNode(n.right(), inputs, literals, sink);
+    if (right.isEmpty()) {
+      return Optional.empty();
+    }
+    Optional<VarkaVectorIR> left = VarkaNodeCompiler.compileNode(n.left(), inputs, literals, sink);
+    if (left.isEmpty()) {
+      return Optional.empty();
+    }
+    if (!sameLane(n, sink, test.get(), right.get(), left.get())) {
+      return Optional.empty();
+    }
+    return Optional.of(new IfElse(test.get(), right.get(), left.get()));
+  }
+
+  /**
+   * IN over a floating value: an EQ chain joined by OR, each EQ the lane's, so a NaN element
+   * matches a NaN value and {@code 0.0} matches {@code -0.0}, as {@code In}'s ordering and
+   * {@code InSet}'s set both answer. A null value leaves every comparison unknown and the OR
+   * unknown, which is SQL's IN. The elements are kept once each and sorted by their bits, as
+   * {@link #compileInList} keeps the integral lanes' days, so the literal slots and the shape
+   * hash do not depend on the order the list or the set gave them in. A null or non-literal
+   * element declines, as the other lanes' lists do, and so does a list over the fused cap.
+   */
+  private static Optional<Cond> floatingIn(
+      Expression value,
+      List<Expression> elements,
+      Expression whole,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    if (elements.isEmpty() || elements.stream().anyMatch(
+        e -> !(e instanceof Literal l) || l.value() == null)) {
+      sink.note("IN list has a null or non-literal element", whole);
+      return Optional.empty();
+    }
+    TreeMap<Long, Expression> byBits = new TreeMap<>();
+    for (Expression element : elements) {
+      byBits.putIfAbsent(floatingBits(element), element);
+    }
+    if (byBits.size() > VarkaNodeCompiler.MAX_IN_LITERALS) {
+      sink.note("IN list longer than the fused cap of " + VarkaNodeCompiler.MAX_IN_LITERALS, whole);
+      return Optional.empty();
+    }
+    Optional<VarkaVectorIR> x = VarkaNodeCompiler.compileNode(value, inputs, literals, sink);
+    if (x.isEmpty()) {
+      return Optional.empty();
+    }
+    List<Cond> leaves = new ArrayList<>();
+    for (Expression element : byBits.values()) {
+      Optional<VarkaVectorIR> lit = VarkaNodeCompiler.compileNode(element, inputs, literals, sink);
+      if (lit.isEmpty() || !sameLane(whole, sink, x.get(), lit.get())) {
+        return Optional.empty();
+      }
+      leaves.add(new Compare(CompareOp.EQ, x.get(), lit.get()));
+    }
+    return Optional.of(balancedOr(leaves));
+  }
+
   /** {@code greatest} and {@code least}: every operand compiled, then folded from the left. */
   static Optional<VarkaVectorIR> foldPick(
       Expression whole,
@@ -606,6 +721,10 @@ final class VarkaConditionCompiler {
     // arrive unreplaced; real queries never do.
     if (expr instanceof RuntimeReplaceable r) {
       return compileCond(r.replacement(), inputs, literals, sink);
+    }
+    Optional<String> floating = VarkaNodeCompiler.floatingDecline(expr);
+    if (floating.isPresent()) {
+      return sink.decline(floating.get(), expr);
     }
     Supplier<Optional<Cond>> arm;
     try {
@@ -685,14 +804,18 @@ final class VarkaConditionCompiler {
       // IN over narrow literals (VARKA-329): the same EQ chain. A tinyint or smallint value is
       // an int in a narrower lane, so the elements are read as ints and the chain's slots take
       // the value's own lane.
-      case In in when onNarrowLane(in.value().dataType()) -> () -> {
+      case In in
+          when VarkaTypes.lane(in.value().dataType()).filter(LaneType::isNarrow).isPresent() ->
+          () -> {
         List<OptionalInt> elements = new ArrayList<>();
         for (Expression element : CollectionConverters.asJava(in.list())) {
           elements.add(narrowValue(element));
         }
         return compileInList(in.value(), elements, in, inputs, literals, sink);
       };
-      case InSet inSet when onNarrowLane(inSet.child().dataType()) -> () -> {
+      case InSet inSet
+          when VarkaTypes.lane(inSet.child().dataType()).filter(LaneType::isNarrow).isPresent() ->
+          () -> {
         List<OptionalInt> elements = new ArrayList<>();
         for (Object element : CollectionConverters.asJava(inSet.hset())) {
           elements.add(element instanceof Byte b ? OptionalInt.of(b.intValue())
@@ -700,6 +823,39 @@ final class VarkaConditionCompiler {
               : OptionalInt.empty());
         }
         return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
+      };
+      // The floating lanes' own tests (VARKA-341): `isnan`, and IN as an EQ chain whose EQ is
+      // the lane's, so `-0.0 IN (0.0)` and `NaN IN (NaN)` are true as Spark's ordering says.
+      case IsNaN n when isFloating(n.child().dataType()) ->
+          () -> isNaN(n.child(), inputs, literals, sink);
+      case In in when isFloating(in.value().dataType()) ->
+          () -> floatingIn(in.value(), CollectionConverters.asJava(in.list()), in, inputs,
+              literals, sink);
+      case InSet inSet when isFloating(inSet.child().dataType()) -> () -> {
+        List<Expression> elements = new ArrayList<>();
+        for (Object element : CollectionConverters.asJava(inSet.hset())) {
+          elements.add(Literal.create(element, inSet.child().dataType()));
+        }
+        return floatingIn(inSet.child(), elements, inSet, inputs, literals, sink);
+      };
+      // IN over TIMESTAMP_NTZ literals (VARKA-338): the same EQ chain at the long lane, each
+      // literal's microseconds a slot in the long table. A bigint IN takes the same chain but is
+      // left declined here, for the rows that build the bigint operations (rows 104 and 102).
+      case In in when DataTypes.TimestampNTZType.equals(in.value().dataType()) -> () -> {
+        List<OptionalLong> elements = new ArrayList<>();
+        for (Expression element : CollectionConverters.asJava(in.list())) {
+          elements.add(element instanceof Literal l && l.value() instanceof Long micros
+              ? OptionalLong.of(micros) : OptionalLong.empty());
+        }
+        return compileLongInList(in.value(), elements, in, inputs, literals, sink);
+      };
+      case InSet inSet when DataTypes.TimestampNTZType.equals(inSet.child().dataType()) -> () -> {
+        List<OptionalLong> elements = new ArrayList<>();
+        for (Object element : CollectionConverters.asJava(inSet.hset())) {
+          elements.add(element instanceof Long micros ? OptionalLong.of(micros)
+              : OptionalLong.empty());
+        }
+        return compileLongInList(inSet.child(), elements, inSet, inputs, literals, sink);
       };
       case And and -> () -> {
         Optional<Cond> left = compileCond(and.left(), inputs, literals, sink);
@@ -749,12 +905,6 @@ final class VarkaConditionCompiler {
 
   private static boolean isDateOrInterval(DataType dataType) {
     return dataType.equals(DataTypes.DateType) || dataType instanceof YearMonthIntervalType;
-  }
-
-  /** Whether {@code dataType} is one of the narrow lanes' types: {@code tinyint} or
-   * {@code smallint}. */
-  private static boolean onNarrowLane(DataType dataType) {
-    return VarkaNodeCompiler.laneOf(dataType).filter(LaneType::isNarrow).isPresent();
   }
 
   /**
@@ -830,6 +980,48 @@ final class VarkaConditionCompiler {
       leaves.add(new Compare(
           CompareOp.EQ, compiledValue.get(),
           VarkaNodeCompiler.slot(d, compiledValue.get().laneType(), literals)));
+    }
+    return Optional.of(balancedOr(leaves));
+  }
+
+  /**
+   * {@link #compileInList} at the long lane: the same dedup, sort, cap and balanced fold, over
+   * long literals, each in a slot of the long table.
+   */
+  private static Optional<Cond> compileLongInList(
+      Expression value,
+      List<OptionalLong> elements,
+      Expression whole,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    TreeSet<Long> values = new TreeSet<>();
+    for (OptionalLong element : elements) {
+      if (element.isEmpty()) {
+        sink.note("IN list has a null or non-literal element", whole);
+        return Optional.empty();
+      }
+      values.add(element.getAsLong());
+    }
+    if (values.isEmpty()) {
+      sink.note("IN list has a null or non-literal element", whole);
+      return Optional.empty();
+    }
+    if (values.size() > VarkaNodeCompiler.MAX_IN_LITERALS) {
+      sink.note("IN list longer than the fused cap of " + VarkaNodeCompiler.MAX_IN_LITERALS, whole);
+      return Optional.empty();
+    }
+    Optional<VarkaVectorIR> compiledValue = VarkaNodeCompiler.compileNode(
+        value, inputs, literals, sink);
+    if (compiledValue.isEmpty()) {
+      return Optional.empty();
+    }
+    if (compiledValue.get().laneType() != LaneType.LONG) {
+      return sink.decline("an IN value that is not on the long lane", whole);
+    }
+    List<Cond> leaves = new ArrayList<>();
+    for (long v : values) {
+      leaves.add(new Compare(CompareOp.EQ, compiledValue.get(), sink.longSlot(v)));
     }
     return Optional.of(balancedOr(leaves));
   }

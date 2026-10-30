@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.BiFunction;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -44,11 +43,6 @@ import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.internal.SQLConf$;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
-import org.apache.spark.sql.types.DayTimeIntervalType$;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
-import org.apache.spark.sql.types.YearMonthIntervalType$;
 
 /**
  * Milestone 8's cast matrix ({@code sql/varka/plans/m8/casts.tsv}, written by
@@ -74,40 +68,19 @@ public final class VarkaCastMatrixSuite {
    * compiler's answer depends on the form: it fuses a day-time cast whose target ends in
    * {@code SECOND} and no other.
    */
-  private static final Map<String, DataType[]> TYPES = new LinkedHashMap<>();
+  static final Map<String, DataType[]> TYPES = new LinkedHashMap<>();
 
+  // The type registry's census types and forms, in its order (VARKA-494).
   static {
-    TYPES.put("bool", new DataType[] {DataTypes.BooleanType});
-    TYPES.put("byte", new DataType[] {DataTypes.ByteType});
-    TYPES.put("short", new DataType[] {DataTypes.ShortType});
-    TYPES.put("int", new DataType[] {DataTypes.IntegerType});
-    TYPES.put("bigint", new DataType[] {DataTypes.LongType});
-    TYPES.put("float", new DataType[] {DataTypes.FloatType});
-    TYPES.put("double", new DataType[] {DataTypes.DoubleType});
-    TYPES.put("dec", new DataType[] {
-        DataTypes.createDecimalType(10, 2), DataTypes.createDecimalType(30, 4)});
-    TYPES.put("date", new DataType[] {DataTypes.DateType});
-    TYPES.put("ntz", new DataType[] {DataTypes.TimestampNTZType});
-    TYPES.put("time", new DataType[] {new TimeType(0), new TimeType(3), new TimeType(6)});
-    TYPES.put("ym", fields(YearMonthIntervalType$.MODULE$.YEAR(),
-        YearMonthIntervalType$.MODULE$.MONTH(), YearMonthIntervalType::new));
-    TYPES.put("dt", fields(DayTimeIntervalType$.MODULE$.DAY(),
-        DayTimeIntervalType$.MODULE$.SECOND(), DayTimeIntervalType::new));
-  }
-
-  /** An interval type in every field range from {@code first} to {@code last}. */
-  private static DataType[] fields(byte first, byte last, BiFunction<Byte, Byte, DataType> type) {
-    var out = new ArrayList<DataType>();
-    for (byte start = first; start <= last; start++) {
-      for (byte end = start; end <= last; end++) {
-        out.add(type.apply(start, end));
+    for (VarkaTypes.Info i : VarkaTypes.all()) {
+      if (i.census() != null) {
+        TYPES.put(i.census(), i.forms().toArray(new DataType[0]));
       }
     }
-    return out.toArray(new DataType[0]);
   }
 
   /** The three modes' legality of one pair, as {@code casts.tsv} writes it. */
-  private record Legality(boolean legacy, boolean ansi, boolean tryCast) {
+  record Legality(boolean legacy, boolean ansi, boolean tryCast) {
     static final Legality NONE = new Legality(false, false, false);
 
     static Legality of(DataType from, DataType to) {
@@ -187,18 +160,33 @@ public final class VarkaCastMatrixSuite {
    * records what production fuses.
    */
   private static boolean fuses(DataType from, DataType to, String mode) {
-    Attribute x = VarkaSqlResolve.column("x", from);
-    var cols = CollectionConverters.asScala(List.<Attribute>of(x)).toSeq();
-    String sql = (mode.equals("try") ? "try_cast" : "CAST") + "(x AS " + to.sql() + ")";
-    SQLConf conf = SQLConf.get().clone();
-    conf.setConfString(SQLConf.ANSI_ENABLED().key(), mode.equals("legacy") ? "false" : "true");
-    Expression e = SQLConf$.MODULE$.withExistingConf(conf, () -> VarkaSqlResolve.parse(sql, cols));
+    var cols = castColumns(from);
+    Expression e = castExpression(cols, to, mode);
     if (to.equals(DataTypes.BooleanType)) {
       var p = VarkaExpressionCompiler.compilePredicate(e, cols, VarkaEmitOptions.DEFAULTS);
       return p.isPresent() && p.get().residualConjuncts().isEmpty();
     }
     var entry = CollectionConverters.asScala(List.of(VarkaSqlResolve.named(e, "c"))).toSeq();
     return VarkaExpressionCompiler.compile(entry, cols, VarkaEmitOptions.DEFAULTS).isPresent();
+  }
+
+  /** The one column {@link #castExpression} casts, {@code x} of type {@code from}. */
+  static scala.collection.immutable.Seq<Attribute> castColumns(DataType from) {
+    return CollectionConverters.asScala(List.<Attribute>of(VarkaSqlResolve.column("x", from)))
+        .toSeq();
+  }
+
+  /**
+   * {@code CAST(x AS to)}, or {@code try_cast} for the {@code try} mode, over {@code cols}'s one
+   * column, analysed with ANSI off for {@code legacy} and on otherwise: the cast as the matrix
+   * asks the compiler about it, which {@code VarkaDivisorProofSuite} also compiles.
+   */
+  static Expression castExpression(
+      scala.collection.immutable.Seq<Attribute> cols, DataType to, String mode) {
+    String sql = (mode.equals("try") ? "try_cast" : "CAST") + "(x AS " + to.sql() + ")";
+    SQLConf conf = SQLConf.get().clone();
+    conf.setConfString(SQLConf.ANSI_ENABLED().key(), mode.equals("legacy") ? "false" : "true");
+    return SQLConf$.MODULE$.withExistingConf(conf, () -> VarkaSqlResolve.parse(sql, cols));
   }
 
   /** The file's lines as the compiler answers them today: every legal cast of two forms. */

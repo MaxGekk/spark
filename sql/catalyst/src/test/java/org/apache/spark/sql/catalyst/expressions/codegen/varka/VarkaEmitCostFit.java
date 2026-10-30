@@ -93,10 +93,11 @@ final class VarkaEmitCostFit {
    * The lanes the cost model prices, and so the lanes its expected features and probes are
    * enumerated over. The narrow lanes (VARKA-329) are unpriced until VARKA-352's refit: no
    * grammar draws them before then, so there is no data to fit, and a group holding one is
-   * marked unpredictable by {@code VarkaEmitCost.Tally.count} and answered by the weights.
+   * marked unpredictable by {@code VarkaEmitCost.Tally.count} and answered by the weights. The
+   * floating lanes (VARKA-341) are unpriced too until their kernels exist.
    */
   static final List<LaneType> PRICED_LANES = Arrays.stream(LaneType.values())
-      .filter(lane -> !lane.isNarrow())
+      .filter(lane -> !lane.isNarrow() && !lane.isFloating())
       .toList();
 
   /** The register's prices and the probe groups they were read from. */

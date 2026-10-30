@@ -114,7 +114,8 @@ object VarkaWidthAuditProbe {
       .asInstanceOf[VarkaFusedKernel]
     val arena = Arena.ofConfined()
     try {
-      val wide = shape.lane == LaneType.LONG
+      // Eight-byte rows and the long table at every 64-bit lane, DOUBLE's included.
+      val wide = shape.lane.bits() == java.lang.Long.SIZE
       val stride = if (wide) 8L else 4L
       // Small non-negative values: inside every guard, far from every overflow, so the
       // checked shapes compute rather than decline and both bodies run to the end.

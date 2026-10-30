@@ -341,7 +341,9 @@ public final class VarkaKernelChecks {
    * {@code lits} as the long literal table, and the long-lane reference. A narrowing root stores
    * four bytes a row, so its output is read at that width and sign-extended: a value that did not
    * fit 32 bits then differs from the evaluator's 64-bit answer instead of being truncated on both
-   * sides.
+   * sides. Only the conformance entry point, {@link #runLoadedLong} with Spark's answers,
+   * truncates the reference too (see {@code LongLane}); this one does not, even with
+   * {@code spark} given.
    */
   public static boolean runAndCompareLong(String context, String className, byte[] bytes,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
@@ -425,7 +427,7 @@ public final class VarkaKernelChecks {
   private static Lane longLane(LongBatch batch, long[] lits, int[] intLits,
       List<VarkaVectorIR> roots) {
     return holdsBothLanes(roots) ? new MixedLane(batch, intLits, lits, roots)
-        : new LongLane(batch, lits);
+        : new LongLane(batch, lits, false);
   }
 
   /** Whether {@code roots} hold a value of each lane; see {@link #longLane}. */
@@ -548,6 +550,22 @@ public final class VarkaKernelChecks {
       boolean declineAllowed, CallHook hook) {
     return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, NO_INT_LITS, roots),
         declineAllowed, null, ValidityFill.BOTH, hook);
+  }
+
+  /**
+   * {@link #runLoadedLong} for a kernel that may hold both lanes, with {@code intLits} its int
+   * literal table, every row also compared with Spark's answer (the conformance contract's long
+   * lane). The one long-lane entry point whose reference truncates a narrowing root to its low 32
+   * bits, as the store and Spark's LEGACY {@code CAST(x AS INT)} do; every other leaves a value
+   * that does not fit to show as a difference ({@code LongLane}).
+   */
+  public static int runLoadedLong(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, long[] lits, int[] intLits, LongBatch batch,
+      boolean declineAllowed, SparkAnswers spark, CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs,
+        holdsBothLanes(roots) ? new MixedLane(batch, intLits, lits, roots)
+            : new LongLane(batch, lits, true),
+        declineAllowed, spark, ValidityFill.BOTH, hook);
   }
 
   /**
@@ -801,7 +819,7 @@ public final class VarkaKernelChecks {
   }
 
   /** The 64-bit lane, whose narrowing roots store four bytes a row. */
-  private record LongLane(LongBatch batch, long[] lits) implements Lane {
+  private record LongLane(LongBatch batch, long[] lits, boolean truncateNarrow) implements Lane {
     @Override public int length() {
       return batch.length();
     }
@@ -841,7 +859,16 @@ public final class VarkaKernelChecks {
     }
 
     @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
-      return VarkaReference.longValue(root, values, isNull, lits);
+      OptionalLong v = VarkaReference.longValue(root, values, isNull, lits);
+      // A narrowing root stores the low 32 bits of its child (NarrowLane), which got() reads
+      // back, and the reference answers the child in full. Everywhere but the conformance path
+      // the two are left to differ: the IR series adds a NarrowLane root wherever its bound
+      // analysis says the value fits an int, so a value that does not shows as a difference.
+      // The conformance path (truncateNarrow) holds every row to Spark's answer, and there a
+      // root whose value can leave the int range is a LEGACY CAST(x AS INT) of a long, which
+      // keeps the low 32 bits as the store does (an ANSI one raises, and is declined).
+      return truncateNarrow && root instanceof NarrowLane && v.isPresent()
+          ? OptionalLong.of((int) v.getAsLong()) : v;
     }
 
     @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {
@@ -887,12 +914,15 @@ public final class VarkaKernelChecks {
       return 8L;
     }
 
+    // A mixed kernel holds int and long values only (a narrow value under a long kernel is
+    // refused), and the putters below lay out four or eight bytes accordingly.
     @Override public long columnStride(int c) {
-      return intColumn(c) ? 4L : 8L;
+      return width(intColumn(c) ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
     @Override public long outputStride(VarkaVectorIR root) {
-      return root.laneType() == VarkaVectorIR.LaneType.INT ? 4L : 8L;
+      return width(root.laneType() == VarkaVectorIR.LaneType.INT
+          ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
     @Override public long value(int c, int i) {
@@ -981,23 +1011,14 @@ public final class VarkaKernelChecks {
           new int[batch.data().length]);
     }
 
-    /** Bytes of a value at {@code lane}: the lane's width, which is also its stride. */
-    private static long width(VarkaVectorIR.LaneType lane) {
-      return switch (lane) {
-        case BYTE -> 1L;
-        case SHORT -> 2L;
-        case INT -> 4L;
-        case LONG -> 8L;
-      };
-    }
-
     /** {@code v} as {@code lane} stores it, sign-extended: the value the reference reads back. */
     private static long narrow(VarkaVectorIR.LaneType lane, long v) {
       return switch (lane) {
         case BYTE -> (byte) v;
         case SHORT -> (short) v;
-        case INT -> (int) v;
-        case LONG -> v;
+        // A floating lane's value is its bits at its width (VARKA-341 2.3).
+        case INT, FLOAT -> (int) v;
+        case LONG, DOUBLE -> v;
       };
     }
 
@@ -1054,8 +1075,8 @@ public final class VarkaKernelChecks {
       switch (lane) {
         case BYTE -> d.set(ValueLayout.JAVA_BYTE, i, (byte) v);
         case SHORT -> d.set(ValueLayout.JAVA_SHORT, i * 2L, (short) v);
-        case INT -> d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
-        case LONG -> d.set(ValueLayout.JAVA_LONG, i * 8L, v);
+        case INT, FLOAT -> d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
+        case LONG, DOUBLE -> d.set(ValueLayout.JAVA_LONG, i * 8L, v);
       }
     }
 
@@ -1071,7 +1092,7 @@ public final class VarkaKernelChecks {
       return switch (columnLanes[c]) {
         case BYTE -> low ? Byte.MIN_VALUE : Byte.MAX_VALUE;
         case SHORT -> low ? Short.MIN_VALUE : Short.MAX_VALUE;
-        case INT, LONG -> VarkaEmitterFixtures.poison(nullOrdinal);
+        case INT, LONG, FLOAT, DOUBLE -> VarkaEmitterFixtures.poison(nullOrdinal);
       };
     }
 
@@ -1083,7 +1104,7 @@ public final class VarkaKernelChecks {
       return switch (root.laneType()) {
         case BYTE -> Byte.MIN_VALUE;
         case SHORT -> Short.MIN_VALUE;
-        case INT, LONG -> 0xDEADBEEF;
+        case INT, LONG, FLOAT, DOUBLE -> 0xDEADBEEF;
       };
     }
 
@@ -1112,8 +1133,8 @@ public final class VarkaKernelChecks {
       return switch (root.laneType()) {
         case BYTE -> out.get(ValueLayout.JAVA_BYTE, i);
         case SHORT -> out.get(ValueLayout.JAVA_SHORT, i * 2L);
-        case INT -> out.get(ValueLayout.JAVA_INT, i * 4L);
-        case LONG -> out.get(ValueLayout.JAVA_LONG, i * 8L);
+        case INT, FLOAT -> out.get(ValueLayout.JAVA_INT, i * 4L);
+        case LONG, DOUBLE -> out.get(ValueLayout.JAVA_LONG, i * 8L);
       };
     }
   }
@@ -1136,6 +1157,15 @@ public final class VarkaKernelChecks {
       }
     }
     return bits;
+  }
+
+  /**
+   * Bytes of a value at {@code lane}, which is also its stride: production's own figure
+   * ({@code Lane.byteStride}), so the harness lays a buffer out as the emitter addresses it rather
+   * than by a table of its own (VARKA-494).
+   */
+  static long width(VarkaVectorIR.LaneType lane) {
+    return org.apache.spark.sql.catalyst.expressions.codegen.varka.Lane.of(lane).byteStride;
   }
 
   /** Each of {@code numInputs} columns' lane as {@code roots} read it; the long lane if unread. */
@@ -1324,13 +1354,76 @@ public final class VarkaKernelChecks {
   private static int runOne(String context, String className, byte[] bytes,
       List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
       SparkAnswers spark, List<ValidityFill> fills) {
-    var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
-    var kernel = load(loader, className, bytes);
-    try {
-      return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark, fills,
-          CallHook.NONE);
-    } finally {
-      loader.release();
+    if (!reuseLoaded) {
+      var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
+      var kernel = load(loader, className, bytes);
+      KERNELS_DEFINED.incrementAndGet();
+      try {
+        return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark,
+            fills, CallHook.NONE);
+      } finally {
+        loader.release();
+      }
+    }
+    return runLoaded(context, LAST_LOADED.get().kernel(className, bytes), rootList, numInputs,
+        lane, declineAllowed, spark, fills, CallHook.NONE);
+  }
+
+  /**
+   * Whether {@link #runOne} runs a kernel whose bytes it loaded last on this thread on that class
+   * rather than defining it again. The suites check one kernel over several batches and each
+   * batch through both bodies, a run apiece; defining it once a run made a tree of the series
+   * eight classes, and the definitions, their verification and the unloading of their loaders
+   * were a large share of the series' time (`m8/results/VARKA-suite-profile.txt`). An emitted
+   * kernel holds no state between calls - its only fields are the static final range tables its
+   * initialiser fills - so a run on the loaded class is the run a fresh one would make. Kept
+   * switchable, {@code -Dvarka.checks.reuseLoaded=false}, so that the two can be timed and
+   * compared.
+   */
+  static volatile boolean reuseLoaded =
+      !"false".equals(System.getProperty("varka.checks.reuseLoaded"));
+
+  /** How many kernel classes {@link #runOne} has defined in this JVM, for the reuse's test. */
+  static final AtomicLong KERNELS_DEFINED = new AtomicLong();
+
+  /**
+   * The kernel {@link #runOne} loaded last on this thread, under its own loader: the suites that
+   * call it from several threads each keep their own. Matched on the name and the bytes; the bytes
+   * matter because a planted fault rewrites them and keeps the name. Its loader is released when
+   * the thread loads another kernel, so each thread holds at most one such loader; releasing one
+   * only drops its references, so the last kernel a thread ran stays loaded until then.
+   */
+  private static final ThreadLocal<LastLoaded> LAST_LOADED =
+      ThreadLocal.withInitial(LastLoaded::new);
+
+  private static final class LastLoaded {
+    private String className;
+    private byte[] bytes;
+    private VarkaGeneratedClassLoader loader;
+    private VarkaFusedKernel kernel;
+
+    VarkaFusedKernel kernel(String name, byte[] code) {
+      if (kernel != null && name.equals(className) && Arrays.equals(code, bytes)) {
+        return kernel;
+      }
+      if (loader != null) {
+        loader.release();
+      }
+      loader = null;
+      kernel = null;
+      var fresh = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
+      // A class that fails to load is not kept: the next run loads it again and fails the same.
+      try {
+        kernel = load(fresh, name, code);
+      } catch (RuntimeException | Error e) {
+        fresh.release();
+        throw e;
+      }
+      KERNELS_DEFINED.incrementAndGet();
+      loader = fresh;
+      className = name;
+      bytes = code.clone();
+      return kernel;
     }
   }
 
@@ -1408,16 +1501,18 @@ public final class VarkaKernelChecks {
               agreeWithSpark(context, spark, o, i, values, isNull, want);
             }
             for (int f = 0; f < runs; f++) {
-              String at = context + fills.get(f).suffix();
               boolean bit = bit(outs[f].bits()[o], i);
               long got = lane.got(outs[f].values()[o], i, root);
+              // The fill's name is formatted only for a failure: this loop runs once a row.
               if (bit != want.isPresent()) {
+                String at = context + fills.get(f).suffix();
                 throw new IllegalStateException(at + ": validity of output " + o + " row " + i
                     + " differs (want " + shown(want) + ", got "
                     + (bit ? "Some(" + got + ")" : "None") + ")"
                     + evidence(values, isNull, nullCounts));
               }
               if (want.isPresent() && got != want.getAsLong()) {
+                String at = context + fills.get(f).suffix();
                 throw new IllegalStateException(at + ": output " + o + " row " + i
                     + " differs (want " + want.getAsLong() + ", got " + got + ")"
                     + evidence(values, isNull, nullCounts));

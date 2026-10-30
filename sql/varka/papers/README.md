@@ -100,3 +100,10 @@ Staged Evaluation" (WGP '14), read on 19 September 2026 for Item 11, is in the
 same position - ACM copyright with a permission notice - and is transcribed
 here anyway, on the repository owner's explicit decision; its header says so.
 The default above stands for the next paper.
+
+Two papers on regression test selection were read on 28 October 2026 for
+`plans/m8/PLAN.md` row 508: Wang, Lian, Marinov and Xu, "Test Selection for
+Unified Regression Testing" (ICSE 2023, IEEE), and Gligoric, Eloussi and
+Marinov, "Practical Regression Test Selection with Dynamic File Dependencies"
+(ISSTA 2015, ACM). Neither copy prints terms that permit one here, so
+`plans/m8/READING_TEST_SELECTION.md` keeps the reading notes and the citations.
