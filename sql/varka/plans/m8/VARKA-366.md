@@ -57,12 +57,16 @@ two pairs and for three more by composition:
    java:401`, `:953`), for which the census has no cell (`VARKA-343.md` 0 item 5).
 6. **No leading-zero or reinterpretation node exists**, and no unsigned compare (359 adds them) or
    128-bit product (360b's `WideMul` for a constant multiplier, 361's for a variable one).
-7. **The sources are not in the repository.** The milestone plan's 2.2 cites "Eisel and Lemire's
-   algorithm" and "their Theorem 1, Corollary 2 and Lemma 3" with "no fallback while `s <= 27`",
-   from the float-conversions reading of 14 October 2026; neither that reading nor the papers are
-   committed (`sql/varka/papers/README.md`'s contents name neither; a search of `sql/varka/` for
-   "Eisel" finds only the milestone plan). The theorem numbers below are the row's, unchecked.
-   Question 1 of section 8.
+7. **The sources, transcribed** (merged 30 October 2026 with the owner's approval): Lemire 2021,
+   "Number Parsing at a Gigabyte per Second"
+   (`sql/varka/papers/lemire-2021-number-parsing-gigabyte-per-second.md`, arXiv 2101.11408, CC BY
+   4.0), and Mushtak and Lemire 2023, "Fast Number Parsing Without Fallback"
+   (`sql/varka/papers/mushtak-lemire-2023-fast-number-parsing-without-fallback.md`, arXiv
+   2212.06644, CC BY 4.0). The row's "Theorem 1, Corollary 2 and Lemma 3" are Lemire's section 9
+   (Theorem 1 and Corollary 2 on p. 16, Lemma 3 on p. 17), and "no fallback while `s <= 27`" is
+   section 9.1 (p. 17) with Algorithm 1 line 6's no-abort window `q` in `[-27, 55]` (p. 8).
+   Algorithm 1 is "just one algorithm for both the 32-bit and 64-bit cases" (p. 8). Mushtak and
+   Lemire prove the abort never fires at any exponent (section 4, pp. 3-5, Proposition 4, p. 4).
 8. **The working-precision round-to-odd** of the milestone plan's section 9 is "a sketch, sampled
    here at 200,000 values with no miss, unproven where `r + ul` must be exact and uncosted".
 9. **The baseline** has no decimal-to-floating section (`VARKA-350.md` 0 item 17).
@@ -81,8 +85,10 @@ two pairs and for three more by composition:
 - **The arm is composed from long-lane nodes** (2.3), following 359's precedent, its two 128-bit
   products row 360b's `WideMul`; no node of its own.
 - **`FLOAT` rests on the binary64 arm** (2.2): round-to-odd at 53 bits, then one narrowing, the
-  argument 350 already relies on from precision 8 to 15. The direct binary32 algorithm becomes an
-  option once the paper is in the repository.
+  argument 350 already relies on from precision 8 to 15. The published algorithm covers binary32
+  directly (Lemire, Algorithm 1, p. 8), so the direct binary32 arm is an option, not the design.
+- **`s >= 28` declines by Varka's choice, not the paper's** (2.5): Mushtak and Lemire show the
+  abort never fires at any exponent. The milestone plan's wording is flagged in section 8.
 - **The two-pass form above 18 is 364's composition** over this row's sequence, which exposes the
   entry 364 needs (2.5).
 
@@ -93,7 +99,8 @@ two pairs and for three more by composition:
 decline, by Eisel and Lemire's algorithm with the scale a per-kernel constant; the same `DOUBLE`
 value feeds 350's double rule for the three narrow casts at precision 17 and 18. Not this row: the
 quotients below 16 and the round-to-odd below 16 (350), the casts' composition and their tests in
-the three modes (350), precision above 18 and the two-pass form (364), `s >= 28` (364's decline),
+the three modes (350), precision above 18 and the two-pass form (364), `s >= 28` (declined by
+Varka's choice in 364, 2.5),
 floating to decimal (346), a general FMA node (350's open point 8).
 
 ## 2. Design
@@ -105,44 +112,61 @@ alone, `VARKA-350.md` 2.4), per lane, over `w = abs(u)`:
 
 1. `w = 0` gives `+0.0` (a blend at the end).
 2. `l = LEADING_ZEROS_COUNT(w)`; `w' = w << l`, bit 63 set.
-3. `T = (T_hi, T_lo)`, the 128-bit normalised approximation of `5^q` the paper specifies, two longs
-   in the kernel's long table, computed at compile time from `BigInteger` and checked against the
-   paper's table rows by a unit test for `s = 0..27`.
+3. `T = (T_hi, T_lo)`, two longs in the kernel's long table: for `s = 1..27` the 128-bit
+   reciprocal **rounded up**, `ceiling(2^b / 5^s)` with `b = 127 + ceiling(log2(5^s))`, which
+   Corollary 2 needs (Lemire section 9.1, p. 17; Table 4, p. 18); a truncated table is wrong on a
+   large share of inputs (the lead's simulation of 30 October 2026). Scale 0 would be Table 3's `q =
+   0` row (p. 13), `8000000000000000` with a second word of zero, though 350 serves scale 0 by the
+   conversion. The table is computed at compile time from `BigInteger` and a unit test compares it
+   with Table 4's 27 rows.
 4. `z = w' * T_hi` as 128 bits: row 360b's `WideMul` by the constant `T_hi`; this row builds no
    product of its own.
 5. The second product `w' * T_lo`'s high word, a second `WideMul`, added into `z.lo` with its carry
-   into `z.hi` (an unsigned compare); the scalar algorithm takes it only when the low nine bits of
-   `z.hi` are all ones, and the lanes compute it always and blend it in under that mask.
-6. `b = z.hi >>> 63`; `m = z.hi >>> (b + 9)`, a variable shift; the binary exponent is `E_s + 63 -
-   l + b`, with `E_s` the compile-time part from `floor(log2(5^q)) + q`.
-7. The tie: where `z.lo == 0` and `(m & 3) == 1` at a scale where an exact midpoint exists, `m` is
-   not rounded up; by item 0.3 those are scales 1 and 2 (scale 0 being the conversion), so the step
-   is emitted there only. The algorithm's own tie window is read from the transcription and must
-   contain them.
-8. `m += m & 1; m >>>= 1`; where `m == 2^53`, `m = 2^52` and the exponent gains one.
-9. The bits `(m & (2^52 - 1)) | (E + 1023) << 52`, the sign of `u` ORed in, reinterpreted as a
-   double; no subnormal or infinity branch, by item 0.3.
+   into `z.hi` (an unsigned compare); the algorithm takes it only when the low nine bits of `z.hi`
+   are all ones, the stopping rule of section 9.1 (p. 17: the top 55 bits must be exact, and `64 -
+   55` is 9; 38 for binary32), and the lanes compute it always and blend it in under that mask.
+6. `b = z.hi >>> 63`; `m = z.hi >>> (b + 9)`, a variable shift, the top 54 bits (Algorithm 1 lines
+   7 and 8, p. 8); the binary exponent `p = ((217706 * q) >> 16) + 63 - l + b` (Algorithm 1 line 9,
+   p. 8; section 10, p. 22), its first term a compile-time constant at a fixed scale.
+7. **The tie, by the paper's rule** (Algorithm 1 lines 16 and 17, p. 8): where `z.lo <= 1`, `m` is
+   odd, `m / 2` is even and `q` lies in `[-4, 23]` (a compile-time test, so the step is emitted at
+   scales 1 to 4 only), and where also `z.hi / m` is a power of two - that is, `z.hi`'s low `b + 9`
+   bits, those step 6 dropped, are all zero - `m <- m - 1`, so step 8 does not round up. `z.lo <= 1`
+   rather than `== 0` is the paper's (line 16; Technical Remark 2, p. 15; section 9.1, p. 17, where
+   the product's lowest bit is ignored). **Both tests are needed**: with the power-of-two test
+   dropped, `CAST(CAST(0.01 AS DECIMAL(16, 2)) AS DOUBLE)` would answer one ulp below `0.01`'s
+   correctly rounded double, and the lead's simulation with exact rational rounding found many such
+   answers inside the tie windows for a rule without it and none for the paper's (sampled, not
+   proven).
+8. `m += m & 1; m >>>= 1`; where `m == 2^53`, `m = 2^52` and `p` gains one (Algorithm 1 lines 19 and
+   20).
+9. The value `m * 2^(p - 52)` (Algorithm 1, p. 8): the bits `(m & (2^52 - 1)) | (p + 1023) << 52`,
+   the sign of `u` ORed in, reinterpreted as a double; no subnormal or infinity branch, by item
+   0.3.
 
-**Unverified until the transcription.** Steps 4 to 8 follow the algorithm as its paper states it;
-the nine-bit mask, the shifts, the exponent constant and the table's rounding written here are this
-plan's reading of the algorithm and stay marked unverified until the paper is in the repository,
-which waits on the owner's yes (question 1 of section 8). That is eight limb multiplies (inside the
-two `WideMul`s) and about forty other lane operations, the count the milestone plan gives, to be
-registered by `dev/varka_emit.sh` when built. The row's exactness claim - "exact for every unscaled
-long with no fallback while `s <= 27`" - is the paper's, cited by its Theorem 1, Corollary 2 and
-Lemma 3 once transcribed; within precision 18 the scale is at most 18, inside that window.
+**The citations.** Every constant above is the paper's
+(`sql/varka/papers/lemire-2021-number-parsing-gigabyte-per-second.md`, cited by section and page).
+That is eight limb multiplies (inside the two `WideMul`s) and about forty other lane operations, the
+count the milestone plan gives, to be registered by `dev/varka_emit.sh` when built. The exactness of
+the two-product truncated result rests on Theorem 1 and Corollary 2 (section 9, p. 16), which make
+the rounded-up reciprocal multiply exact; Lemma 3 (p. 17), which makes the zero-remainder (tie) test
+exact; the nine-bit stopping rule (section 9.1, p. 17); Technical Remark 1 (p. 14), which shows the
+low word's all-ones test enough after the second product; and Algorithm 1 line 6's no-abort window,
+`q` in `[-27, 55]` (p. 8). Within precision 18 the scale is at most 18, inside that window.
 
 ### 2.2 `FLOAT`: the binary64 arm, round-to-odd, one narrowing
 
 `FLOAT` at 16 to 18 runs 2.1's steps 1 to 6 and replaces steps 7 and 8 by round-to-odd at 53 bits:
-`m`'s last bit ORed with the sticky bit - `z.lo` nonzero or a bit set among those step 6 dropped -
-then the double assembled as in step 9 and one `ConvertLane(FLOAT)`. Round-to-odd at 53 bits
-followed by one rounding to 24 is one correct rounding (Boldo and Melquiond's Theorem 3, 53 against
-24 + 2), the argument 350 already relies on from precision 8 to 15 (`VARKA-350.md` 2.4), so `FLOAT`
-needs no second set of constants and no tie step. That the truncated product gives a correct sticky
-bit is part of the paper's exactness claim and is unverified with it. The direct binary32 algorithm
-(a 38-bit mask, a shift of 38, its own tie window at scales 1 to 15 by item 0.3) becomes an option
-arm once the paper is in the repository and says whether its theorem covers binary32.
+`m`'s last bit ORed with the sticky bit - `z.lo > 1` or a bit set among those step 6 dropped, the
+form that follows from the paper's zero-remainder test (Lemma 3, p. 17; section 9.1, p. 17, which
+ignores the product's lowest bit) - then the double assembled as in step 9 and one
+`ConvertLane(FLOAT)`. Round-to-odd at 53 bits followed by one rounding to 24 is one correct rounding
+(Boldo and Melquiond's Theorem 3, 53 against 24 + 2), the argument 350 already relies on from
+precision 8 to 15 (`VARKA-350.md` 2.4), so `FLOAT` needs no second set of constants and no tie
+step. The published algorithm covers binary32 directly ("We give just one algorithm for both the
+32-bit and 64-bit cases", Algorithm 1, p. 8: a 38-bit mask, a shift of `b + 38`, the tie window `q`
+in `[-17, 10]`), so the direct binary32 arm's condition is met; it stays an option arm, measured
+against this design, which shares 2.1's proof and constants.
 
 ### 2.3 Composed from long-lane nodes
 
@@ -182,7 +206,12 @@ three narrow casts at 17 and 18 takes its `DOUBLE` value from `toDouble` unchang
 shift that took them as an exponent offset, and accepts a lane where both give one value. So the
 compiler's builder takes an already normalised `w'` (bit 63 set, unsigned) and a per-lane exponent
 offset, which this row calls with `l` from step 2 and an offset of zero; `w' + 1` overflowing 64
-bits is 364's case to handle. `s >= 28` is outside the row's exactness window and declines in 364.
+bits is 364's case to handle. **`s >= 28` declines by Varka's choice, not the paper's**: Lemire's
+algorithm aborts outside `[-27, 55]` (Algorithm 1 line 6, p. 8), but Mushtak and Lemire show the
+abort never fires at any exponent in `(-342, 308)` for a 64-bit significand (section 4, pp. 3-5;
+Proposition 4, p. 4), so a scale of 28 or more could be served by the same sequence and a table
+entry more. Declining it keeps 364's exactness argument on Lemire's window alone; section 8 flags
+the milestone plan's wording.
 
 ### 2.6 The working-precision round-to-odd, an option arm for `DOUBLE`
 
@@ -205,9 +234,10 @@ by `VarkaWarmupReachSuite`.
 
 ## 3. Tests and proofs
 
-1. **The paper's theorem, cited.** The exactness claim of 2.1 cites the transcription's theorem
-   numbers and states its preconditions (the scale window, the width of `w`, the table's rounding)
-   beside the code that relies on each.
+1. **The paper's results, cited.** The exactness claim of 2.1 cites Theorem 1, Corollary 2 and
+   Lemma 3 (Lemire section 9, pp. 16-17), the nine-bit stopping rule (section 9.1, p. 17), Technical
+   Remark 1 (p. 14) and Algorithm 1 line 6's no-abort window (p. 8), each beside the code that
+   relies on it with its precondition (the scale window, `w < 2^64`, the table rounded up).
 2. **Exhaustion against the proven quotient.** For every `u` with `abs(u) < 2^32` and every scale
    1 to 18, the scalar twin and the emitted kernel give the bits of `(double) u / 10^s` - correctly
    rounded there by the JDK's own argument (item 0.2: exact operands, one rounding) - and for
@@ -222,12 +252,16 @@ by `VarkaWarmupReachSuite`.
    `960000084148223999` at scale 2, `912057769880088000` at scale 3, `576460752303480000` at scale
    2, `83886085` and `83886095` at scale 1 to `FLOAT`, `300315360073` at scale 14), each at every
    scale 0 to 18; the second-product cases - values where the low nine bits of `z.hi` are all ones -
-   found by a search in the scalar twin and tested by name.
+   found by a search in the scalar twin and tested by name; and `0.01` at `DECIMAL(16, 2)` to
+   `DOUBLE`, the witness that the tie rule's power-of-two test is needed (2.1 step 7), with the
+   `z.lo` values 0 and 1 both reached among the tie cases.
 4. **No vacuous pass, for row 504.** The sampled suite counts the lanes that took the second
-   product, the tie step and a set sticky bit, and fails if any count is zero; under a test flag the
-   tree drops the second product, and the suite must fail with the flag on.
-5. **The table.** A unit test recomputes `T` for `s = 0..27` from `BigInteger` and compares it with
-   the transcription's table rows.
+   product, the tie step and a set sticky bit, and fails if any count is zero; under one test flag
+   the tree drops the second product, under another the tie rule's power-of-two test, and under a
+   third the table is truncated rather than rounded up; the suite must fail under each.
+5. **The table.** A unit test recomputes `T` for `s = 1..27` from `BigInteger`, rounded up as
+   section 9.1 specifies, and compares it with Table 4 (p. 18), and `s = 0` with Table 3's `q = 0`
+   row (p. 13).
 6. **Coverage rows** in 350's "DECIMAL casts" family: `CAST(d16s9 AS DOUBLE)`, `CAST(d18 AS
    DOUBLE)`, `CAST(d18 AS FLOAT)`, `CAST(d18s14 AS DOUBLE)` and `d18 < x` over a double column
    (coercion's cast), and, after 350c, `CAST(d18s14 AS INT)` under ANSI and TRY; each names
@@ -258,13 +292,8 @@ Predictions, registered before the build:
 
 ## 5. Order, files and size
 
-1. **The papers** into `sql/varka/papers/` as its README prescribes: Lemire's "Number Parsing at a
-   Gigabyte per Second" and, if the theorem numbers are there, Mushtak and Lemire's "Fast Number
-   Parsing Without Fallback" (both in Software: Practice and Experience, venues to be confirmed from
-   the deposits), from the open-access deposits by `pdftotext -bbox-layout`, each file's header
-   naming this row; if a deposit's terms forbid a copy, the reading notes and the citation instead.
-   Nothing is fetched before the owner's yes, which the lead is asking for (question 1 of section
-   8); the theorem numbers and constants of 2.1 are then quoted from the transcription.
+1. **The papers are in** (step done, 30 October 2026, the owner's approval): both transcriptions
+   under `sql/varka/papers/`, cited by section and page above.
 2. **The census cells**: `long.LEADING_ZEROS_COUNT`, `long.LSHL` and `long.LSHR` by a vector count,
    the long-to-double reinterpretation, on the laptop and through `varka-width-audit.yml`.
 3. **The scalar twin and its harness** (3.2, 3.3, 3.5), test side only, before any emitter code: it
@@ -274,7 +303,7 @@ Predictions, registered before the build:
    `toDouble` and `toFloat` at `p >= 16`, tests 3.2 to 3.8, the measurement against the baseline at
    both widths and 512 bits on the laptop, scored.
 5. **366b, if built**: `decimalToDoubleWorkingOdd` after its twin and an FMA node (2.6); the direct
-   binary32 option after the transcription (2.2).
+   binary32 option arm, measured against 2.2's design.
 
 | file | what |
 |---|---|
@@ -283,13 +312,12 @@ Predictions, registered before the build:
 | `VarkaDecimalCastCompiler.java` | the composed tree, 350's `toDouble` and `toFloat` at `p >= 16` |
 | `VarkaReference`, `VarkaCanonicalIr` | the two nodes' arms |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weights, features, reach |
-| `sql/varka/papers/` | step 1's transcriptions and README rows |
 | tests | the scalar twin, the exhaustion, the sampled suite, the table test, coverage rows |
 | benchmark | 350's baseline sections, results files |
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json`, `emitted_bytes.json` |
 
 **Size: medium, in one pull request after the baseline** (366b only if its conditions are met). The
-papers half a day; the cells half a day; the twin and its harness a day and a half; 366a three days.
+cells half a day; the twin and its harness a day and a half; 366a three days.
 Test time: the exhaustion is 2^33 values per scale and target, of the order of a minute per scale in
 the kernel and opt-in; the sampled suite tens of thousands of `BigDecimal` calls a scale, seconds.
 It rests on 347 (the load), 360b's `WideMul` (both products), 350b (`toDouble`, `toFloat` and their
@@ -307,10 +335,10 @@ row.
 ## 7. Out of this row, and declines that stay
 
 Out: the quotients and round-to-odd below precision 16 and the casts' composition (350); the
-two-pass form above 18 and its `s >= 28` decline (364); a general FMA node (350's open point 8);
-Trino's `FLOAT` midpoint-margin test, which would keep more lanes on the quotient but needs its own
-bound proven (`READING_TRINO_DECIMAL.md` 7); Schubfach and the shortest-digits path, which are 346's
-direction (`m9/SCOPE.md` item 97).
+two-pass form above 18 and its `s >= 28` decline, Varka's choice (364, 2.5); a general FMA node
+(350's open point 8); Trino's `FLOAT` midpoint-margin test, which would keep more lanes on the
+quotient but needs its own bound proven (`READING_TRINO_DECIMAL.md` 7); Schubfach and the
+shortest-digits path, which are 346's direction (`m9/SCOPE.md` item 97).
 
 **The per-batch guarded form, a possible measured option arm.** The row's text has the arm "taken
 per batch when the guard mask of 350 is not all true": a guard `abs(u) <= 2^53` collected over the
@@ -325,29 +353,35 @@ Declines that stay: none at precision 16 to 18; a decimal in an int-driven kerne
 
 ## 8. Questions for the owner
 
-1. **Fetching the papers** (item 0.7, step 1 of section 5) waits on the owner's yes, which the lead
-   is asking for. Until then the masks, shifts, exponent constant and theorem numbers of 2.1 and 2.2
-   stay marked unverified.
+The question of fetching the papers is answered (the owner approved it; both are transcribed).
+
+1. **Flagged, the owner's text: the abort below `s = 28`.** The milestone plan's 2.2 says "the abort
+   case exists only for `s >= 28`, which must decline" (`PLAN.md` 2.2, the decimal-to-floating
+   paragraph). Mushtak and Lemire prove the abort never fires at any exponent (section 4, pp. 3-5,
+   Proposition 4), so the abort does not exist at `s >= 28` either; declining there is Varka's
+   choice (2.5), not a necessity. The wording needs the owner's rewording, and it bears on row 364,
+   whose text and two-pass arm inherit the decline.
 
 ### Open points for the lead
 
 Settled by the lead on 30 October 2026, kept as the record: (1) one body, the arm at the precisions
 that need it and the quotient below, the guarded form a possible option arm (section 7); (2) a
 composition from long-lane nodes with 360b's `WideMul`, no C2 constraint forcing one node being
-known (2.3); (3) the papers wait on the owner's yes, the constants marked unverified; (4) `FLOAT` by
-the binary64 arm, round-to-odd and one narrowing, the binary32 arm an option once the paper is in.
+known (2.3); (3) the papers fetched with the owner's yes and cited by section and page; (4) `FLOAT`
+by the binary64 arm, round-to-odd and one narrowing, the direct binary32 arm an option.
 None is open.
 
 ## 9. Done when
 
 Row 366's text holds, with the corrections above: at precision 16 to 18 the 64-bit form fuses every
 value for `DOUBLE` and `FLOAT`, bit-identical to `BigDecimal.doubleValue` and `floatValue` over the
-exhaustion of 3.2, the sampled regions and tie windows of 3.3 and the fuzzer, with the paper's
-Theorem 1, Corollary 2 and Lemma 3 (as the transcription numbers them) cited for the exactness
-claim; the vacuity counts and the planted fault of 3.4 hold; 350's three narrow casts at precision
-17 and 18 take their double from it; its cost is measured against 350's quotient and the row path at
-both widths; the working-precision option arm is built or its witness recorded (2.6); no existing
-shape's bytes move; and the PR build and the option matrix pass.
+exhaustion of 3.2, the sampled regions and tie windows of 3.3 (the `0.01` witness among them) and
+the fuzzer, with Lemire's Theorem 1, Corollary 2 and Lemma 3, the nine-bit stopping rule, Technical
+Remark 1 and Algorithm 1 line 6's window cited for the exactness claim; the table rounded up and
+checked against Table 4; the vacuity counts and the planted faults of 3.4 hold; 350's three narrow
+casts at precision 17 and 18 take their double from it; its cost is measured against 350's quotient
+and the row path at both widths; the working-precision option arm is built or its witness recorded
+(2.6); no existing shape's bytes move; and the PR build and the option matrix pass.
 
 ## 10. Outcome
 
