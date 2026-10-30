@@ -431,13 +431,14 @@ declines exactly when Spark raises on one of its live rows.
    form - the laptop's, and under `useAVX=2` both arms of `wideConversionForm` - against
    `Math.rint`, `floor`, `ceil` and `doubleToLong`.
 5. **The integral rounding by exhaustion at 32 bits**, behind `-Dvarka.sweep=true`: every
-   `INT` through `round`, `bround` and `truncate` at each `k` from 1 to 10, LEGACY's value and ANSI's raise in one pass, against Spark's own `Round`,
-   `BRound` and `Truncate` - 30 sweeps; `TINYINT` and `SMALLINT` at every scale that is not
-   constant, and `factorial` over every `INT`. No CI workflow runs a 2^32 sweep today: none sets
-   `varka.sweep`, and a `-z` filter selects nothing in a JUnit suite. So these sweeps and 3.3's
-   twin run in the gate's sweep step, by hand, until a row schedules them; the PR build runs the
-   cells and the sampled regions only. ANSI throws only in 2.5's tails, a few hundred
-   values a sweep, so Spark's `eval` runs on every input.
+   `INT` through `round`, `bround` and `truncate` at each `k` from 1 to 10, LEGACY's value and
+   ANSI's raise in one pass, against Spark's own `Round`, `BRound` and `Truncate` - 30 sweeps;
+   `TINYINT` and `SMALLINT` at every scale that is not constant, and `factorial` over every
+   `INT`. No CI workflow runs a 2^32 sweep today: none sets `varka.sweep`, and a `-z` filter
+   selects nothing in a JUnit suite. So these sweeps and 3.3's twin run in the gate's sweep step,
+   by hand, until a row schedules them; the PR build runs the cells and the sampled regions only.
+   ANSI throws only in 2.5's tails, a few hundred values a sweep, so Spark's `eval` runs on every
+   input.
 6. **The long lane by SMT**, in the long-lane proof file 2.8 names: the remainder form of 2.5
    equals `HALF_UP`, `HALF_EVEN` and `DOWN` of `x / 10^k` over integers for every `|x| < 2^63`
    and `k` from 1 to 19, the pre-shift's floor identity for `k >= 12`, and the guard bounds; the
@@ -493,8 +494,8 @@ committed files:
    about 7 s on the laptop's cores; Spark's `BigDecimal` path is priced at four times that, about
    30 s, so the 30 sweeps of 3.5 take about 15 minutes in the gate's sweep step, an assumption
    the first sweep scores. The `binary32` twin's five sweeps, the construction in plain Java,
-   about 7 s each. The SMT file's time is predicted after its spike (3.2). The coverage rows under 30 s, at
-   `VARKA-336.md`'s ratio.
+   about 7 s each. The SMT file's time is predicted after its spike (3.2). The coverage rows
+   under 30 s, at `VARKA-336.md`'s ratio.
 
 ## 5. Order, files and size
 
