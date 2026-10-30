@@ -1388,9 +1388,10 @@ public final class VarkaKernelChecks {
 
   /**
    * The kernel {@link #runOne} loaded last on this thread, under its own loader: the suites that
-   * call it from several threads each keep their own. Matched on the bytes, not the name, since a
-   * planted fault rewrites a kernel's bytes and keeps its name. Its loader is released when the
-   * thread loads another kernel, so each thread holds at most one such loader.
+   * call it from several threads each keep their own. Matched on the name and the bytes; the bytes
+   * matter because a planted fault rewrites them and keeps the name. Its loader is released when
+   * the thread loads another kernel, so each thread holds at most one such loader; releasing one
+   * only drops its references, so the last kernel a thread ran stays loaded until then.
    */
   private static final ThreadLocal<LastLoaded> LAST_LOADED =
       ThreadLocal.withInitial(LastLoaded::new);
