@@ -10,9 +10,18 @@ text is the milestone plan's 2.7 (its first bullet's last sentence) and its cens
 here from row 341 (`VARKA-341.md` 0, item 9, and "What differs"). The JDK's facts were read in
 `/home/max/proj/openjdk-build/jdk25`. The checks marked *(admission)* ran on the laptop, as the
 program in `m8/results/VARKA-337-admission.txt` and its output, at the host's defaults (AVX-512)
-and again under `-XX:UseAVX=2`, with Spark 4.2.0's classes as the oracle: the numeric arms of
-`hash.scala`, `Murmur3_x86_32.java` and `XXH64.java` are unchanged between `v4.2.0` and this
-master (the diff touches only the calendar interval and nanosecond arms).
+and again under `-XX:UseAVX=2`, with Spark 4.2.0's classes as the oracle. That oracle is
+master's for every arm this row uses: `git diff v4.2.0 origin/master` is empty for
+`Murmur3_x86_32.java` and `XXH64.java`; in `expressions/hash.scala` the hash expressions differ
+only in the calendar interval's order (its `days` now hashed between the microseconds and the
+months) and in a new nanosecond timestamp arm (`TimestampNanosVal`), and the rest of the file's
+diff is other expressions over `BINARY` (`crc32` moved to `ExpressionImplUtils`, `xxh3_64` and
+`xxh3_128` added) and argument documentation; in `optimizer/NormalizeFloatingNumbers.scala` only
+where the rule inserts the normaliser changes (the array set operations dropped, the null-aware
+anti-join added), not `FLOAT_NORMALIZER` or `DOUBLE_NORMALIZER`. The calendar interval, the
+nanosecond timestamp and `BINARY` are all outside this row's types. (The admission program's own
+comment says the diff "touches only the calendar interval and nanosecond arms"; the sentence above
+is the full reading.)
 
 1. **Spark's hash is a seed folded through the children, a null child skipped.**
    `HashExpression.eval` starts from `seed` and sets `hash = computeHash(child.eval, type, hash)`
@@ -40,7 +49,10 @@ master (the diff touches only the calendar interval and nanosecond arms).
 
    (`ym` and `dt` are the year-month and day-time intervals.)
 
-   `floatToIntBits` and `doubleToLongBits` map every NaN to `0x7fc00000` and
+   The generated arms are `genHashFloat` and `genHashDouble` (`hash.scala:476-484`, `:486-494`:
+   `if (x == -0.0) hashInt(0) else hashInt(floatToIntBits(x))`, and the long forms), the
+   interpreted ones `:720-723`. `floatToIntBits` and `doubleToLongBits` (the JDK's
+   `java/lang/Float.java:927`, `java/lang/Double.java:1296`) map every NaN to `0x7fc00000` and
    `0x7ff8000000000000`, and `x == -0.0` holds for both zeros, whose canonical bits are 0: the
    hash's own step is the canonicalisation. *(admission)*: 200000 samples per type, half at seed
    42 and half at drawn seeds, for all fourteen of the table's types (two decimal precisions),
@@ -124,7 +136,10 @@ master (the diff touches only the calendar interval and nanosecond arms).
     (`sql/core/.../VarkaDecimalBaselineBenchmark.java:123`). `benchmark.yml` runs on x86 only.
 12. **Census.** `hash` and `xxhash64` admit 13 types each, 26 pairs, none fused
     (`m8/census.tsv:280-281`); `normalize_nan_and_zero` and `known_fp_normalized` admit `float`
-    and `double`, the first naming rows 341 and 337 and the second row 341 (`:627`, `:626`).
+    and `double`; on master the first names rows 341 and 337 and the second row 341 (`:627`,
+    `:626`, from `m8/census_curated.txt:212` and `:211`), from before the node moved here. This
+    rework moves both to 337 in the curated file and regenerates the census (section 6); it
+    settles nothing about whether they count (open point 5).
     Row 368's hash half waits on this row: the 74 hash checks with a column in
     `HashExpressionsSuite` all decline (`VARKA-368.md` 0 item 5).
 
@@ -133,18 +148,23 @@ master (the diff touches only the calendar interval and nanosecond arms).
 - **The hash's floating step is the canonicalisation** (item 2): the node is not something put in
   front of Spark's hash but Spark's own `-0.0` and `floatToIntBits` rule, written once. So the
   node is built where Spark builds `NormalizeNaNAndZero` and as that one step of `hash` and
-  `xxhash64`, and nowhere else (2.1). Open point 4.
+  `xxhash64`, and nowhere else (2.1); confirmed by the lead on 30 October 2026 (section 8, point
+  4).
 - **Two new nodes, a dedicated canonicalisation and a hash step** (2.1, 2.2), not compositions of
   existing ones: the NaN test needs IEEE's unordered compare, which the IR does not expose (its
   floating `Compare` is Spark's order), and a hash step written out is 17 to 30 nodes a column.
-- **Row 342 is not needed; row 343a is.** The node emits its own add, so it waits on no floating
-  arithmetic; but a floating value inside an integral kernel, which every floating hash is, needs
-  343a's width rule (item 10).
+- **Row 342's arithmetic is not needed, its family is; row 343a is needed.** The node emits its
+  own add, so it waits on no floating arithmetic; but it is a floating node that
+  `NormalizeNaNAndZero` also builds for join, window and aggregate keys, so it sits under the
+  floating arithmetic family that row 342's plan declares, not under `HASH` (2.3; the lead's
+  settlement of 30 October 2026, section 8, point 3). A floating value inside an integral kernel,
+  which every floating hash is, needs 343a's width rule (item 10).
 - **The decimal above 18 is buildable** (item 7) but needs row 359's word leaf, which is not
-  built. Open point 1 (decline at first, or build).
+  built: 337a declines it naming 337b, and 337b builds it after row 359a (section 8, point 1).
 - **The two normalisation entries cannot count in the census** from a coverage row (item 4).
   Open point 5.
-- **The NEON measurement has no runner** (item 11). Open point 2.
+- **The NEON measurement has no runner** (item 11): the Neoverse N2's census cells only, as row
+  359 did (section 8, point 2).
 - **A math function's value hashes bit-exact by default.** By the owner's decision of 30 October
   2026 the math functions are bit-exact to vanilla Spark by default and the ULP contract is opt-in
   and off; so `hash` over a math function's value fuses at the default, and declines only where the
@@ -160,8 +180,8 @@ null skip, bit for bit; and the canonicalisation node exists as the one shared f
 `KnownFloatingPointNormalized` read as a relabel, for the later rows that evaluate keys. Not this
 row: `hive-hash`, the collation-aware variants, `crc32`, `md5`, `sha*` and `xxh3_*` (outside the
 type set or the census), string, binary and nested children, the zoned `TIMESTAMP` (declined by the
-registry), a Varka shuffle, join or aggregate, and the decimal above 18 if open point 1 is
-answered (a).
+registry), a Varka shuffle, join or aggregate. The decimal above 18 is 337b's, after row 359a,
+and the row's done-when is met there (section 8, point 1).
 
 ## 2. Design
 
@@ -182,7 +202,16 @@ the blend replaces; the JVM keeps subnormals (no flush-to-zero), so they pass. T
 - **Validity** is the child's (`NormalizeNaNAndZero` is null-intolerant); a null lane's value is
   never read.
 - **Where it is built**: (a) for `NormalizeNaNAndZero(e)`, over `e`'s node; (b) as the first step of
-  a floating child of `hash` or `xxhash64` (2.2), because that is Spark's hash step (item 2).
+  a floating child of `hash` or `xxhash64` (2.2), because that is Spark's hash step: `genHashFloat`
+  and `genHashDouble` turn `-0.0` into 0 and then call `floatToIntBits` or `doubleToLongBits`,
+  which canonicalise NaN (`hash.scala:476-494`, item 2). The lead confirmed this reading of "only
+  where Spark inserts it" on 30 October 2026 (section 8, point 4).
+- **Its family** is the floating arithmetic family of row 342's plan (`VARKA-342.md` 2.5,
+  `FLOATING_ARITHMETIC`), not `HASH`: the node is a floating operation that a later key operator
+  builds from `NormalizeNaNAndZero` with no hash in sight, and `VarkaFamily`'s class comment puts
+  each node under exactly one switch, its own family's, even where another family's lowering
+  builds it. So `hash(f)` asks two switches, `HASH` for its steps and the floating family for the
+  node (2.3).
   Never before a comparison, an arithmetic node, a choice or an output: those keep their bits, and
   Spark's order already treats the zeros and the NaNs as equal (`VARKA-341.md` 2.5).
 - **Idempotent, structurally.** `CanonicalFloat.of(x)` returns `x` when `x` is already a
@@ -233,11 +262,31 @@ result on the `INT` lane) or `XXH64` (on the `LONG` lane):
 
 ### 2.3 The compiler
 
-A `VarkaHashCompiler` in a family `HASH` (`varka/VarkaFamily.java`, switch
-`spark.sql.codegen.varka.family.hash.enabled`, declared in `SQLConf` with its binding policy),
-claiming `Murmur3Hash`, `XxHash64`, `NormalizeNaNAndZero` and `KnownFloatingPointNormalized` by
-exact class - so `CollationAwareMurmur3Hash`, `CollationAwareXxHash64` and `HiveHash` decline as
-today - and `floatingDecline` admitting the four. Per child, by its Spark type:
+Two families, by the lead's settlement of 30 October 2026 (section 8, point 3):
+
+- **`HASH`**, new: a `VarkaHashCompiler` (`varka/VarkaFamily.java`, label `hash`, switch
+  `spark.sql.codegen.varka.family.hash.enabled`, declared in `SQLConf` with its binding policy),
+  claiming `Murmur3Hash` and `XxHash64` by exact class - so `CollationAwareMurmur3Hash`,
+  `CollationAwareXxHash64` and `HiveHash` decline as today - and building every `HashStep`.
+- **The floating arithmetic family** of row 342's plan (`VARKA-342.md` 2.5): the constant
+  `FLOATING_ARITHMETIC`, its arm in `VarkaFloatingCompiler`. It claims `NormalizeNaNAndZero` and
+  owns every `CanonicalFloat`, including the one the hash compiler builds for a floating child.
+  342's plan names the constant and the compiler but no key; by the enum's pattern
+  (`INT_ARITHMETIC("int arithmetic", "intArithmetic", ...)`) its label is `floating arithmetic`,
+  342's own coverage family name (`VARKA-342.md` 3 item 9), and its switch
+  `spark.sql.codegen.varka.family.floatingArithmetic.enabled`. If 337a lands before 342, 337a
+  declares that enum entry and its `SQLConf` switch with this name and key, its `covers` text
+  naming only the canonicalisation, and creates `VarkaFloatingCompiler` holding only the
+  `NormalizeNaNAndZero` arm; 342 then extends both. If 342 lands first, 337a adds the arm and
+  widens the `covers` text. (Open point 6: the compiler file and the derived key.)
+- **`KnownFloatingPointNormalized`** builds no node: it is compiled as its child, so, like a column
+  read, it is no family's.
+
+`floatingDecline` admits all four classes, `KnownFloatingPointNormalized` among them: it belongs
+to no family, but it touches a floating type, and the list declines whatever it does not name
+(`VarkaNodeCompiler.java:338-359`). So `hash(f)` with the floating family switched off
+declines, naming that family's switch, even with `HASH` on; `hash(i)` does not ask it. Per child,
+by its Spark type:
 
 | child type | the value given to `HashStep` |
 |---|---|
@@ -247,7 +296,7 @@ today - and `floatingDecline` admitting the four. Per child, by its Spark type:
 | `BIGINT`, `TIME`, `TIMESTAMP_NTZ`, day-time interval | the node |
 | `FLOAT`, `DOUBLE` | `CanonicalFloat.of(x)` |
 | `DECIMAL(p, s)`, `p <= 18` | row 347's leaf, the unscaled long, under its slot check |
-| `DECIMAL(p, s)`, `p > 18` | open point 1: a decline naming row 337b, or 2.5 |
+| `DECIMAL(p, s)`, `p > 18` | in 337a a decline naming row 337b; in 337b, 2.5 |
 | `NullType`, a null literal | dropped: Spark's step is empty (`hash.scala:639`) or skips the null |
 
 A child is any expression the chain compiles to a value of its type, `hash(a + 1, year(d))`
@@ -279,7 +328,7 @@ terms C2 lowers to `vpmuludq` only if it sees the zero-extension pattern of item
 margin. On NEON without SVE every 64-bit multiply is two scalar multiplies (item 8), so XXH64 there
 is scalar in effect; Murmur3 is native.
 
-### 2.5 The decimal above 18, if built
+### 2.5 The decimal above 18 (337b)
 
 Over row 359's two word leaves (`VARKA-359.md` 2.2), the construction of item 7 in long lanes: the
 sign, the two leading-zero counts and the length; the byte reversal of each word and their swap;
@@ -294,11 +343,34 @@ steps, `fmix`. The proof is SMT over bit-vectors (3.4), since 128 bits cannot be
 
 `VarkaReference` evaluates `CanonicalFloat` by `NormalizeFloatingNumbers`' normalisers over bits and
 `HashStep` by calling `Murmur3_x86_32` and `XXH64` directly, so the reference is Spark's code, not a
-second copy of the mix. The IR fuzzer draws `HashStep` chains and `CanonicalFloat` in a sequence of
-its own seed, so no existing corpus hash moves (row 352's rule, `VARKA-352.md` 434). The warm-up's
-int and long blocks gain the rotates and the multiplies the steps call, its float and double blocks
-the `IS_NAN` test, the add and the blend, held by `VarkaWarmupReachSuite`. The cost model gets a
-feature per step kind, on row 352's awaiting-refit list, and the budget a weight row.
+second copy of the mix. The warm-up's int and long blocks gain the rotates and the multiplies the
+steps call, its float and double blocks the `IS_NAN` test, the add and the blend, held by
+`VarkaWarmupReachSuite`. The budget gets a weight row per node kind.
+
+**The IR fuzz grammar gets a production for each node, as well as its cost-model entries.** Rows
+431 to 433 are findings where a node or a shape was left out of `VarkaIrGrammar` and so out of the
+fuzzer, the bytes oracle and the cost corpus; this row does not repeat them. By `VARKA-352.md` 2.2
+(items 2 to 4):
+
+- **`HashStep`**, a new node on the existing lanes, draws in a side sequence of this row's seed,
+  behind a flag the committed draws leave off, with a test that the committed draws reach none of
+  it; it is unpinned until 352's refit folds it in. Its productions: in `Shapes`, a Murmur3 fold
+  over int-valued subtrees; in `LongShapes`, an XXH64 fold over long-valued ones; and in
+  `MixedShapes`, the mixed-lane forms, the kind of tree row 432 found the grammar never reaches for
+  `BitOp` - a Murmur3 step over a long value (the `L2I` halves of row 28's representation), an
+  XXH64 step over a widened and masked int, and folds whose children alternate lanes, a null child
+  in each position. Each respects the constructor's refusals (no narrow lane, no floating value
+  but a `CanonicalFloat`).
+- **`CanonicalFloat`** draws in the floating sequences row 341 defines (`VARKA-341.md` 3 item 4;
+  the grammar draws no floating lane today, `VarkaIrGrammar.java:473-474`), over floating leaves
+  that include payload and negative NaNs and both zeros, and over its own output to exercise the
+  idempotence rule; and, once 343a's width rule admits a floating value in an integral kernel, in
+  mixed trees as the value of a `HashStep`. If 341's sequences are not built when 337a lands, 337a
+  draws both forms in its own side sequence over a floating leaf of its own, and the floating
+  sequences take them over when they exist.
+- **The cost model**: `enumeratedFeatures` in `VarkaEmitCostFit` gains `CanonicalFloat` per
+  floating lane and `HashStep` per function and value width, on row 352's awaiting-refit list, so
+  the refit prices them, as row 431's done-when asks for `NullSafeEqual`.
 
 ## 3. Tests and proofs
 
@@ -329,9 +401,18 @@ feature per step kind, on row 352's awaiting-refit list, and the budget a weight
    expression for every seed and value - `h * 5 = (h << 2) + h`, the rotate as the emitter writes
    it, row 28's halves recombined - one check per step kind of 2.4; and, for 2.5, the length
    formula against the minimal two's complement width over every 128-bit value in `+-(10^38 - 1)`,
-   and the shifted chunks against the byte array's definition. The four multiply steps are
-   identical terms on both sides, so the solver's cost is in the decimal claims; priced from the
-   spiked form, as `VARKA-245` taught.
+   and the shifted chunks against the byte array's definition; and a fold claim, two and three
+   children with a free validity bit each, that the kernel's seed chain is Spark's fold with its
+   null skip (item 1). The two sides are written independently, so a wrong constant cannot sit on
+   both: the specification side transcribes Spark's primitives with their constants as Spark's
+   sources state them (`Murmur3_x86_32.java:30-31`, `:142-144`; `XXH64.java:38` and the four
+   primes after it), and the implementation side is the emitted step with its constants read from
+   the emitter: written by hand with only those constants rendered from the code, as
+   `refinement.smt2` is before row 506, and rendered from the IR the compiler lowers once 506's
+   printer exists and is extended to `HashStep`. Row 506 is not a dependency of 337a (its scope
+   is the decimal shapes); either form keeps the two sides' constants apart. The multiply
+   steps are then the same terms on both sides only when the constants agree, so the solver's cost
+   is in the decimal claims; priced from the spiked form, as `VARKA-245` taught.
 5. **Coverage rows**, a family "hash": `hash` and `xxhash64` over each column type of the fixtures,
    over two and over four children of mixed lanes, over a narrow column on both arms, over a
    boolean, over a literal beside a column, over `x` and `f` with NaN and both zeros meeting, and
@@ -345,6 +426,28 @@ feature per step kind, on row 352's awaiting-refit list, and the budget a weight
    (`VARKA-368.md` 5 step 3); this row's coverage rows are what it needs.
 8. **The generated files** in `ADDING_AN_EXPRESSION.md`'s order; the PR build and the option
    matrix dispatched on the branch.
+9. **The planted faults** for row 504, each under a test flag, so every check the done-when rests
+   on shows it can fail. Which check refutes each is stated plainly, since a one-column 2^32 sweep
+   cannot see a fault in the fold:
+   - **The `-0.0` step dropped from `CanonicalFloat`** (the node emits the NaN blend alone, so
+     `-0.0` keeps its sign bit): refuted by the `FLOAT` sweep of test 1 against
+     `FLOAT_NORMALIZER` (`0x80000000` against 0) and by the hash sweep (`hash(-0.0f)` against
+     `hash(0.0f)`), on the `DOUBLE` lane, which has no sweep, by test 2's both-zeros region, and
+     failed by test 5's differential row over `x` and `f` with NaN and both
+     zeros meeting. `hash.smt2` states only the blend half (test 1), so it does not see this one.
+   - **The seed chain reset per column, or a null child not skipped** (two plants: every child's
+     step takes the literal seed in place of the previous step's result; the validity blend
+     dropped, so a poisoned null lane is hashed): refuted by `hash.smt2`'s fold claim (test 4)
+     and by test 2's regions over two to eight children with nulls in every position; failed by
+     the differential's two- and four-child rows with null patterns (test 5). Item 1's 409 all-null
+     rows, which hash to the seed, are the witness for the second.
+   - **A wrong Murmur3 `fmix` or XXH64 avalanche constant** (`0x85ebca6b` with one bit flipped,
+     and likewise one XXH64 prime): refuted by `hash.smt2` as a `sat` witness, since its
+     specification side does not read the emitter's constants (test 4), and by the 32-bit sweeps
+     of test 1; failed by every differential row of test 5.
+
+   Each plant's test asserts that the named check fails on it, and that the same check passes
+   with the flag off.
 
 ## 4. The baseline, the spike, and predictions
 
@@ -371,7 +474,8 @@ Predictions, registered before the spike and the build:
 3. **The explicit multiply** ties C2's form within 1.3 times on the EPYC 7763 (Zen 3's `vpmulld`
    is cheap), so it is not built.
 4. **The canonicalisation** adds at most 10% to a floating hash at 256 bits.
-5. **No existing shape's bytes move**; the `option_arms` digests move with the new shapes.
+5. **No existing shape's bytes move**; the `option_arms` digests move with the new shapes, and the
+   grammar's side sequence of 2.6 is unpinned, so no committed fuzz block moves before 352's refit.
 6. **Test time**: four nightly 2^32 kernel sweeps at `VARKA-335.md`'s 7 s for a unary sweep, ratio
    taken as 1 since the admission's hand-written sweeps took 1.0 to 5.3 s, so about 30 s; the
    coverage rows within row 317's ratio of the differential's existing time.
@@ -381,16 +485,21 @@ Predictions, registered before the spike and the build:
 1. **The baseline class**, its own pull request.
 2. **The spike**, and the census cells it needs (`int.MUL`, `int.ROL`, `long.MUL`, `long.ROL`, and
    for 2.5 `long.REVERSE_BYTES` and `long.LEADING_ZEROS_COUNT`) on the three hosts' censuses.
-3. **337a**: `CanonicalFloat` and `HashStep`, the compiler and its family, the null skip and the
-   fold, every type of 2.3 but the decimal above 18; the reference, the warm-up, the proof file's
-   step claims, the sweeps, the coverage rows, the generated files; then the measurement against
-   the baseline at both widths and 512 on the laptop, its predictions scored.
-4. **337b** (open point 1): the decimal above 18 over 359's word leaves, its proof claims and
-   byte-length regions.
+3. **337a**: `CanonicalFloat` and `HashStep`, the hash compiler and the `HASH` family, the
+   `NormalizeNaNAndZero` arm in the floating arithmetic family (2.3, declaring the family if 342
+   has not), the null skip and the fold, every type of 2.3 but the decimal above 18, which
+   declines naming 337b; the reference, the warm-up, the IR fuzz grammar's productions of 2.6 in
+   the int, long and mixed-lane generators and the floating sequences, their cost-model features,
+   the proof file's step and fold claims, the sweeps, the coverage rows, the planted faults of
+   test 9, the generated files; then the measurement against the baseline at both widths and 512
+   on the laptop, its predictions scored.
+4. **337b**, after row 359a (the lead's settlement, section 8, point 1): the decimal above 18 over
+   359's word leaves, its proof claims and byte-length regions. The row's done-when is met here.
 
 Dependencies: row 343a's width rule (a floating value in an integral kernel, `VARKA-343.md` 2.2)
 before the floating children; row 347's leaf before the decimal at 18 and below; row 359a's word
-leaves before 337b; rows 28 and 460, done. Not row 342: the node emits its own add.
+leaves before 337b; rows 28 and 460, done. Not row 342's arithmetic: the node emits its own add;
+it uses only 342's family, which 337a declares if it lands first (2.3).
 
 | file | what |
 |---|---|
@@ -398,10 +507,12 @@ leaves before 337b; rows 28 and 460, done. Not row 342: the node emits its own a
 | `varka/VarkaVectorWalk.java`, `varka/VarkaBodyEmitter.java` | the lowerings, the constants |
 | `varka/Analysis.java`, `varka/Slots.java` | the step's validity rule (the seed's) |
 | `VarkaHashCompiler.java` (new), `VarkaNodeCompiler.java` | 2.3; `floatingDecline` |
-| `varka/VarkaFamily.java`, `SQLConf` | the `HASH` family and its switch |
+| `VarkaFloatingCompiler.java` (new if 342 has not landed) | the `NormalizeNaNAndZero` arm |
+| `varka/VarkaFamily.java`, `SQLConf` | `HASH`, and `FLOATING_ARITHMETIC` unless 342 declared it |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weights, features, reach |
 | `sql/varka/proofs/hash.smt2`, `VarkaProofFiles.java` | 3.4 |
-| tests | sweeps, regions, coverage rows, harness tests, fuzz sequence, reference arms |
+| `VarkaIrGrammar.java`, `VarkaEmitCostFit.java` | the productions and features of 2.6 |
+| tests | sweeps, regions, coverage rows, harness tests, reference arms, planted faults |
 | benchmark | `VarkaHashBaselineBenchmark`, the spike, their results files |
 | generated | `coverage.json`, `docs/sql-varka.md`, `emitted_bytes.json`, `width_audit.json` |
 | generated | `census.tsv` |
@@ -412,17 +523,17 @@ day, 337a about four days, 337b about three after 359a.
 ## 6. What it unlocks in the census, and ownership
 
 Of the 26 pairs of `hash` and `xxhash64` (13 types each, none fused, 0 item 12), 24 count when 337a
-lands, if open point 1 is answered (a): every type but `dec`, each read by a coverage row through
+lands: every type but `dec`, each read by a coverage row through
 a fixture column that exists today (`b`, `y1`, `s1`, `i`, `l`, `x`, `f`, `d`, `ntz`, `t`, `ym`,
 `dt`). The two `dec` pairs count only when the hash fuses at every precision up to 38 (2.8's rule,
 `VARKA-359.md` 6), so at 337b; and a decimal coverage row needs a decimal column in the
 differential fixtures, which `coverage.json`'s column list does not hold and row 347 adds. The two
 normalisation entries move nothing (open point 5).
 
-
 | what | owner |
 |---|---|
 | `CanonicalFloat`; `NormalizeNaNAndZero`'s arm; `KnownFloatingPointNormalized` as a relabel | 337 |
+| the floating arithmetic family's enum entry and switch | 342; 337a if it lands first |
 | `HashStep`, `hash`, `xxhash64` over every type of 2.3 | 337 (the decimal above 18: 337b) |
 | the floating lanes, their loads, Spark's order, `isnan` | 341, done in part |
 | floating `+`, `-`, `*`, `/`, the exact functions | 342; not used by the node |
@@ -432,7 +543,9 @@ normalisation entries move nothing (open point 5).
 | the hash forms in the Spark fuzzer | 352, once these coverage rows exist |
 | a Varka grouping, join, window or shuffle over normalised keys | later, reusing the node |
 
-The census rows `normalize_nan_and_zero` and `known_fp_normalized` name 337 alone (open point 5).
+The census rows `normalize_nan_and_zero` and `known_fp_normalized` name 337 alone from this rework
+on (0 item 12: `m8/census_curated.txt` changed, `m8/census.tsv` regenerated); whether they count
+stays open point 5.
 
 ## 7. Out of this row, and declines that stay
 
@@ -440,12 +553,15 @@ Out: section 1's non-goal list. Considered and not taken: the composition of 2.2
 counts, and the idempotence rule needs a recognisable node), and the canonicalisation by a zero
 compare (four operations, 2.1).
 
-Declines that stay, each naming its row: a floating child before 343a; a decimal child before 347,
-and above 18 before 337b; a child of a type outside the set (string, binary, nested, `TIMESTAMP`);
-the collation-aware variants and `HiveHash`; a math function's value under the opt-in ULP contract
-(the milestone plan's question 2).
+Declines that stay, each naming its row or switch: a floating child before 343a, and with the
+floating arithmetic family switched off (`hash` naming that family's switch, 2.3); a decimal
+child before 347, and above 18 before 337b; a child of a type outside the set (string, binary,
+nested, `TIMESTAMP`); the collation-aware variants and `HiveHash`; a math function's value under
+the opt-in ULP contract (the milestone plan's question 2).
 
 ## 8. Open points for the lead
+
+Points 1 to 4 were settled by the lead on 30 October 2026; the options are kept as they were put.
 
 1. **The decimal above 18.** (a) Decline it in 337a naming 337b, and build 337b after 359a; the
    row's done-when ("both fuse over every type in the set") is met at 337b, and the census's `dec`
@@ -454,23 +570,42 @@ the collation-aware variants and `HiveHash`; a math function's value under the o
    Spark at every length (item 7), so feasibility is not in doubt; it is about 95 lane operations a
    value, against a row path that pays a `BigDecimal` and an array a row (359's baseline puts a
    `(38, 10)` comparison at 365 ns a row, `VARKA-359.md` 0 item 12); and 359 is planned, not
-   started, so (b) holds the other 24 pairs behind it. *Recommended: (a).*
+   started, so (b) holds the other 24 pairs behind it. *Settled by the lead on 30 October 2026:
+   (a).* 337a declines it, 337b builds it after row 359a, and the done-when is met at 337b.
 2. **The NEON measurement.** The row asks for XXH64 measured on NEON; `benchmark.yml` has no Arm
    runner (item 11), as row 359 found. (a) The N2's census cells only (`varka-width-audit.yml` runs
    on `ubuntu-24.04-arm`), with item 8's reading that the 64-bit multiply is scalar there. (b) An
-   Arm job in `benchmark.yml`, a workflow change of its own row. *Recommended: (a)*, as 359 did.
+   Arm job in `benchmark.yml`, a workflow change of its own row. *Settled by the lead on 30
+   October 2026: (a)*, the Neoverse N2 census cells only, as row 359 did.
 3. **The canonicalisation's family.** (a) `HASH`, since its only reader in milestone 8 is the hash.
-   (b) Row 342's `FLOATING_ARITHMETIC`, since it is a floating operation. *Recommended: (a)*;
-   the family covers the nodes it claims, and a later key operator can move it.
+   (b) Row 342's `FLOATING_ARITHMETIC`, since it is a floating operation. *Settled by the lead on
+   30 October 2026:* `HashStep` goes in the new `HASH` family and `CanonicalFloat` in row 342's
+   floating arithmetic family, since it is a floating node that `NormalizeNaNAndZero` also builds
+   for join, window and aggregate keys, and `VarkaFamily`'s class comment puts a node under exactly
+   one switch, its own family's. If 337a lands before 342, 337a declares that enum entry with
+   342's planned name and key and 342 extends it (2.3).
 4. **Reading "only where Spark inserts it".** This plan builds the node from `NormalizeNaNAndZero`
    and as the hash's own floating step (2.1), on the reading that the step is Spark's hash rule and
-   not an insertion. Confirm, or name a narrower reading.
+   not an insertion. *Confirmed by the lead on 30 October 2026:* `genHashFloat` and
+   `genHashDouble` turn `-0.0` into 0 and then call `floatToIntBits` or `doubleToLongBits`, which
+   canonicalise NaN (`expressions/hash.scala:476-494`, interpreted `:720-723`), so the hash step's
+   canonicalisation is Spark's own rule.
 5. **The two normalisation entries in the census.** No query puts them in a `Project` or `Filter`
    (item 4), and the census credits a class only through a coverage row's operands. (a) Leave them
    in, uncounted, their rows column `337` and the note saying why no coverage row can show them.
    (b) Move them out of the denominator with that reason, by the owner's decision, as decimal
    division left it. (c) Teach the coverage table a harness-built row (3.6). *Recommended: (a)*
-   until a later milestone's key operator gives them a query.
+   until a later milestone's key operator gives them a query. *Left open for the owner by the
+   lead on 30 October 2026, (a) recommended.* This rework's move of both entries' row column to
+   337 (0 item 12) is a correction of the record, not an answer: under (a), (b) or (c) they name
+   337.
+6. **The floating family's compiler file and key** (new, from point 3's settlement). 342's plan
+   names `FLOATING_ARITHMETIC` and `VarkaFloatingCompiler` but no key; 2.3 takes
+   `floatingArithmetic` by the enum's pattern, and has 337a create `VarkaFloatingCompiler` with
+   only the `NormalizeNaNAndZero` arm if it lands first, as the settlement has it declare the enum
+   entry. (a) As 2.3 says. (b) 337a's arm lives in `VarkaNodeCompiler` until 342 creates the
+   compiler and moves it. *Recommended: (a)*, so the family's nodes have one compiler from the
+   start; the key is to be confirmed in 342's plan either way.
 
 ## 9. Done when
 
@@ -478,11 +613,14 @@ Row 337's text holds, with the corrections above: `hash` and `xxhash64` fuse ove
 2.3 with Spark's per-type words, fold and null skip; the 32-bit sweeps of 3.1 pass against
 `Murmur3HashFunction` and `XxHash64Function`, and the sampled regions of 3.2 (payload NaNs, the
 four NaN range endpoints) bit for bit; `CanonicalFloat` matches `NormalizeNaNAndZero` over every
-`FLOAT` and the sampled `DOUBLE` regions; `hash.smt2` proves the step claims; XXH64 is measured
-separately on AVX2, AVX-512 and, as open point 2 is answered, NEON; the baseline is committed before
-the build and the measurement after it, predictions scored; the PR build and the option matrix
-pass. Under open point 1 (a), the decimal above 18 and its byte lengths 1, 2, 8, 9, 15 and 16 are
-337b's, and the row closes with it.
+`FLOAT` and the sampled `DOUBLE` regions; `hash.smt2` proves the step and fold claims; each
+planted fault of 3.9 is refuted by its sweep or proof and failed by the differential suite; the IR
+fuzz grammar draws both nodes, in mixed-lane trees too, and the cost model carries their features
+(2.6); XXH64 is measured separately on AVX2 and AVX-512, and on NEON through the Neoverse N2's
+census cells (section 8, point 2); the baseline is committed before the build and the measurement
+after it, predictions scored; the PR build and the option matrix pass. The decimal above 18 and its
+byte lengths 1, 2, 8, 9, 15 and 16 are 337b's, after row 359a, and the row's done-when is met there
+(section 8, point 1).
 
 ## 10. Outcome
 

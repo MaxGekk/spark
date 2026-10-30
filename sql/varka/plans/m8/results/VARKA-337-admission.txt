@@ -9,6 +9,16 @@ quotes from these checks is in the output. These are checks of hand-written Vect
 the planned lowerings and of Spark's per-type rules, not the emitter's kernels; the plan's section 3
 says what holds the built kernels. Times are laptop wall times of a check, not benchmarks.
 
+Note added in the plan's rework (30 October 2026): the program's comment below says
+`git diff v4.2.0 HEAD` "touches only the calendar interval and nanosecond arms". The full
+reading: the diff is empty for Murmur3_x86_32.java and XXH64.java; in hash.scala the hash
+expressions differ only in the calendar interval's order (days hashed between the microseconds
+and the months) and a new nanosecond timestamp arm, the rest being crc32 moved to
+ExpressionImplUtils, xxh3_64 and xxh3_128 added (all over BINARY) and argument documentation; in
+NormalizeFloatingNumbers.scala only where the rule inserts the normaliser changes, not
+FLOAT_NORMALIZER or DOUBLE_NORMALIZER. All of these are outside the row's types, so the oracle is
+master's for every check below. The program and its output are as run.
+
 ---- program ----
 // VARKA-337 admission checks: Spark's per-type hash inputs, the canonicalisation node and the
 // hash steps in Vector API lanes, against Spark's own classes. Run with
