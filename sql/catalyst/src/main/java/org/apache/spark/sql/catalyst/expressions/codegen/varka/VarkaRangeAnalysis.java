@@ -44,6 +44,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfE
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
@@ -328,7 +329,8 @@ public final class VarkaRangeAnalysis {
       // A condition as a value is 0 or 1 where it is known; an unknown row is null, whose value
       // no consumer reads.
       case CondValue n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN : VarkaValueRange.of(0, 1);
-      // A condition has no value of its own.
+      // A condition has no value of its own, and a boolean output's bits are no lane value.
+      case BoolOutput b -> VarkaValueRange.UNKNOWN;
       case Cond c -> VarkaValueRange.UNKNOWN;
     };
   }
