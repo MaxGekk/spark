@@ -21,7 +21,9 @@
 # A need is the hardest work left once the lanes the row names exist: done; plumbing (an arm
 # and IR on the lanes); semantics (Spark's overflow, NaN, rounding or scale rules); ulp (the math
 # family: fused within a bound stated per function and host library, under row 345's contract and
-# its configuration, the owner's decision of 14 October 2026); hard (no exact construction known:
+# its configuration, the owner's decision of 14 October 2026; since 30 October 2026, by the owner's
+# word, exact by default and the bound only in that opt-in mode, VARKA-345.md 2.1); hard (no exact
+# construction known:
 # declined unless one is found - empty since 14 October 2026, when the reading of the papers gave
 # every former hard entry its construction, m8/PLAN.md 2.7). Rows are milestone 8's task numbers (m8/PLAN.md 3).
 

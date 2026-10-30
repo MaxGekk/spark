@@ -3098,6 +3098,16 @@ owner chose the first option on 14 October 2026 (`m8/PLAN.md` 2.7.1); the emitte
 stays this item's, beside item 98's SLEEF-shaped route, and must be costed without FMA, since
 `StrictMath` is pure Java and FMA changes the bits.*
 
+*30 October 2026, by the owner's word: the family is bit-exact to vanilla Spark by default, and the
+first option, the ULP contract, is an opt-in mode, off by default (`m8/PLAN.md` 2.7.1,
+`m8/VARKA-345.md` 2.1). The default takes this item's emitted-fdlibm option in milestone 8: the
+thirteen functions whose row-engine bits are fdlibm's on every host fuse first as a per-lane
+`StrictMath` call, with a lane-wise port of fdlibm 5.3, emitted as IR and held to `StrictMath` bit
+for bit, as a measured option arm, the default only where it measures faster; the host-dependent
+`sin`, `cos`, `tan`, `tanh` and `cbrt` take a per-lane `Math` call. Whether an exact form faster
+than that call exists for the host-dependent five is open, the owner's, licence first
+(`m8/VARKA-345.md` 8 point 11).*
+
 ### Item 37. A third AVX2 lowering for the 64-bit divide, from 32-bit converts
 
 *Opened 19 September 2026, from reading SLEEF for
@@ -5192,6 +5202,11 @@ matches Spark's bits only if it reproduces fdlibm's arithmetic, which is item 36
 option, costed without FMA (`StrictMath` is pure Java and FMA changes the bits). **Done when** an
 emitted `exp` or `log` gives one bit pattern on the three CI hosts at a measured cost against the
 bound library, with its contract (fdlibm's bits, or correct rounding) stated.
+
+*30 October 2026, by the owner's word: milestone 8 fuses the family exact by default, Spark's own
+bits on each host, and the ULP contract is an opt-in mode, off by default (`m8/PLAN.md` 2.7.1,
+`m8/VARKA-345.md` 2.1); this item's first sentence describes that mode. The item stays the route to
+one bit pattern on every host.*
 
 ### Item 99. The NULL-mode masked loop that C2 cannot settle
 
