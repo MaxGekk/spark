@@ -183,6 +183,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private lazy val sampleRows: Seq[CoverageRow] =
     rows.filter(r => rows.find(_.family == r.family).contains(r))
 
+  // varka-session-lint: allow one row a family through both nodes and the cache; every row
+  // is answered in VarkaCoverageHarnessSuite
   sampleRows.foreach { row =>
     test(s"${row.family}: ${row.sql} matches the row engine under both consumers") {
       withFloatingPruningOff(row) {
@@ -309,6 +311,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
    * message and exception class - is Spark's for every condition, and a Varka node must be in
    * the plan, or the row engine alone would pass it.
    */
+  // varka-session-lint: allow one row an error condition, the error as a user meets it
   VarkaAnsiForm.RAISES.asScala.toSeq.sortBy(_._1).foreach { case (condition, sql) =>
     test(s"$condition reaches the user as the row engine raises it, from $sql") {
       val row = rows.find(_.sql == sql).getOrElse(fail(s"no coverage row $sql"))
