@@ -117,7 +117,9 @@ row's text is the milestone plan's 2.8 ("361, the widening multiply") and its 10
   `-(10^18 - 1)` squared does not catch it: in a million random draws within 18 digits the
   planted order is wrong for 1525 pairs of one sign each and 117604 pairs of two negatives, never
   for two non-negatives, and right at `+-(10^18 - 1)` squared
-  (`results/VARKA-361-planted-carry.txt`). The cross-check names a witness of each class.
+  (`results/VARKA-361-planted-carry.txt`). The cross-check names a witness of each class, the
+  one-negative case included. The text of rows 361 and 362, "two negative operands", is the
+  owner's; it is flagged here and not edited.
 - **The constant-limb case has two edges the row text lacks**: a zero limb and a limb of exactly
   `0xFFFFFFFF` lose the pattern (item 7, the second from the source and not yet read in `--asm`),
   so the compiler drops a zero limb's products, and the other becomes a shift and a subtraction
@@ -180,7 +182,8 @@ loads, as 359's word leaves share one load (`VARKA-359.md` 2.2); a body split by
 recomputes it per group. `rightOneLimb` is set by the compiler only for a non-negative constant
 below `2^32` (`10^k` for `k <= 9`); it is part of the shape key. The reference evaluator answers
 `a * b` and `Math.multiplyHigh(a, b)`; the IR fuzzer draws the node in a sequence of its own seed;
-`VarkaCanonicalIr` gains its parse arm. One node serves row 104's option C, whichever row lands it.
+`VarkaCanonicalIr` gains its parse arm. Row 360 lands the node with constant multipliers (its
+360b); this row adds the column-by-column product to it; row 104's option C takes the same node.
 
 The compiler (`VarkaDecimalCompiler`, row 349's `Multiply` arm) builds the pair
 `Pair(WideMul(x, y, LOW), WideMul(x, y, HIGH), (P, S))` where both operands are 64-bit-valued and
@@ -238,8 +241,9 @@ awaiting-refit list; the warm-up's long block gains the network, held by `VarkaW
    1, `2^31` and `2^32 - 1`; the constants `10^k` for `k = 0..18` and one with a limb of exactly
    `0xFFFFFFFF`; every null pattern.
 2. **The random cross-check** of every arm against `BigInteger`, with two negative operands and
-   the two witnesses of `results/VARKA-361-planted-carry.txt` among the named draws, which detect
-   the planted order of 3.1; `-(10^18 - 1)` squared, which the row text names, stays a named draw
+   the two witnesses of `results/VARKA-361-planted-carry.txt` among the named draws, one with one
+   negative operand and one with two, both of which detect the planted order of 3.1;
+   `-(10^18 - 1)` squared, which the row text names, stays a named draw
    but passes the planted order (the same file), so it is not counted as detecting it; and
    QuestDB's `(2^64 - 1) * (2^34 - 1)` shape scaled into range.
 3. **The type rule against Spark's own**: a unit test runs `Multiply.resultDecimalType` over every
@@ -257,7 +261,7 @@ awaiting-refit list; the warm-up's long block gains the network, held by `VarkaW
    `[0, (2^32 - 1)^2]`, the network as emitted (Java's wrapping as `mod 2^64`, the shifts as
    division and remainder by `2^32`) gives `hi * 2^64 + lo = p3 * 2^64 + (p1 + p2) * 2^32 + p0`
    with no wrap in `t`, `u` or `hi`; and the correction, stated with `ite(x < 0, y_u, 0)`, gives
-   the signed product. The planted order (2.6) as a `sat` witness. A 16-bit-limb version of the
+   the signed product. The planted order (3.1) as a `sat` witness. A 16-bit-limb version of the
    same claims runs as the reduced-width cross-check only. The file's times are stated before and
    after.
 7. **Coverage rows**, a "DECIMAL widening multiply" family: `d15 * d15b` (q6's types, as a value
@@ -271,8 +275,8 @@ awaiting-refit list; the warm-up's long block gains the network, held by `VarkaW
 
 Under a test flag the middle column is summed in one word, `t = p1 + p2 + (p0 >>> 32)` and
 `hi = p3 + (t >>> 32)`, QuestDB's `a0 * m1 + a1 * m0` (`READING_QUESTDB.md` 9): refuted by the
-carry layer as row 506 renders it, and failed by the cross-check of test 2, one of row 504's
-planted faults.
+carry layer as row 506 renders it, and failed by the cross-check of test 2, whose witnesses
+include one negative operand as well as two, one of row 504's planted faults.
 
 ## 4. The baseline, and predictions
 
@@ -304,16 +308,20 @@ Predictions, registered before the spike and the build:
    projection and as a filter, printed on the laptop under a heavy slot, recorded in section 10.
 2. **The baseline addition** (4), with 360's.
 3. **The spike loops** (2.1), with 359's spike or after it; the verdict in section 10.
-4. **361a**: `WideMul`, its reference arm, grammar and parse arm, the two options, the compiler
-   case, the proofs, tests 1 to 6 and the filter coverage rows, the `--asm` reading.
+4. **361a, the column product on row 360's node.** Row 360 lands `WideMul` with constant
+   multipliers in its 360b (`VARKA-360.md` 5): the node, its reference arm, grammar and parse arm,
+   the one- and two-limb constant forms and `decimalSignWord`. This row adds the
+   column-by-column product of two non-constant operands, `decimalWideMulLow`, the compiler case
+   of 2.2, the column proofs, tests 1 to 6 and the filter coverage rows, and the `--asm` reading.
+   Row 104's option C, the checked `BIGINT` multiply, takes the same node: one helper, as
+   `VARKA-104.md` 3.3 asks.
 5. **361b, after 359b's store**: the projections' rows, the measurement against the baseline at
    both widths and 512 bits on the laptop, the predictions scored.
 
 | file | what |
 |---|---|
-| `varka/VarkaVectorIR.java` | `WideMul`, its canonical form |
-| `varka/VarkaVectorWalk.java`, `varka/Slots.java`, `varka/Analysis.java` | network, parked word |
-| `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | the two options of 2.1 |
+| `varka/VarkaVectorWalk.java`, `varka/Slots.java` | the column network on 360b's node |
+| `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | `decimalWideMulLow` |
 | `VarkaDecimalCompiler.java` (row 349's) | the `Multiply` case of 2.2 |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weight, feature, reach |
 | `sql/varka/proofs/decimal128.smt2`, `VarkaProofFiles.java` | 3 item 6 |
@@ -326,7 +334,7 @@ Predictions, registered before the spike and the build:
 cross-check are pure kernels of the slot table's size, seconds; the proof section is priced from
 its spiked form at VARKA-245's observed ratio in the calibration table (about 0.8), under five
 seconds per solver. It rests on 347, 348 and 349 (the value and the arm), 359 (the pair, the proof
-file and the store) and 503 for the 128-bit rule.
+file and the store), 360b (the node) and 503 for the 128-bit rule.
 
 ## 6. What it unlocks in the census
 
@@ -346,16 +354,10 @@ long lanes on x86 a condition root (503).
 
 ## 8. Open points for the lead
 
-1. **Who lands the node, 360 or 361.** Row 360's rescale-up of the coarser operand is `x * 10^k`
-   into 128 bits, this node with one or two constant limbs, and `BIGINT + DECIMAL(p, s)` with
-   `s > 0` needs it; 360 is ahead of 361 in waves F3 and G3. (a) 360 lands `WideMul` with the
-   constant cases and this row adds the column product, the spike's column loops, the q6 rows and
-   the `--asm` reading; (b) 360's rescaling shapes wait for 361a. *Recommended: (a)*, as
-   `VARKA-104.md` 3.3 already asks for one helper whichever row comes first; `VARKA-360.md` 8
-   asks the same question from its side.
-2. **The two options' defaults before the runner reads.** (a) Ship 361a with L, `LIMBS` and
-   `NEG_LSHR` as defaults and switch on the spike's verdict; (b) hold 361a until the runner verdict
-   is committed. *Recommended: (b)*: the spike is cheap and the default is a measured fact.
+Both answered by the lead on 30 October 2026, and folded in above: row 360 lands `WideMul` with
+constant multipliers and this row adds the column-by-column product, row 104's option C taking the
+same node (section 5); and the options' defaults come from the runner's verdict on the spike,
+committed before 361a.
 
 ## 9. Done when
 
