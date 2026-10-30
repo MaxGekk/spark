@@ -97,10 +97,12 @@ The type counts below are every ordered pair of the 779 decimal types with `1 <=
 
 ### What differs from the row text and the milestone plan
 
-- **The shortcut reaches one step further** (item 4): the product fits 128 bits with the check
-  dead for every `p1 + p2 <= 38`, `P <= 39`, where the row says `P <= 38`. The SMT line the row asks
-  for states all three bounds, Velox's `P < 38`, the row's `P <= 38` and the sharp `P <= 39`.
-  Which one the compiler uses is open point 1; the plan below is written for the sharp one.
+- **The shortcut reaches one step further than the row, a departure from its text** (item 4): the
+  product fits 128 bits with the check dead for every `p1 + p2 <= 38`, `P <= 39`, where the row says
+  `p1 + p2 + 1 <= 38`. The compiler uses the sharp bound (decided by the lead on 30 October 2026,
+  from `results/VARKA-362-shortcut.txt`): 966 more kept-scale pairs take N, and 363 gets a 128-bit
+  dividend for 9616 cut ones. The SMT line the row asks for states all three bounds, Velox's
+  `P < 38`, the row's `P <= 38` and the sharp `P <= 39`.
 - **The planted carry fault is live for every sign pair at 128 bits.** Row 361's plan found it
   live for one negative operand as well as two at 64 bits and never for two non-negative ones
   (its 0, "What differs"). Over 128-bit operands a non-negative value's three low limbs take any
@@ -110,11 +112,13 @@ The type counts below are every ordered pair of the 779 decimal types with `1 <=
   (`results/VARKA-362-planted-carry.txt`). The row's named draw `(2^64 - 1) * (2^34 - 1)` detects
   the column-1 plant, and `2^112 * 2^112`, one limb product, detects no carry plant: it is the
   test that the product's top word is kept, QuestDB's second defect (`READING_QUESTDB.md` 9,
-  item 2). The text of rows 361 and 362, "two negative operands", is the owner's; flagged, not
-  edited (open point 2).
+  item 2). Row 362's text names no sign class, so nothing in it changes; test 3 states the
+  finding.
 - **Under `allowPrecisionLoss = false` some products cut the scale** (item 5): `s1 + s2 > 38`
   rounds to scale 38, 101270 pairs, which are 363's and decline here naming it.
 - **A pair times a 64-bit value is this row's** (row 361's plan, 7), as 4 by 2 limbs.
+- **A node of its own, not 360b's grown** (2.2, decided by the lead on 30 October 2026): 360b and
+  361a land `WideMul` first and own it; this row shares their partial-product helper.
 
 ## 1. Goal and non-goal
 
@@ -185,18 +189,22 @@ and 128 on the EPYC 7763 through `benchmark.yml`:
 
 ### 2.2 The node
 
-    WideMul(VarkaVectorIR xLo, VarkaVectorIR xHi, VarkaVectorIR yLo, VarkaVectorIR yHi,
+    PairMul(VarkaVectorIR xLo, VarkaVectorIR xHi, VarkaVectorIR yLo, VarkaVectorIR yHi,
             int words, int word, Sign sign)
 
-the shape of 360b's node grown to pair operands (`xHi` or `yHi` empty for a 64-bit operand, a
-64-bit operand's own sign word computed inside), `words` 2 for N and 4 for C, `word` the output
-word, rendering `wmul<words>:<word>(...)`. The words of one product share one network: the first
-word a body emits computes all of them and parks the rest in a slot keyed by the children, which
-its siblings load, as 361's two words do; a budget split recomputes it per group. The reference
+a node beside 360b's `WideMul`, not that node grown: 360b and 361a land `WideMul` first and own it,
+and this node's sixteen-product lowering, budget weight and evaluator path differ from its four.
+What the two share is the emitter's partial-product helper - the limb split with the masks and
+shift counts as emitted constants, the unsigned limb product and the half split - which 361a
+writes for `WideMul` and this row calls, so there is one copy of the code C2's `vpmuludq` rule
+constrains. `xHi` or `yHi` is empty for a 64-bit operand, whose sign word is computed inside;
+`words` is 2 for N and 4 for C, `word` the output word, rendering `pmul<words>:<word>(...)`. The
+words of one product share one network: the first word a body emits computes all of them and
+parks the rest in a slot keyed by the children, which its siblings load, as 361's two words do; a
+budget split recomputes it per group. The reference
 evaluator answers the words of the `BigInteger` product; the IR fuzzer draws it in a sequence of
 its own seed over every 128-bit pattern, since the network is exact for every pattern pair and not
-only for values below `10^38`; `VarkaCanonicalIr` gains its parse arm. Whether this grows 360b's
-node or sits beside it is open point 3; the design depends on 360b's shape either way.
+only for values below `10^38`; `VarkaCanonicalIr` gains its parse arm.
 
 ### 2.3 The compiler
 
@@ -259,8 +267,13 @@ awaiting-refit list; the warm-up's long block gains N and C, held by `VarkaWarmu
    witness of the planted fault from each sign class of `results/VARKA-362-planted-carry.txt`.
 3. **The planted fault** for row 504, under a test flag: column 1 summed as `x0 * y1 + x1 * y0` in
    one 64-bit word before its halves are taken, QuestDB's `a0 * m1 + a1 * m0`
-   (`READING_QUESTDB.md` 9): refuted by the carry layer as row 506 renders it and failed by test 2,
-   whose witnesses include two non-negative operands, one negative and two.
+   (`READING_QUESTDB.md` 9): refuted by the carry layer as row 506 renders it and failed by test 2.
+   At 128 bits the fault is live for every sign pair, two non-negative operands included (9117,
+   18211 and 9103 wrong of 500000 draws for none, one and two negative operands,
+   `results/VARKA-362-planted-carry.txt`), unlike 64 bits, where row 361's plan found it never live
+   for two non-negative ones; so test 2's witnesses include one of each class. The row's two named
+   draws test different things: `(2^64 - 1) * (2^34 - 1)` catches the carry of column 1, and
+   `2^112 * 2^112`, a single limb product, only checks that the product's top word is kept.
 4. **The type rule against Spark's own**: `Multiply.resultDecimalType` over every `(p1, s1, p2,
    s2)` under both settings holds the compiler's form to 2.3's table, naming 349, 361 or 363 where
    it declines, and its counts to `results/VARKA-363-shapes.txt`. A pure function, under a second.
@@ -330,7 +343,7 @@ Predictions, registered before the spike and the build:
 2. **The spike loops** (2.1), in 359's spike pull request or after it; the verdict in section 10.
 3. **362a, the shortcut**: the node's two-word form (2.2), N and 128 by 64 under it, the
    compiler's first row of 2.3, the shortcut and N proofs, tests 1, 2, 4 and 5 for it, the filter
-   coverage rows. Needs 359a and 361a (the node with the column product).
+   coverage rows. Needs 359a and 361a (the partial-product helper).
 4. **362b, the column sum**: the four-word form, both signs behind `decimalWideSign`, the
    full-width check and its disposal (after row 481 and 360c), the gate's options, the planted
    fault, the rest of tests 1 to 7.
@@ -339,7 +352,7 @@ Predictions, registered before the spike and the build:
 
 | file | what |
 |---|---|
-| `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java`, `varka/Slots.java` | the node, N, C |
+| `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java`, `varka/Slots.java` | `PairMul`, N, C |
 | `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | the two options of 2.1 |
 | `VarkaDecimalCompiler.java` (row 349's) | 2.3's table |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weight, feature, reach |
@@ -355,7 +368,7 @@ the proof section is priced from its spiked form at VARKA-245's observed ratio i
 table, under ten seconds per solver for the linear layer, the ring identity's time to be measured
 first, since sixteen products is the largest polynomial the proofs have stated. It rests on 347,
 348 and 349, 359 (the pair, the compares, the check, the proof file and the store), 360b and 361a
-(the node), 481 and 360c (the disposal) and 503 for the 128-bit rule.
+(the partial-product helper), 481 and 360c (the disposal) and 503 for the 128-bit rule.
 
 ## 6. What it unlocks in the census
 
@@ -375,19 +388,12 @@ measurement shows losing there.
 
 ## 8. Open points for the lead
 
-1. **The shortcut's bound.** (a) The sharp `p1 + p2 <= 38`: the product fits 128 bits and the check
-   is dead at `P = 39` too (item 0.4), which keeps 966 more kept-scale pairs on N and gives 363 a
-   128-bit dividend for 9616 cut ones (`results/VARKA-362-shortcut.txt`). (b) The row's
-   `p1 + p2 + 1 <= 38` as written, the `P = 39` kept pairs through C with a dead check. The SMT line
-   states all three bounds either way. The plan is written for (a); the row text is the owner's.
-2. **"Two negative operands" in rows 361 and 362.** At 128 bits the planted fault is live for every
-   sign pair, two non-negative operands included (0, "What differs"). (a) Leave the owner's text and
-   let the plan's witnesses cover every class, as row 361's plan did. (b) Ask the owner to amend
-   both rows. The plan does (a) until told.
-3. **The node.** (a) Grow 360b's `WideMul` to pair operands and four words, one node family for
-   360b, 361, 362, 366 and row 104's option C, as `VARKA-104.md` 3.3 asks one helper. (b) A sibling
-   node for the pair products, leaving 360b's two-operand node as it lands. (a) puts more cases in
-   one emitter method; (b) duplicates the limb splitting and the parking.
+All three answered by the lead on 30 October 2026 and folded in above: the compiler uses the sharp
+shortcut `p1 + p2 <= 38`, recorded as a departure from the row's text (0, "What differs"); row 362's
+text has no "two negative operands" clause, so it needs no amendment, and test 3 states that the
+planted fault is live for every sign pair and what each named draw tests; and the pair products are
+a node of their own, `PairMul`, sharing 361a's partial-product helper rather than growing 360b's
+`WideMul` (2.2).
 
 ## 9. Done when
 
