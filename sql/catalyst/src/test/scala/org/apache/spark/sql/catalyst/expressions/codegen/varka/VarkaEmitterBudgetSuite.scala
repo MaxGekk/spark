@@ -369,7 +369,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       (new GuardedDay(new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)), 2, 0, VarkaMatrix.base),
       (new ConstDivide(new GuardedRange(c, -999L, 999L), 60, 1000L), 1, 0, VarkaMatrix.base),
       (new NarrowLane(new IntNeg(Overflow.WRAP, lc)), 1, 0, VarkaMatrix.base),
-      (new WidenLane(new IntNeg(Overflow.WRAP, c)), 1, 0, VarkaMatrix.base))
+      (new WidenLane(new IntNeg(Overflow.WRAP, c)), 1, 0, VarkaMatrix.base),
+      (new DecimalColumn(0, LaneType.LONG, 9), 1, 0, VarkaMatrix.base))
     // The calendar nodes whose own tail reads no month, so their prefix elides the month step.
     def elidesMonthStep(n: VarkaVectorIR): Boolean =
       VarkaEmitBudget.isChrono(n) && !VarkaChronoLowering.tailReadsMarchMonth(n)
