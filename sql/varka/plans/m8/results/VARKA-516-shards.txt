@@ -189,5 +189,11 @@ suites step and phases are kept in the tables above.
 The option matrix's classes job ("Varka option matrix classes") ended 6.6, 6.7, 6.5, 6.0, 7.2
 and 5.8 minutes after the first job, in the order of section 1, before any Varka suites job.
 
+A rerun: Build 40947407586 (varka-524-session-configs) has two attempts. Its second re-ran only
+the jobs the first failed: sql 1 of 3, whose JUnit upload had failed with "Failed to CreateArtifact:
+Unable to make request: ECONNRESET", and catalyst 3 of 3. catalyst 2 of 3 kept its first attempt's
+start, 20:17:35Z, and the run holds one varka-scoped-junit-catalyst-2of3 artifact. So no job there
+uploaded a JUnit artifact twice under one name.
+
 The split was the same in every Build: every catalyst job printed split digest de36b04d7e69 and
 its share, 27, 28 and 38 of 93 suites.

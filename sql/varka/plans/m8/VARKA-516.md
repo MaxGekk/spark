@@ -115,8 +115,10 @@ that drew an EPYC 7763.
 - **The reach record and the harness store are still written.** The sql jobs write them at the
   defaults, one artifact a job, under the same names. The sql job count stays at three, and
   `dev/varka_matrix_reuse.py` counts the reach parts against the scoped sql jobs it finds. A refit
-  moves sql suites between jobs, but the union of the parts is the same tests. (b) does nothing to
-  sql: it has no own-JVM lines, and its two JVMs start together.
+  moves sql suites between jobs, but the union of the parts is the same tests. In sql, (b)'s
+  launch order changes nothing, since sql has no own-JVM lines and its two JVMs start together.
+  Its split source does change which suites share each of a job's two JVMs. The record and the
+  store are written per job, not per JVM, so their union is unchanged.
 - **Nothing the option matrix reads changes shape.** The matrix does not pass `--weights`.
   `suite-times.tsv` keeps its columns. The matrix planner reads its values only for suites
   `sql/varka/matrix/suite-seconds.tsv` lacks. The audit and `VarkaOperatorCensusSuite` are outside
@@ -127,19 +129,30 @@ that drew an EPYC 7763.
 
 ## 5. How it is measured
 
-Before: the five Builds of results 1, with each job's CPU, phases and planned load. Those Builds
-already ran on several commits under one split, digest de36b04d7e69. After each pull request:
-its own Build and two reruns of it, on the same commit, which the lead starts, since this plan
-starts nothing. Each is read the way results 2 reads its Builds: CPU, setup, build, tests phase
-and wall. Predictions 1 to 3 are scored on the 7763 draws, prediction 4 on the walls. A rerun
-that draws no 7763 on a catalyst job is reported and does not count. The scores go in
-`m8/results/VARKA-516-after.txt`.
+The CPU draw moves a phase more than the split does, so each side is measured on one commit, built
+three times:
+
+- **Before:** 516c's first commit, which adds only the partition doctest. Its split digest must
+  still read de36b04d7e69.
+- **After:** 516c's head, and later 516d's.
+
+The extra Builds of a commit are pushes of it under two more branch names, so each is a fresh run
+with its own artifacts. Pushing is the lead's step; this plan starts nothing. Reruns are not used.
+The one rerun Build read, 40947407586 (results 7), re-ran only its failed jobs, so whether "re-run
+all jobs" can upload a JUnit artifact under a name the first attempt already used is unverified.
+A rerun's earlier attempt is also read only through `attempts/<n>/jobs`.
+
+Each Build is read the way results 2 reads its Builds: CPU, setup, build, tests phase and wall.
+Predictions 1 to 3 are scored on the 7763 draws, prediction 4 on the walls. A Build that draws no
+7763 on a catalyst job is reported and not scored. The five Builds of results 1 stay as the record
+of the split across commits. The scores go in `m8/results/VARKA-516-after.txt`.
 
 ## 6. Order, pull requests and size
 
 1. **516c, small:** (a) and (b), with their doctests, in `dev/varka_suite_shards.py`,
-   `dev/varka_matrix.sh`, `dev/varka_scoped_suites.sh` and `sql/varka/ci/suite-times.tsv`. It is
-   measured on its own Build and its reruns.
+   `dev/varka_matrix.sh`, `dev/varka_scoped_suites.sh` and `sql/varka/ci/suite-times.tsv`. Its
+   first commit is the doctest alone, so that commit and the head are the before and the after
+   of section 5.
 2. **516d, a few lines of a test:** (c), if the owner takes it. In the same pull request, the
    audit's weight is set from its own Build, as step 2 of the row asks of a change that moves a
    suite's cost.
