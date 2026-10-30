@@ -311,8 +311,13 @@ def inherited_test(test):
 
 
 def names_tests_at_run_time(text):
-    """Whether a suite builds some test names at run time, which a literal search cannot see."""
-    return re.search(r'\btest\((?!\s*")', text) is not None or 'test(s"' in text
+    """Whether a suite builds some test names at run time, which a literal search cannot see: a
+    ScalaTest name that is not a literal, or a JUnit dynamic test's computed display name."""
+    return (
+        re.search(r'\btest\((?!\s*")', text) is not None
+        or 'test(s"' in text
+        or re.search(r'\bdynamicTest\((?!\s*")', text) is not None
+    )
 
 
 def unescape(name):

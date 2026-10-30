@@ -341,7 +341,9 @@ public final class VarkaKernelChecks {
    * {@code lits} as the long literal table, and the long-lane reference. A narrowing root stores
    * four bytes a row, so its output is read at that width and sign-extended: a value that did not
    * fit 32 bits then differs from the evaluator's 64-bit answer instead of being truncated on both
-   * sides.
+   * sides. Only the conformance entry point, {@link #runLoadedLong} with Spark's answers,
+   * truncates the reference too (see {@code LongLane}); this one does not, even with
+   * {@code spark} given.
    */
   public static boolean runAndCompareLong(String context, String className, byte[] bytes,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
@@ -425,7 +427,7 @@ public final class VarkaKernelChecks {
   private static Lane longLane(LongBatch batch, long[] lits, int[] intLits,
       List<VarkaVectorIR> roots) {
     return holdsBothLanes(roots) ? new MixedLane(batch, intLits, lits, roots)
-        : new LongLane(batch, lits);
+        : new LongLane(batch, lits, false);
   }
 
   /** Whether {@code roots} hold a value of each lane; see {@link #longLane}. */
@@ -553,12 +555,16 @@ public final class VarkaKernelChecks {
   /**
    * {@link #runLoadedLong} for a kernel that may hold both lanes, with {@code intLits} its int
    * literal table, every row also compared with Spark's answer (the conformance contract's long
-   * lane).
+   * lane). The one long-lane entry point whose reference truncates a narrowing root to its low 32
+   * bits, as the store and Spark's LEGACY {@code CAST(x AS INT)} do; every other leaves a value
+   * that does not fit to show as a difference ({@code LongLane}).
    */
   public static int runLoadedLong(String context, VarkaFusedKernel kernel,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, int[] intLits, LongBatch batch,
       boolean declineAllowed, SparkAnswers spark, CallHook hook) {
-    return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, intLits, roots),
+    return runLoaded(context, kernel, roots, numInputs,
+        holdsBothLanes(roots) ? new MixedLane(batch, intLits, lits, roots)
+            : new LongLane(batch, lits, true),
         declineAllowed, spark, ValidityFill.BOTH, hook);
   }
 
@@ -696,8 +702,12 @@ public final class VarkaKernelChecks {
       return stride();
     }
 
-    /** A value's bytes in {@code root}'s output buffer. */
-    default long outputStride(VarkaVectorIR root) {
+    /**
+     * A value's bytes in {@code root}'s output buffer; {@code rootLane} is the root's
+     * {@link VarkaVectorIR#laneType}, which the caller reads once per output rather than once a
+     * row, since it walks the root's tree.
+     */
+    default long outputStride(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane) {
       return stride();
     }
 
@@ -707,7 +717,8 @@ public final class VarkaKernelChecks {
     }
 
     /** Writes {@code v} at row {@code i} of {@code root}'s output buffer, at its width. */
-    default void putOutput(VarkaVectorIR root, MemorySegment d, int i, long v) {
+    default void putOutput(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane, MemorySegment d,
+        int i, long v) {
       put(d, i, v);
     }
 
@@ -717,7 +728,7 @@ public final class VarkaKernelChecks {
     }
 
     /** {@link #sentinel} for {@code root}'s output buffer. */
-    default long sentinelOutput(VarkaVectorIR root) {
+    default long sentinelOutput(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane) {
       return sentinel();
     }
 
@@ -744,8 +755,8 @@ public final class VarkaKernelChecks {
 
     VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull);
 
-    /** Output {@code o}'s stored value at row {@code i}. */
-    long got(MemorySegment out, int i, VarkaVectorIR root);
+    /** Output {@code o}'s stored value at row {@code i}; {@code rootLane} as for the others. */
+    long got(MemorySegment out, int i, VarkaVectorIR root, VarkaVectorIR.LaneType rootLane);
   }
 
   /** The 32-bit lane; {@code rowInts} is its reusable row for the reference. */
@@ -807,13 +818,14 @@ public final class VarkaKernelChecks {
       return VarkaReference.cond(cond, rowInts, isNull, lits);
     }
 
-    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root,
+        VarkaVectorIR.LaneType rootLane) {
       return out.get(ValueLayout.JAVA_INT, i * 4L);
     }
   }
 
   /** The 64-bit lane, whose narrowing roots store four bytes a row. */
-  private record LongLane(LongBatch batch, long[] lits) implements Lane {
+  private record LongLane(LongBatch batch, long[] lits, boolean truncateNarrow) implements Lane {
     @Override public int length() {
       return batch.length();
     }
@@ -853,14 +865,24 @@ public final class VarkaKernelChecks {
     }
 
     @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
-      return VarkaReference.longValue(root, values, isNull, lits);
+      OptionalLong v = VarkaReference.longValue(root, values, isNull, lits);
+      // A narrowing root stores the low 32 bits of its child (NarrowLane), which got() reads
+      // back, and the reference answers the child in full. Everywhere but the conformance path
+      // the two are left to differ: the IR series adds a NarrowLane root wherever its bound
+      // analysis says the value fits an int, so a value that does not shows as a difference.
+      // The conformance path (truncateNarrow) holds every row to Spark's answer, and there a
+      // root whose value can leave the int range is a LEGACY CAST(x AS INT) of a long, which
+      // keeps the low 32 bits as the store does (an ANSI one raises, and is declined).
+      return truncateNarrow && root instanceof NarrowLane && v.isPresent()
+          ? OptionalLong.of((int) v.getAsLong()) : v;
     }
 
     @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {
       return VarkaReference.longCond(cond, values, isNull, lits);
     }
 
-    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root,
+        VarkaVectorIR.LaneType rootLane) {
       return root instanceof NarrowLane ? out.get(ValueLayout.JAVA_INT, i * 4L)
           : out.get(ValueLayout.JAVA_LONG, i * 8L);
     }
@@ -905,8 +927,8 @@ public final class VarkaKernelChecks {
       return width(intColumn(c) ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
-    @Override public long outputStride(VarkaVectorIR root) {
-      return width(root.laneType() == VarkaVectorIR.LaneType.INT
+    @Override public long outputStride(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane) {
+      return width(rootLane == VarkaVectorIR.LaneType.INT
           ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
@@ -927,8 +949,9 @@ public final class VarkaKernelChecks {
       }
     }
 
-    @Override public void putOutput(VarkaVectorIR root, MemorySegment d, int i, long v) {
-      if (outputStride(root) == 4L) {
+    @Override public void putOutput(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane,
+        MemorySegment d, int i, long v) {
+      if (outputStride(root, rootLane) == 4L) {
         d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
       } else {
         put(d, i, v);
@@ -947,8 +970,8 @@ public final class VarkaKernelChecks {
       return 0xDEADBEEFCAFEBABEL;
     }
 
-    @Override public long sentinelOutput(VarkaVectorIR root) {
-      return outputStride(root) == 4L ? 0xDEADBEEF : sentinel();
+    @Override public long sentinelOutput(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane) {
+      return outputStride(root, rootLane) == 4L ? 0xDEADBEEF : sentinel();
     }
 
     @Override public int run(VarkaFusedKernel kernel, long[] srcData, long[] srcValidity,
@@ -965,8 +988,9 @@ public final class VarkaKernelChecks {
       return VarkaReference.mixedCond(cond, values, isNull, intLits, longLits);
     }
 
-    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
-      return outputStride(root) == 4L ? out.get(ValueLayout.JAVA_INT, i * 4L)
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root,
+        VarkaVectorIR.LaneType rootLane) {
+      return outputStride(root, rootLane) == 4L ? out.get(ValueLayout.JAVA_INT, i * 4L)
           : out.get(ValueLayout.JAVA_LONG, i * 8L);
     }
   }
@@ -1028,8 +1052,8 @@ public final class VarkaKernelChecks {
       return bitColumns[c] ? 1L : width(columnLanes[c]);
     }
 
-    @Override public long outputStride(VarkaVectorIR root) {
-      return width(root.laneType());
+    @Override public long outputStride(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane) {
+      return width(rootLane);
     }
 
     @Override public long value(int c, int i) {
@@ -1048,8 +1072,9 @@ public final class VarkaKernelChecks {
       }
     }
 
-    @Override public void putOutput(VarkaVectorIR root, MemorySegment d, int i, long v) {
-      putAt(root.laneType(), d, i, v);
+    @Override public void putOutput(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane,
+        MemorySegment d, int i, long v) {
+      putAt(rootLane, d, i, v);
     }
 
     @Override public void put(MemorySegment d, int i, long v) {
@@ -1085,8 +1110,8 @@ public final class VarkaKernelChecks {
       return Byte.MIN_VALUE;
     }
 
-    @Override public long sentinelOutput(VarkaVectorIR root) {
-      return switch (root.laneType()) {
+    @Override public long sentinelOutput(VarkaVectorIR root, VarkaVectorIR.LaneType rootLane) {
+      return switch (rootLane) {
         case BYTE -> Byte.MIN_VALUE;
         case SHORT -> Short.MIN_VALUE;
         case INT, LONG, FLOAT, DOUBLE -> 0xDEADBEEF;
@@ -1114,8 +1139,9 @@ public final class VarkaKernelChecks {
       return VarkaReference.cond(cond, rowInts, isNull, lits);
     }
 
-    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
-      return switch (root.laneType()) {
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root,
+        VarkaVectorIR.LaneType rootLane) {
+      return switch (rootLane) {
         case BYTE -> out.get(ValueLayout.JAVA_BYTE, i);
         case SHORT -> out.get(ValueLayout.JAVA_SHORT, i * 2L);
         case INT, FLOAT -> out.get(ValueLayout.JAVA_INT, i * 4L);
@@ -1293,9 +1319,11 @@ public final class VarkaKernelChecks {
     long[] data = new long[n];
     long[] validity = new long[n];
     for (int o = 0; o < n; o++) {
-      values[o] = VarkaEmitterFixtures.alloc(arena, length * lane.outputStride(roots[o]));
+      VarkaVectorIR.LaneType rootLane = roots[o].laneType();
+      values[o] = VarkaEmitterFixtures.alloc(arena, length * lane.outputStride(roots[o], rootLane));
+      long sentinel = lane.sentinelOutput(roots[o], rootLane);
       for (int i = 0; i < length; i++) {
-        lane.putOutput(roots[o], values[o], i, lane.sentinelOutput(roots[o]));
+        lane.putOutput(roots[o], rootLane, values[o], i, sentinel);
       }
       bits[o] = VarkaEmitterFixtures.alloc(arena, wordBytes(length));
       bits[o].fill(fill.value());
@@ -1314,7 +1342,7 @@ public final class VarkaKernelChecks {
     }
     long[] outStride = new long[roots.length];
     for (int o = 0; o < roots.length; o++) {
-      outStride[o] = lane.outputStride(roots[o]);
+      outStride[o] = lane.outputStride(roots[o], roots[o].laneType());
     }
     return sanitized(kernel, lane.length(), inStride, outStride, in.data(), in.validity(),
         out.data(), out.validity(), scratch -> lane.run(kernel, in.data(), in.validity(),
@@ -1339,13 +1367,76 @@ public final class VarkaKernelChecks {
   private static int runOne(String context, String className, byte[] bytes,
       List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
       SparkAnswers spark, List<ValidityFill> fills) {
-    var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
-    var kernel = load(loader, className, bytes);
-    try {
-      return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark, fills,
-          CallHook.NONE);
-    } finally {
-      loader.release();
+    if (!reuseLoaded) {
+      var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
+      var kernel = load(loader, className, bytes);
+      KERNELS_DEFINED.incrementAndGet();
+      try {
+        return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark,
+            fills, CallHook.NONE);
+      } finally {
+        loader.release();
+      }
+    }
+    return runLoaded(context, LAST_LOADED.get().kernel(className, bytes), rootList, numInputs,
+        lane, declineAllowed, spark, fills, CallHook.NONE);
+  }
+
+  /**
+   * Whether {@link #runOne} runs a kernel whose bytes it loaded last on this thread on that class
+   * rather than defining it again. The suites check one kernel over several batches and each
+   * batch through both bodies, a run apiece; defining it once a run made a tree of the series
+   * eight classes, and the definitions, their verification and the unloading of their loaders
+   * were a large share of the series' time (`m8/results/VARKA-suite-profile.txt`). An emitted
+   * kernel holds no state between calls - its only fields are the static final range tables its
+   * initialiser fills - so a run on the loaded class is the run a fresh one would make. Kept
+   * switchable, {@code -Dvarka.checks.reuseLoaded=false}, so that the two can be timed and
+   * compared.
+   */
+  static volatile boolean reuseLoaded =
+      !"false".equals(System.getProperty("varka.checks.reuseLoaded"));
+
+  /** How many kernel classes {@link #runOne} has defined in this JVM, for the reuse's test. */
+  static final AtomicLong KERNELS_DEFINED = new AtomicLong();
+
+  /**
+   * The kernel {@link #runOne} loaded last on this thread, under its own loader: the suites that
+   * call it from several threads each keep their own. Matched on the name and the bytes; the bytes
+   * matter because a planted fault rewrites them and keeps the name. Its loader is released when
+   * the thread loads another kernel, so each thread holds at most one such loader; releasing one
+   * only drops its references, so the last kernel a thread ran stays loaded until then.
+   */
+  private static final ThreadLocal<LastLoaded> LAST_LOADED =
+      ThreadLocal.withInitial(LastLoaded::new);
+
+  private static final class LastLoaded {
+    private String className;
+    private byte[] bytes;
+    private VarkaGeneratedClassLoader loader;
+    private VarkaFusedKernel kernel;
+
+    VarkaFusedKernel kernel(String name, byte[] code) {
+      if (kernel != null && name.equals(className) && Arrays.equals(code, bytes)) {
+        return kernel;
+      }
+      if (loader != null) {
+        loader.release();
+      }
+      loader = null;
+      kernel = null;
+      var fresh = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
+      // A class that fails to load is not kept: the next run loads it again and fails the same.
+      try {
+        kernel = load(fresh, name, code);
+      } catch (RuntimeException | Error e) {
+        fresh.release();
+        throw e;
+      }
+      KERNELS_DEFINED.incrementAndGet();
+      loader = fresh;
+      className = name;
+      bytes = code.clone();
+      return kernel;
     }
   }
 
@@ -1395,6 +1486,7 @@ public final class VarkaKernelChecks {
       long[] values = new long[numInputs];
       boolean[] isNull = new boolean[numInputs];
       int[] nullCounts = in.nullCounts();
+      VarkaVectorIR.LaneType[] rootLanes = lanesOf(roots);
       for (int i = 0; i < length; i++) {
         for (int c = 0; c < numInputs; c++) {
           isNull[c] = lane.nulls()[c][i];
@@ -1423,16 +1515,18 @@ public final class VarkaKernelChecks {
               agreeWithSpark(context, spark, o, i, values, isNull, want);
             }
             for (int f = 0; f < runs; f++) {
-              String at = context + fills.get(f).suffix();
               boolean bit = bit(outs[f].bits()[o], i);
-              long got = lane.got(outs[f].values()[o], i, root);
+              long got = lane.got(outs[f].values()[o], i, root, rootLanes[o]);
+              // The fill's name is formatted only for a failure: this loop runs once a row.
               if (bit != want.isPresent()) {
+                String at = context + fills.get(f).suffix();
                 throw new IllegalStateException(at + ": validity of output " + o + " row " + i
                     + " differs (want " + shown(want) + ", got "
                     + (bit ? "Some(" + got + ")" : "None") + ")"
                     + evidence(values, isNull, nullCounts));
               }
               if (want.isPresent() && got != want.getAsLong()) {
+                String at = context + fills.get(f).suffix();
                 throw new IllegalStateException(at + ": output " + o + " row " + i
                     + " differs (want " + want.getAsLong() + ", got " + got + ")"
                     + evidence(values, isNull, nullCounts));
@@ -1471,9 +1565,10 @@ public final class VarkaKernelChecks {
     for (Outputs out : outs) {
       for (int o = 0; o < roots.length; o++) {
         boolean selection = roots[o] instanceof Cond;
+        VarkaVectorIR.LaneType rootLane = roots[o].laneType();
         for (int i = 0; i < lane.length(); i++) {
           boolean bit = bit(out.bits()[o], i);
-          long value = bit && !selection ? lane.got(out.values()[o], i, roots[o]) : 0L;
+          long value = bit && !selection ? lane.got(out.values()[o], i, roots[o], rootLane) : 0L;
           h = VarkaAnswerLog.row(h, bit, value);
         }
       }
@@ -1505,6 +1600,15 @@ public final class VarkaKernelChecks {
     } finally {
       loader.release();
     }
+  }
+
+  /** Each root's {@link VarkaVectorIR#laneType}, read once for a batch's rows. */
+  private static VarkaVectorIR.LaneType[] lanesOf(VarkaVectorIR[] roots) {
+    var lanes = new VarkaVectorIR.LaneType[roots.length];
+    for (int o = 0; o < roots.length; o++) {
+      lanes[o] = roots[o].laneType();
+    }
+    return lanes;
   }
 
   /** Bit {@code i} of a validity or selection bitmap, LSB first as Arrow lays it out. */

@@ -347,6 +347,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `make_ym_interval(year(d), month(d)) * 2` | `calendar`, `interval` | `unix_date(d) BETWEEN -719162 AND 2932896` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
 | `abs(ym)` | `interval` | `ym > INTERVAL '-178956970-8' YEAR TO MONTH` | interval arithmetic is exact in every mode: the one count whose negation overflows declines | vector |
 | `ym - ymm` | `interval` | `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647` | exact in every mode: a difference outside the month count's int declines | vector |
+| `ym + ym` | `interval` | `CAST(ym AS BIGINT) + CAST(ym AS BIGINT) BETWEEN -2147483648 AND 2147483647` | the sum, exact in every mode as the difference is | vector |
 | `CAST(ymy AS INTERVAL MONTH)` | none |  |  | vector |
 | `CAST(i AS INTERVAL MONTH)` | none |  | a relabel of the count; `CAST(i AS INTERVAL YEAR)` multiplies by twelve, checked, and declines over a bare int column | vector |
 | `CAST(ymm AS INT)` | none |  | a relabel of a MONTH-ended interval; a YEAR-ended one divides by twelve | vector |
@@ -365,6 +366,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `i - 1` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
 | `year(d) * 2` | `calendar`, `intArithmetic` | `unix_date(d) BETWEEN -719162 AND 2932896` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
 | `-i` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
+| `try_add(i, 1)` | `intArithmetic` |  | an overflowing lane is null, so the kernel declines nothing | vector |
+| `try_subtract(i, 1)` | `intArithmetic` |  | an overflowing lane is null | vector |
 | `year(d) + i` | `calendar`, `intArithmetic` | `unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
 
 #### Narrow arithmetic
@@ -427,6 +430,11 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `coalesce(d, d2)` | `condition` |  |  | vector |
 | `greatest(d, d2)` | `intArithmetic` |  |  | vector |
 | `least(d, d2)` | `intArithmetic` |  |  | vector |
+| `if(ym IS NULL, INTERVAL '1-2' YEAR TO MONTH, ym)` | `predicate`, `condition` |  |  | vector |
+| `CASE WHEN ym IS NULL THEN INTERVAL '1-2' YEAR TO MONTH ELSE ym END` | `predicate`, `condition` |  |  | vector |
+| `coalesce(ym, INTERVAL '1-2' YEAR TO MONTH)` | `condition` |  |  | vector |
+| `greatest(ym, INTERVAL '1-2' YEAR TO MONTH)` | `intArithmetic` |  |  | vector |
+| `least(ym, INTERVAL '-1-2' YEAR TO MONTH)` | `intArithmetic` |  |  | vector |
 
 #### Predicates
 
@@ -644,6 +652,15 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `if(s1 IS NULL, l, l2)` | `predicate`, `condition` |  | the short twin | per-lane: mask broadcast, mask logic, blend |
 | `greatest(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
 | `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `coalesce(l, l2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+| `least(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN t < t2 THEN t ELSE t2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `if(t < t2, t, t2)` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `coalesce(t, t2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+| `greatest(dt, dt2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `least(dt, dt2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `if(dt < dt2, dt, dt2)` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `coalesce(dt, dt2)` | `condition` |  |  | per-lane: blend, mask broadcast |
 
 #### TIMESTAMP_NTZ columns
 
@@ -674,6 +691,66 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `coalesce(ntz, ntz2)` | `condition` |  |  | per-lane: blend, mask broadcast |
 | `CAST(d AS TIMESTAMP_NTZ)` | `intArithmetic` | `unix_date(d) BETWEEN -106751991 AND 106751991` | Spark multiplies with multiplyExact in every mode, so a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row engine the guard sends its batch to | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `CAST(ntz AS DATE)` | `intArithmetic` |  | cannot fail: every quotient is a day an int holds | vector |
+
+#### DOUBLE columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `x < x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x <= x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
+| `x > x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x >= x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
+| `x = x2` | `predicate` |  | NaN equals NaN, and -0.0 equals 0.0 | per-lane: compare to mask, mask cast, mask logic |
+| `x <> x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x <=> x2` | `predicate` |  | null-safe equality under the lane's own equality | per-lane: compare to mask, mask cast, mask logic |
+| `x < 1.5D` | `predicate` |  | the literal is its bits in the table of the lane's width | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x = 1.5D` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
+| `x IN (1.5D, -2.5D, 0.0D, CAST('NaN' AS DOUBLE))` | `predicate` |  | an equality chain under the lane's equality | per-lane: compare to mask, mask cast, mask logic |
+| `x IN (11 literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask cast, mask logic |
+| `isnan(x)` | `predicate` |  | never null: false on a null row | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x IS NULL` | `predicate` |  |  | per-lane: mask broadcast, mask logic, mask cast |
+| `x IS NOT NULL` | `predicate` |  |  | per-lane: mask cast, mask broadcast |
+
+#### DOUBLE columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `greatest(x, x2)` | `intArithmetic` |  | Spark's order, the first of two equal operands kept | per-lane: compare to mask, mask cast, mask logic, mask broadcast, blend |
+| `least(x, x2)` | `intArithmetic` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast, blend |
+| `nanvl(x, x2)` | `condition` |  | an IF over isnan, null where the first operand is | per-lane: compare to mask, mask cast, mask logic, blend, mask broadcast |
+| `CASE WHEN x < x2 THEN x ELSE x2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast, blend |
+| `if(x IS NULL, x2, x)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend |
+| `coalesce(x, x2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+
+#### FLOAT columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `f < f2` | `predicate` |  |  | vector |
+| `f <= f2` | `predicate` |  |  | vector |
+| `f > f2` | `predicate` |  |  | vector |
+| `f >= f2` | `predicate` |  |  | vector |
+| `f = f2` | `predicate` |  | NaN equals NaN, and -0.0 equals 0.0 | vector |
+| `f <> f2` | `predicate` |  |  | vector |
+| `f <=> f2` | `predicate` |  | null-safe equality under the lane's own equality | vector |
+| `f < 1.5F` | `predicate` |  | the literal is its bits in the table of the lane's width | vector |
+| `f = 1.5F` | `predicate` |  |  | vector |
+| `f IN (1.5F, -2.5F, 0.0F, CAST('NaN' AS FLOAT))` | `predicate` |  | an equality chain under the lane's equality | vector |
+| `f IN (11 literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+| `isnan(f)` | `predicate` |  | never null: false on a null row | vector |
+| `f IS NULL` | `predicate` |  |  | vector |
+| `f IS NOT NULL` | `predicate` |  |  | vector |
+
+#### FLOAT columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `greatest(f, f2)` | `intArithmetic` |  | Spark's order, the first of two equal operands kept | vector |
+| `least(f, f2)` | `intArithmetic` |  |  | vector |
+| `nanvl(f, f2)` | `condition` |  | an IF over isnan, null where the first operand is | vector |
+| `CASE WHEN f < f2 THEN f ELSE f2 END` | `predicate`, `condition` |  |  | vector |
+| `if(f IS NULL, f2, f)` | `predicate`, `condition` |  |  | vector |
+| `coalesce(f, f2)` | `condition` |  |  | vector |
 
 #### Time arithmetic
 
@@ -710,16 +787,18 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 43 | 0 | 2 | 0 | 2 | 39 |
+| `bigint` | 44 | 0 | 2 | 0 | 2 | 40 |
 | `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
 | `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `date` | 84 | 17 | 0 | 1 | 0 | 66 |
-| `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
-| `int` | 70 | 14 | 2 | 0 | 1 | 53 |
+| `double` | 20 | 0 | 0 | 0 | 0 | 20 |
+| `dt` | 15 | 2 | 0 | 0 | 0 | 13 |
+| `float` | 20 | 0 | 0 | 0 | 0 | 20 |
+| `int` | 72 | 14 | 2 | 0 | 1 | 55 |
 | `ntz` | 19 | 0 | 1 | 0 | 0 | 18 |
 | `short` | 25 | 0 | 0 | 0 | 8 | 17 |
-| `time` | 28 | 6 | 0 | 0 | 2 | 20 |
-| `ym` | 24 | 7 | 2 | 0 | 2 | 13 |
+| `time` | 32 | 6 | 0 | 0 | 2 | 24 |
+| `ym` | 30 | 7 | 2 | 0 | 2 | 19 |
 <!-- END generated verification counts -->
 
 ## Glossary
@@ -1333,7 +1412,8 @@ batches, an entry that did not fuse, or a slow kernel.
    this batch; falling back to the per-row path.", the same `Varka context:` block (`kind:
    kernel-failure`, shape hash, options, the batch's rows and nulls, the cause) and "Wrote a
    reproduction of this Varka failure (...) to <file>; replay it with dev/varka_emit.sh --replay
-   <file>".
+   <file>". The warning comes once per kernel in each task's evaluator: a kernel that fails on
+   every batch logs the rest at debug, and the fallback metrics count every batch.
 3. On a checkout, `dev/varka_emit.sh --replay <file>` rebuilds the kernel from the file's IR and
    options, runs it over the recorded batch and prints `REPRODUCED: the same signature` with exit
    0 when it fails the same way. It exits 1 when it does not (a fixed emitter, or an edited
@@ -1637,6 +1717,10 @@ exist.
   and run cold with C1 on through on-stack replacements at both tiers. A JFR
   stream and the code cache's method list say which JIT tier served each
   compared call (VARKA-274).
+* **sql/core harness tests** (`VarkaCoverageHarnessSuite`,
+  `VarkaDifferentialHarnessSuite`, `VarkaTimeHarnessSuite`, `VarkaHarnessParitySuite`)
+  hold the kernels' answers to Spark's own evaluation of the optimized expression with
+  no session, through the production evaluators over the Arrow cache's batches.
 * **sql/core tests** (`VarkaColumnarToRowExecSuite`, `VarkaProjectExecSuite`,
   `VarkaFilterExecSuite`, `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
   `VarkaDifferentialSuite`, `VarkaCoverageDifferentialSuite`,
@@ -1834,7 +1918,7 @@ The real current edges, stated with their numbers where they have one:
 
 ```bash
 ./build/mvn -f sql/varka/engine/pom.xml install
-build/sbt "sql/testOnly org.apache.spark.sql.execution.VarkaDifferentialSuite"
+build/sbt "sql/testOnly org.apache.spark.sql.execution.VarkaDifferentialHarnessSuite"
 # Engine JMH kernels (in-process, gated):
 ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true
 # Spark benchmarks (SPARK_GENERATE_BENCHMARK_FILES=1 to regenerate the committed files):

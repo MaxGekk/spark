@@ -369,16 +369,16 @@ public final class VarkaTypes {
           new Conformance.Suite("SmallInt"));
       case INT -> new Info(id, "int", "INT", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.IntegerType), List.of(LaneType.INT),
-          new Conformance.Owed("Int", "485"));
+          new Conformance.Suite("Int"));
       case LONG -> new Info(id, "bigint", "BIGINT", new Admission.OnLane(LaneType.LONG), 64,
           List.of(DataTypes.LongType), List.of(LaneType.LONG),
-          new Conformance.Owed("BigInt", "485"));
+          new Conformance.Suite("BigInt"));
       case FLOAT -> new Info(id, "float", "FLOAT", new Admission.OnLane(LaneType.FLOAT), 32,
           List.of(DataTypes.FloatType), List.of(LaneType.FLOAT),
-          new Conformance.Owed("Float", "341"));
+          new Conformance.Suite("Float"));
       case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.OnLane(LaneType.DOUBLE), 64,
           List.of(DataTypes.DoubleType), List.of(LaneType.DOUBLE),
-          new Conformance.Owed("Double", "341"));
+          new Conformance.Suite("Double"));
       // Every precision is sixteen bytes a row in Arrow (`ArrowUtils.toArrowType`); the tests
       // probe one form on each side of the 64-bit boundary at precision 18. Up to it a value is
       // an unscaled long on the long lane (VARKA-347); the pair above it is row 359's. The int
@@ -392,10 +392,10 @@ public final class VarkaTypes {
           List.of(LaneType.LONG), new Conformance.Owed("Decimal", "348"));
       case DATE -> new Info(id, "date", "DATE", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.DateType), List.of(LaneType.INT),
-          new Conformance.Owed("Date", "485"));
+          new Conformance.Suite("Date"));
       case TIME -> new Info(id, "time", "TIME", new Admission.OnLane(LaneType.LONG), 64,
           List.of(new TimeType(0), new TimeType(3), new TimeType(6)), List.of(LaneType.LONG),
-          new Conformance.Owed("Time", "485"));
+          new Conformance.Suite("Time"));
       case TIMESTAMP_NTZ -> new Info(id, "ntz", "TIMESTAMP_NTZ",
           new Admission.OnLane(LaneType.LONG), 64, List.of(DataTypes.TimestampNTZType),
           List.of(LaneType.LONG), new Conformance.Suite("TimestampNtz"));
@@ -403,12 +403,12 @@ public final class VarkaTypes {
           new Admission.OnLane(LaneType.INT), 32,
           fields(YearMonthIntervalType$.MODULE$.YEAR(), YearMonthIntervalType$.MODULE$.MONTH(),
               YearMonthIntervalType::new),
-          List.of(LaneType.INT), new Conformance.Owed("YearMonthInterval", "485"));
+          List.of(LaneType.INT), new Conformance.Suite("YearMonthInterval"));
       case DT_INTERVAL -> new Info(id, "dt", "INTERVAL DAY",
           new Admission.OnLane(LaneType.LONG), 64,
           fields(DayTimeIntervalType$.MODULE$.DAY(), DayTimeIntervalType$.MODULE$.SECOND(),
               DayTimeIntervalType::new),
-          List.of(LaneType.LONG), new Conformance.Owed("DayTimeInterval", "485"));
+          List.of(LaneType.LONG), new Conformance.Suite("DayTimeInterval"));
       // The zoned type is the same eight bytes as the others on the long lane, but its
       // differences and interval additions are computed on local date-times in the session time
       // zone, which is not lane arithmetic (`m9/SCOPE.md` item 31).
