@@ -513,3 +513,38 @@ exemption for an output Spark folds to a constant never fires under the exclusio
 it removed, all 136 tests pass. The 136 output
 tests take 28.3 s, against prediction 4.4's 60 s for 123: a ratio of 0.47, since each test's
 queries are small and the fixtures stay cached across them.
+
+## 13. Steps 3 and 4 brought up to master (30 October 2026)
+
+Both branches took master by merge commits, 93 commits on from their base. What moved under
+them, and where 11 and 12 now read differently:
+
+- *The differential's output test is below the session.* Master moved every coverage row's
+  answers from `VarkaCoverageDifferentialSuite` into `VarkaCoverageHarnessSuite` (VARKA-509) and
+  lints a suite that checks rows through a session (VARKA-529), so 12's every-predicate-row test
+  is now that suite's `booleanOutputs`: each predicate row as `SELECT rid, (p) AS c`, planned by
+  the harness under the same rule exclusions, served through both consumers, its rows held to
+  Spark's with a null kept apart from a false, a kernel required to answer with no output left
+  to the row path, and the bare column `b` required to fuse nothing. The planted check holds
+  the harness's row comparison to a null answered as false. The ANSI form's `BOOLEAN` stand-in
+  (`b2`) and its guard moved with it to `VarkaAnsiForm`; the guard of a boolean output is now
+  picked by the condition's columns as a predicate's is, so a long condition takes `lrid` and
+  a floating one `xrid` or `frid`.
+- *More predicate rows.* Row 341's floating rows bring the table to 164 predicate rows, and all
+  164 answer as Spark does as boolean outputs, the floating conditions included, with a kernel
+  serving each but `b`.
+- *The conformance contract* now holds each form's discrimination over the batches the kernel
+  answered as well as over the fixture; a `BOOLEAN` value is held to both rules in both places.
+- *Generated files*, regenerated after the merge in `ADDING_AN_EXPRESSION.md`'s order with the
+  same result as 12: the eight rows added to `coverage.json`, `docs/sql-varka.md`,
+  `emitted_bytes.json` (no existing entry changed, the `option_arms` digests moved) and
+  `width_audit.json` (the two long rows refused at 128 bits), and the same three interval
+  comparisons of `golden_corpus.json` moved from a plain projection to a fused one.
+
+**Checked** on the laptop: the catalyst defaults gate (`dev/varka_matrix.sh --defaults --module
+catalyst --split 4`, the sanitizer on, and on step 4 `-Dvarka.checkBothBodies` too) passes on
+both branches, 972
+tests on step 3 and 977 on step 4 with none failed; on step 4 the sql suites the change reaches
+(the coverage harness and differential, the expression harness suites, the evaluator, sanitizer,
+lane, golden corpus suites) pass, 1409 tests with none failed; on step 3 the sql suites of 11
+with `VarkaMemorySanitizerEndToEndSuite`, and the engine's `VarkaVectorSupportOutputPlanTest` pass.
