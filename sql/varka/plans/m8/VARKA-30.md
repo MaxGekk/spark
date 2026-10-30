@@ -309,8 +309,9 @@ the two-lane-count float of the `BIGINT` form, held by `VarkaWarmupReachSuite`. 
    and `+-7` - and every `INT` divisor against the same list as dividends, through the double
    route, beside a seeded random draw of pairs; the constant forms by the existing `ConstDivide`
    sweeps and a `pmod` sweep by constant. `INT` pairs are 2^64, so the pairs themselves are the
-   SMT file's (3.3). Each sweep is a parallel stream, run in the nightly, with a sampled slice in
-   PR CI (2.10).
+   SMT file's (3.3). Each sweep is a parallel stream. No CI workflow runs such sweeps today: none
+   sets `varka.sweep`, and the gate's `-z opt-in` filter selects nothing in a JUnit suite, so they
+   run by hand in the gate's sweep step until a row schedules them.
 3. **SMT, `sql/varka/proofs/int_divide.smt2`**, rendered by `VarkaProofFiles` from the code's
    constants: over Java's integers (`java.smt2`) the sign wrapper (`trunc` odd, the remainder's
    sign, `Long.MIN_VALUE` read unsigned), the two blends, the INT fix-ups of 2.2, MathUtils'
