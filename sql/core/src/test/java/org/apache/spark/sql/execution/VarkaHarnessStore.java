@@ -625,9 +625,10 @@ public final class VarkaHarnessStore {
   /**
    * {@code o} printed whole: an expression as its class, its constructor's arguments and its
    * origin, which an error's message quotes; a floating value by its raw bits, which
-   * {@code toString} and Java serialization would both lose; a container by its elements. Any
-   * other value prints as its class and {@code toString}, so a value whose {@code toString} is
-   * its identity keys nothing another JVM finds, and is only computed again.
+   * {@code toString} and Java serialization would both lose; a container by its elements; a
+   * Scala object by its class. Any other value prints as its class and {@code toString}, so a
+   * value whose {@code toString} is its identity keys nothing another JVM finds, and is only
+   * computed again.
    */
   static String describe(@Nullable Object o) {
     return describe(o, false);
@@ -721,7 +722,15 @@ public final class VarkaHarnessStore {
       }
       case scala.Product p -> elements(sb, p.getClass().getName(),
           CollectionConverters.asJava(p.productIterator()), ids);
-      default -> sb.append(o.getClass().getName()).append(':').append(o);
+      default -> {
+        // A Scala object is the one instance of its class, which names it; its toString may be
+        // its identity (AnyTimeType's is), which differs between two JVMs.
+        String name = o.getClass().getName();
+        sb.append(name);
+        if (!name.endsWith("$")) {
+          sb.append(':').append(o);
+        }
+      }
     }
   }
 

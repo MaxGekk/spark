@@ -154,6 +154,14 @@ public final class VarkaHarnessStoreSuite {
   }
 
   @Test
+  @DisplayName("a Scala object keys by its class, not by a toString that names its identity")
+  void scalaObjectKeysByClass() {
+    // AnyTimeType's toString is Object's, its identity hash, which another JVM does not share.
+    Object o = org.apache.spark.sql.types.AnyTimeType$.MODULE$;
+    assertEquals(o.getClass().getName(), VarkaHarnessStore.describe(o));
+  }
+
+  @Test
   @DisplayName("the store's entries come back from its files as they were written")
   void filesRoundTrip() throws IOException {
     Path dir = Files.createTempDirectory("varka-harness-store");
