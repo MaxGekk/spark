@@ -148,15 +148,16 @@ of `m9/SCOPE.md`.
   names Lemire, Bartlett and Kaser's section 7 (add `d / 2`, floor, subtract one when divisible
   and odd). That form is stated for an unsigned dividend, and its add overflows the int lane at
   `|x|` near `2^31`; the remainder of `ConstDivide`'s truncating quotient needs no add, no `abs`
-  and no unsigned reading (2.5). It is proven on its own (3.5, 3.6), so it rests on no paper,
-  and the citation leaves the row (open point 4).
+  and no unsigned reading (2.5). It is proven on its own (3.5, 3.6), so it rests on no paper;
+  the row's citation is the owner's text and stays as written (open point 2).
 - **`BIGINT` at a small negative scale has a declined band** (2.5): `ConstDivide`'s `2^52` bound
-  (item 0.12) holds after a pre-shift for `k >= 12` and needs a guard for `k <= 11`, the route of
-  the milestone plan's 2.8 for 350.
+  (item 0.12) holds after a pre-shift for `k >= 12`, and for `k <= 11` a guard declines the
+  batch beyond it, the pattern of 30's `ConstDivide` bound and 332's `2^52` guard; the full-range
+  form needs row 361's widening 64 by 64 multiply.
 - **`floor(i)` over an `INT` fuses without 343** (2.4): `FLOOR(CAST(i AS DOUBLE))` is `i`
   widened to the long, exactly, and is compiled as that. A `TINYINT` or `SMALLINT` operand takes
-  the same form but needs the narrow load at the long width, which 332 and 343a both need and the
-  first of them to land builds (`VARKA-343.md` 0, item 2 and 2.2).
+  the same form but needs the narrow column load in a `BIGINT` kernel, which row 332 builds (its
+  plan, on branch `varka-332-plan`); 344 does not build it.
 - **The ANSI guard of `floor` and `ceil` lets NaN through** (item 0.2), which 343's floating
   `GuardedRange` does not (item 0.13), so the guard reads the operand with NaN blended to `0.0`.
 - **Large, in three parts, by what each part waits for** (section 5), against the row's medium.
@@ -187,7 +188,7 @@ constructions below are exact by IEEE 754's rules, not within a bound; section 3
 `DOUBLE` lane; `mode` is `RINT`, `FLOOR` or `CEIL`; `result` is `DOUBLE` (an integer-valued double)
 or `LONG` (Java's `(long)` of it). `rint` is `RINT` to `DOUBLE`; `floor` and `ceil` over a double
 are `FLOOR` and `CEIL` to `LONG`. The constructor refuses `RINT` to `LONG`, which no function of
-this row needs, and `FLOOR` or `CEIL` to `DOUBLE`, which has no reader until 346 (open point 3).
+this row needs, and `FLOOR` or `CEIL` to `DOUBLE`, which has no reader until 346 (section 7).
 
 Why a node, by `VARKA-475.md` 4 rule 1: rounding to an integral value is a new kind of
 computation, not an existing one at a new type. The two alternatives are worse. Composing it from
@@ -258,7 +259,7 @@ For `floor`, and `ceil` with `CEIL`:
   `GuardedRange(nanvl(x, 0.0), nextUp(-2^51), nextDown(2^51), FAIL)`.
 - **A `BIGINT` operand**, both modes: the child.
 - **`CAST(i AS DOUBLE)`, `i` an `INT`**, both modes: `WidenLane(i, LONG)`. The same for a
-  `SMALLINT` or `TINYINT` `i` once the narrow load at the long width exists (332 or 343a).
+  `SMALLINT` or `TINYINT` `i` once row 332's narrow load in a `BIGINT` kernel exists.
 - **`CAST(f AS DOUBLE)`, `f` a `FLOAT`**, after 343a: the `DOUBLE` form over
   `ConvertLane(f, DOUBLE)`.
 
@@ -311,9 +312,10 @@ The route is the milestone plan's 2.8 for 350: divide `|x| >>> k` by `5^k`, whic
 division by `10^k` of a magnitude, and keeps the dividend below `2^52` for every long when
 `k >= 12`; the sign is restored after the rounding. For `k <= 11` the batch is guarded to
 `|x| < 2^(52 + k)` - for `k = 1`, `2^53`, about nine thousand million million - and a lane past
-it declines. The first of 344 and 350 to land builds the pre-shift and its `5^k` entries in the
-second long-lane proof file 2.8 names; the 64-bit limb magic that would remove the band stays
-350's option arm (open point 2).
+it declines, the same pattern as 30's `ConstDivide` bound and 332's `2^52` guard. 344 builds the
+pre-shift and its `5^k` entries in the long-lane proof file. The band goes only with an exact
+full-range division, which needs the 64 by 64 to 128-bit product of row 361's widening multiply;
+until then it is a recorded decline.
 
 ### 2.6 `factorial`
 
@@ -322,8 +324,11 @@ outside the bounds - widened to the long lane, then the table as a balanced tree
 `Compare(LT)` against the 21 literals: depth five, so the critical path is five blends rather than
 twenty, and every node exists. A gather from the table (`LongVector.fromArray` with an index map,
 which takes the indices from an `int[]`, so a store and a `LoadVectorGather`) is the competing
-form; whether it intrinsifies on AVX2 is a census cell this row adds, and it becomes an option
-arm only if the cell reads intrinsic on the EPYC 7763 (open point 5).
+form, built as an option arm, `factorialForm` (`TREE`, `GATHER`), by the rule to keep competing
+designs behind options. The first step is a census cell for the gather at every width on the
+laptop and the EPYC 7763; it decides the per-host default, `GATHER` only where the cell reads
+intrinsic, since a fallback gather allocates per call. The losing arm stays and runs in the
+option matrix.
 
 ### 2.7 `width_bucket`
 
@@ -381,7 +386,7 @@ The milestone plan's question 2, still open, is about a contracted value *under*
 `floor(sin(x))` turns a one-step difference into a different `BIGINT`. Its option (a) would make
 a rounding node over a contracted child decline. Until 345 lands no contracted node exists, so
 this row is unaffected by the answer; whichever it is, the check sits where 345 builds the
-contract, keyed on the consumer's kind, and this row's nodes change in no byte (open point 6).
+contract, keyed on the consumer's kind, and this row's nodes change in no byte (open point 3).
 
 ## 3. Tests and proofs
 
@@ -419,17 +424,19 @@ declines exactly when Spark raises on one of its live rows.
    `0x1.8p23`, over all 2^32 bit patterns, against `(float) StrictMath.rint((double) f)` and its
    `floor` and `ceil`, which are exact for every float. A construction that is right at one
    precision by the argument of 2.3 is right at another, and this checks the argument on every
-   input of a whole format.
+   input of a whole format. Run by hand in the gate's sweep step (below, item 5).
 4. **The structured `binary64` sweep**, every exponent from the subnormals to `2^1023` in both
    signs, at each the band's ends, every half-integer tie and its neighbours below `2^52`,
    `k +- ulp` for integers `k` near the band's top, and a seeded draw per band, through every host
    form - the laptop's, and under `useAVX=2` both arms of `wideConversionForm` - against
    `Math.rint`, `floor`, `ceil` and `doubleToLong`.
-5. **The integral rounding by exhaustion at 32 bits**, opt-in under `-Dvarka.sweep=true` and in
-   the nightly, PR CI a slice: every `INT` through `round`, `bround` and `truncate` at each `k`
-   from 1 to 10, LEGACY's value and ANSI's raise in one pass, against Spark's own `Round`,
+5. **The integral rounding by exhaustion at 32 bits**, behind `-Dvarka.sweep=true`: every
+   `INT` through `round`, `bround` and `truncate` at each `k` from 1 to 10, LEGACY's value and ANSI's raise in one pass, against Spark's own `Round`,
    `BRound` and `Truncate` - 30 sweeps; `TINYINT` and `SMALLINT` at every scale that is not
-   constant, and `factorial` over every `INT`. ANSI throws only in 2.5's tails, a few hundred
+   constant, and `factorial` over every `INT`. No CI workflow runs a 2^32 sweep today: none sets
+   `varka.sweep`, and a `-z` filter selects nothing in a JUnit suite. So these sweeps and 3.3's
+   twin run in the gate's sweep step, by hand, until a row schedules them; the PR build runs the
+   cells and the sampled regions only. ANSI throws only in 2.5's tails, a few hundred
    values a sweep, so Spark's `eval` runs on every input.
 6. **The long lane by SMT**, in the long-lane proof file 2.8 names: the remainder form of 2.5
    equals `HALF_UP`, `HALF_EVEN` and `DOWN` of `x / 10^k` over integers for every `|x| < 2^63`
@@ -477,29 +484,32 @@ committed files:
    cheaper; `factorial` and `width_bucket` at least three times.
 4. **The AVX2 arms**: the `MAGIC` arm faster than the default by 1.5 to 2.5 times on `floor` to
    `BIGINT`, by minimums; 343's rule keeps the whole-range arm the default unless it is more than
-   1.3 times slower, so this prediction says the default flips to `MAGIC` for this node, and open
-   point 1 asks what follows.
+   1.3 times slower, so this prediction says that rule would pick `MAGIC` for this node. Both
+   arms are built under 343's option either way; what follows from the number is section 7's.
 5. **At 128 bits on x86** every floating form is the Java fallback (two lanes) and slower than
    the row path, recorded in `width_audit.json` as 341 records its compares; the integral forms
    at the int lane are at least twice as fast.
 6. **Test time**, at the calibration table's observed rate: VARKA-335's unary 2^32 sweep took
    about 7 s on the laptop's cores; Spark's `BigDecimal` path is priced at four times that, about
-   30 s, so the 30 sweeps of 3.5 take about 15 minutes nightly, an assumption the first sweep
-   scores. The `binary32` twin's five sweeps, the construction in plain Java, about 7 s each. The
-   SMT file's time is predicted after its spike (3.2). The coverage rows under 30 s, at
+   30 s, so the 30 sweeps of 3.5 take about 15 minutes in the gate's sweep step, an assumption
+   the first sweep scores. The `binary32` twin's five sweeps, the construction in plain Java,
+   about 7 s each. The SMT file's time is predicted after its spike (3.2). The coverage rows under 30 s, at
    `VARKA-336.md`'s ratio.
 
 ## 5. Order, files and size
 
 1. **The baseline** (4), its own pull request.
-2. **The census cells** (2.8), on the laptop and through the census workflow on both runners.
+2. **The census cells** (2.8), on the laptop and through the census workflow on both runners,
+   the gather's cell among them, which sets `factorialForm`'s per-host default (2.6).
 3. **344a, after 341 only**: `RoundToIntegral` with `RINT`, its lowering, the reference, the
    family; the integral rounding of 2.5 and `floor` and `ceil` over `BIGINT` and `INT` (2.4);
    tests 3.1 to 3.3 and 3.5 to 3.11 for these forms; the SMT spike first, then the file.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
-   the `MAGIC` arm under 343's option, 3.4's sweep; `factorial` on 343b's `NULL` disposal.
-5. **344c, after 342's same-lane forms and 343**: `width_bucket`, then its interval and `TIME`
-   forms; `floor(f)` once 343a's `F2D` is in.
+   the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
+   disposal.
+5. **344c, after 342's same-lane forms, 343 and 332**: `width_bucket`, then its interval and
+   `TIME` forms; `floor(f)` once 343a's `F2D` is in; `floor` and `ceil` over `SMALLINT` and
+   `TINYINT` once 332's narrow load in a `BIGINT` kernel is in.
 6. **The measurement** against the baseline at both widths, and the verdict on 4.4.
 
 | form | needs | part |
@@ -507,8 +517,8 @@ committed files:
 | `rint(x)` | 341's lane; the reinterpretation cell | 344a |
 | integral `round`, `bround`, `truncate` | existing nodes; the pre-shift, unless 350 | 344a |
 | `floor`, `ceil` over `BIGINT`, `INT` | `WidenLane` | 344a |
-| `floor`, `ceil` over `SMALLINT`, `TINYINT` | the narrow load at 64 bits (332 or 343a) | 344c |
-| `floor`, `ceil` over `DOUBLE` | 343a's width rule; 343b's `D2L` and AVX2 arms | 344b |
+| `floor`, `ceil` over `SMALLINT`, `TINYINT` | 332's narrow load in a `BIGINT` kernel | 344c |
+| `floor`, `ceil` over `DOUBLE` | 343a's width rule (after 332); 343b's `D2L`, AVX2 arms | 344b |
 | `factorial` | 343b's `NULL` disposal of `GuardedRange` | 344b |
 | `width_bucket` over `DOUBLE` | 342's `SUB`, `MUL`, `DIV`; 343b's `D2L`, `L2D` | 344c |
 | `width_bucket` over intervals, `TIME`; `floor(f)` | 343's `I2D`, `L2D`, `F2D` | 344c |
@@ -542,7 +552,7 @@ measurement against it (open point 1).
 - **`round`, `bround`, `truncate`**: `byte`, `short`, `int`, `bigint` in 344a; `float` and
   `double` are 346's, `dec` 351's and 363's.
 - **`floor`, `ceil`, `ceiling`**: `int`, `bigint` in 344a, `double` in 344b, `byte`, `short`
-  and `float` in 344c after 343a (or 332 for the narrow pair); `dec` is 351's and 363's.
+  and `float` in 344c after 332 and 343a; `dec` is 351's and 363's.
 - **`factorial`** (`int`) in 344b; **`width_bucket`**: `double` in 344c, `time`, `ym` and `dt`
   with 343's conversions.
 
@@ -552,49 +562,46 @@ The census marks an entry's type fused when its coverage rows pass in every mode
 ## 7. Out of this row, and declines that stay
 
 Out: `round`, `bround` and `truncate` over `FLOAT` and `DOUBLE` (346); every decimal form,
-`RoundFloor` and `RoundCeil` among them (351, 363); the casts (343); a `TRUNC` mode, a
-double-valued `FLOOR` or `CEIL`, and the hardware rounding a later JDK might expose (2.2, open
-point 3).
+`RoundFloor` and `RoundCeil` among them (351, 363); the casts (343); the narrow column load in a
+`BIGINT` kernel (332); a `TRUNC` mode and a double-valued `FLOOR` or `CEIL`, which are row 346's,
+added to `RoundToIntegral` when it needs them (the milestone plan's G2 row: "346 after 344 and
+350"; `TRUNC` is `FLOOR` of `|x|` with the sign restored, the magnitude form of 2.3's `RINT`);
+the hardware rounding a later JDK might expose (2.2).
+
+**The `MAGIC` arm's default.** Both arms of `floor` and `ceil` to `BIGINT` are built under 343's
+`wideConversionForm`, whose default 343 chose for one IR on every host. If prediction 4.4 holds,
+343's 1.3 rule would pick `MAGIC` for this node while the whole-range arm stays `D2L`'s default;
+a per-function default would split 343's one option in two. That is a question only once the
+measurement exists, and this row keeps the option's one default until then.
 
 Declines that stay: a batch with a live lane Spark raises on (ANSI's `floor` and `ceil` past the
 long, an integral rounding past its type); on the `MAGIC` arm, a lane with `|x| >= 2^51`;
 a `BIGINT` rounding at `k <= 11` with a lane at or past `2^(52 + k)`; at the forced 128-bit
 species on x86, the floating forms' recorded refusals; until 343a, `floor(f)`, and `rint(i)` or
-`rint(f)`, which arrive under a cast to double; until the narrow load at 64 bits (332 or 343a),
+`rint(f)`, which arrive under a cast to double; until 332's narrow load in a `BIGINT` kernel,
 `floor` and `ceil` over `SMALLINT` and `TINYINT`; until 343b, `floor` and `ceil` over a double
 and `factorial`; until 342 and 343, `width_bucket`.
 
 ## 8. Open points for the lead
 
-1. **The size, and the `MAGIC` default.** (a) Three pull requests as section 5 has them, each
+1. **The size: a question for the owner.** (a) Three pull requests as section 5 has them, each
    landing what its dependencies allow and the row **Done in part** between them, as 342 and 343
-   land; (b) one pull request after 343b and 342. *Recommended: (a)*: 344a needs nothing unbuilt,
-   and the integral rounding is most of the census movement. Separately, if prediction 4.4 holds,
-   343's 1.3 rule makes `MAGIC` the default for `floor` and `ceil` only while the whole-range arm
-   stays `D2L`'s default; (i) a per-node default, or (ii) one option value for both nodes, the
-   whole-range arm kept for both. *Recommended: (ii)*, the plan's question 1 of 343 having chosen
-   one IR on every host over a decline past `2^51`; the measurement is kept as the record.
-2. **The `BIGINT` band at `k <= 11`.** (a) The guard of 2.5, a lane at or past `2^(52 + k)`
-   declining; (b) the 64-bit limb magic here, exact everywhere. *Recommended: (a)*: 2.8 owns the
-   limb magic as 350's measured option arm, and the band starts at `2^53` for `k = 1`; a value
-   that large rounded to tens is rare beside the timestamps near `2^50.6` that 343 cited.
-3. **No double-valued `FLOOR`, `CEIL` or `TRUNC` in this row.** 346 needs `trunc(x)` at scale 0
-   and may need the others. (a) 346 adds the modes it needs to `RoundToIntegral` (`TRUNC` is
-   `FLOOR` of `|x|` with the sign restored, the magnitude form of 2.3's `RINT`); (b) this row adds
-   them now. *Recommended: (a)*, 341's rule of no node without a reader.
-4. **The Lemire, Bartlett and Kaser citation.** The form built is the signed remainder (2.5), so
-   the paper is not behind it. (a) Drop the citation from the row and 2.7 by a dated note;
-   (b) transcribe the paper into `sql/varka/papers/` and add its form as a second oracle in 3.5.
-   *Recommended: (a)*: the exhaustion and 3.6's SMT claim prove the form, and a second oracle
-   adds nothing to a 32-bit exhaustion against Spark.
-5. **`factorial`'s gather arm.** (a) Build the arm only if the census cell reads intrinsic on the
-   EPYC 7763; (b) build it as an option arm regardless, by the rule to keep competing designs.
-   *Recommended: (a)*: a gather that is the Java fallback allocates per call, so as an arm it can
-   only lose there, and the cell is the measurement that says so.
-6. **Question 2's check.** (a) 345 owns the decline of a discrete consumer over a contracted
+   land; (b) one pull request after 343b, 342 and 332. *Recommended: (a)*: 344a needs nothing
+   unbuilt, and the integral rounding is most of the census movement. Either way the row is
+   large, about ten days, against its medium.
+2. **The Lemire, Bartlett and Kaser citation, as context.** The row text, the owner's, names
+   their section 7 form for `bround`; the form planned is the signed remainder of 2.5, for the
+   reason "What differs" gives, and is proven by 3.5 and 3.6 without the paper. The row is left
+   as written; the owner may wish to know the citation describes a form not built.
+3. **Question 2's check.** (a) 345 owns the decline of a discrete consumer over a contracted
    child, keyed on the node's kind, and this row only names its nodes as discrete consumers in
    their javadoc; (b) this row builds the hook now. *Recommended: (a)*: no contracted node exists
    until 345, and the hook's shape depends on the answer to question 2.
+
+Settled with the lead on 30 October 2026, and so not questions: the `BIGINT` band at `k <= 11`
+declines beyond its guard, the full-range form being row 361's widening multiply (2.5); the
+double-valued modes are 346's (section 7); `factorial`'s gather is an option arm whose per-host
+default its census cell sets (2.6).
 
 The baseline comes first, as its own pull request (5.1): not a question, since the house rule
 settles it, as it did for rows 377, 342 and 343.
