@@ -40,11 +40,15 @@ JDK was read in `/home/max/proj/openjdk-build/jdk25`, the paper in its transcrip
    divisor, or for a zero one when `!failOnError`; otherwise it evaluates the dividend, returns
    null for a null one, and only then raises on a zero divisor - so **a null dividend over a zero
    divisor is null in every mode**. `Pmod.eval` is the same order (`:1194-1211`). `div` raises
-   `DIVIDE_BY_ZERO` (`errors/QueryExecutionErrors.scala:210-216`; `common/utils/src/main/resources/
-   error/error-conditions.json:2475-2480`, SQLSTATE 22012); **`%` and `pmod` raise
-   `REMAINDER_BY_ZERO`** (`QueryExecutionErrors.scala:218-224`; `error-conditions.json:7054-7059`,
-   22012), the same parameters: one, `config` = `toSQLConf("spark.sql.ansi.enabled")`, with the
-   query context.
+   `DIVIDE_BY_ZERO` (`errors/QueryExecutionErrors.scala:210-216`), whose template is "Division by
+   zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set
+   <config> to \"false\" to bypass this error.", SQLSTATE 22012 (`common/utils/src/main/
+   resources/error/error-conditions.json:2475-2480`); **`%` and `pmod` raise
+   `REMAINDER_BY_ZERO`** (`QueryExecutionErrors.scala:218-224`), "Remainder by zero. Use `try_mod`
+   to tolerate divisor being 0 and return NULL instead. If necessary set <config> to \"false\" to
+   bypass this error.", SQLSTATE 22012 (`error-conditions.json:7054-7059`). Each template has one
+   parameter, `<config>`, which both constructors fill with `toSQLConf("spark.sql.ansi.enabled")`,
+   beside the query context.
 5. **TRY exists for `%` only.** `failOnError` is `ANSI | TRY` in `BinaryArithmetic`
    (`arithmetic.scala:224-228`); `Remainder` overrides it to `ANSI` only (`:1058`), and `try_mod`
    is `Remainder(_, _, TRY)` (`expressions/TryEval.scala:179-191`), so `try_mod` behaves as LEGACY:
@@ -55,8 +59,10 @@ JDK was read in `/home/max/proj/openjdk-build/jdk25`, the paper in its transcrip
 6. **`Long.MIN_VALUE div -1`** is `Long.MIN_VALUE` under LEGACY (Java's wrap through
    `Integral[Long].quot`, `arithmetic.scala:990-1011`), and under ANSI raises
    `ARITHMETIC_OVERFLOW` through `overflowInIntegralDivideError` (`QueryExecutionErrors.scala:
-   344-346`), whose parameters are `message` = `Overflow in integral divide`, `alternative` =
-   ` Use 'try_divide' to tolerate overflow and return NULL instead.` and `config`
+   344-346`), whose template is "<message>.<alternative> If necessary set <config> to \"false\" to
+   bypass this error.", SQLSTATE 22003 (`error-conditions.json:129-134`), its three parameters
+   filled as `message` = `Overflow in integral divide`, `alternative` = ` Use 'try_divide' to
+   tolerate overflow and return NULL instead.` and `config`
    (`sql/api/src/main/scala/org/apache/spark/sql/errors/ExecutionErrors.scala:124-150`). TRY is
    unreachable (item 5). `Long.MIN_VALUE % -1` and `pmod(Long.MIN_VALUE, -1)` are 0 in every mode.
 
@@ -137,8 +143,9 @@ JDK was read in `/home/max/proj/openjdk-build/jdk25`, the paper in its transcrip
   which `D2I` saturates and `D2L` cannot produce on AVX2 (item 14); the same saturated quotient
   makes `MIN % -1` come out `-1`. Both need a fix-up (2.2).
 - **A literal divisor over an unbounded `BIGINT` dividend is not `emitConstDivide` alone** (item
-  8): it needs the lattice's bound or a guard past `2^52`. The four-`vpmuludq` form the row names
-  as an option is the only whole-range literal form among the row's two.
+  8): it needs the lattice's bound or a guard past `2^52`. Both of the row's forms are built as
+  option arms, the guarded `ConstDivide` the default and the four-`vpmuludq` form, the only
+  whole-range one of the two, measured against it (2.4).
 - **The paper's three non-Java operations are the row's lemmas** (item 16), not only the
   rounding of the row text.
 - **The AVX2 full-range conversions already have a plan.** 10.1 item 4's "a full-range conversion
@@ -151,7 +158,8 @@ JDK was read in `/home/max/proj/openjdk-build/jdk25`, the paper in its transcrip
 ## 1. Goal and non-goal
 
 `div`, `%` (`mod`) and `pmod`, and `try_mod`, over `INT` and `BIGINT` operands, and over
-`TINYINT` and `SMALLINT` as the row's text and the census name them, fuse in each mode the
+`TINYINT` and `SMALLINT`, which the row's text and the census name and for which the G1 wave row
+makes this row wait on 329, fuse in each mode the
 operator has, with Spark's answers and error classes: a constant divisor and a column divisor, a
 zero divisor null or the batch declined so the row engine raises, `Long.MIN_VALUE div -1` wrapped or
 declined, `pmod`'s wrap reproduced. The column divisor is exact over the whole range of every type
@@ -215,9 +223,8 @@ three operations of item 0.16, each a lemma of the proof file (3.3):
    give, and the sequence of operations stays the paper's, so its proof carries over.
 3. **The float reciprocal.** `bs = (float) bd` and `1 / bs` in binary32 need a float vector of
    the double vector's lane count, the kernel of two lane counts that 343 builds (`VARKA-343.md`
-   2.2). (The alternative, rounding to 24 bits inside the double lane by a Veltkamp split, keeps one
-   lane count but leaves the binary32 operations the proof assumes; which one is left open at
-   planning.)
+   2.2). The kernel takes it, so the paper's binary32 operations are kept as the proof states
+   them; the fallback, should 343 slip, is section 7's.
 
 `div`, `%` and `pmod` over one divisor share `bd`, `invbd0` and `invbd`. A constant divisor folds
 them to constants (2.4).
@@ -252,11 +259,11 @@ under row 503's two-lane rule as it stands (`VARKA-359.md` 0 item 11).
   (item 0.9); `%` is `a - q * c` wrapping; `pmod` by `c > 0` is `r + (c & (r >> 31))`, by a power
   of two `a & (c - 1)`, by `c < 0` MathUtils' sequence with a second `ConstDivide` by `c`.
 - **`BIGINT` dividends:** `ConstDivide` at the long lane where the lattice (104) proves `|a| <
-  2^52`, a widened `INT` among them; otherwise `ConstDivide` under a `GuardedRange` of that bound,
-  and the four-`vpmuludq` long magic, a `MulHiDivide` sibling of VARKA-149 exact over the whole
-  range, as a measured option arm `longMulHiDivide` (intrinsic on every x86 level, item 0.14).
-  Whether the paper's form with its reciprocal folded to constants is a third arm, and which
-  arm is the default, is left open at planning.
+  2^52`, a widened `INT` among them. Otherwise the row's two forms are both built, as the arms of
+  an option `longConstDivide`: `GUARDED`, the default, `ConstDivide` under a `GuardedRange` of
+  that bound, which declines a batch past it; and `MULHI`, the four-`vpmuludq` long magic, a
+  `MulHiDivide` sibling of VARKA-149 exact over the whole range (intrinsic on every x86 level,
+  item 0.14). Both are measured (4), and the losing arm stays fuzzed in the option matrix.
 - **Edges:** `c = 1` is the dividend, `% 1` and `pmod(_, 1)` are 0; `c = -1` is a negation for
   `div` (`IntNeg` WRAP under LEGACY; under ANSI at `BIGINT` declines at compile time until row 414
   closes, item 0.10) and 0 for `%` and `pmod`; `c = Long.MIN_VALUE`, which `ConstDivide` refuses,
@@ -297,12 +304,13 @@ the two-lane-count float of the `BIGINT` form, held by `VarkaWarmupReachSuite`. 
    every width, on the laptop and by `varka-width-audit.yml` on both runner classes.
 2. **Exhaustion at 32 bits.** Every `SMALLINT` pair (2^32 pairs, `TINYINT` a subset) through the
    float route, both arms, `div`, `%` and `pmod` against Spark's own expressions; every `INT`
-   dividend against a fixed divisor list (`+-1`, `+-2`, `+-3`, `+-7`, powers of two and their
-   neighbours, `Int.MinValue`, `Int.MaxValue`), and every `INT` divisor against the same list as
-   dividends, through the double route; the constant forms by the existing `ConstDivide` sweeps
-   and a `pmod` sweep by constant. Whether "exhaustion at 32 bits" asks for more, since `INT`
-   pairs are 2^64, is left open at planning. Each sweep is a parallel stream, run in the nightly,
-   with a sampled slice in PR CI (2.10).
+   dividend against a fixed divisor list holding the corners - 0, `+-1`, `Int.MinValue`,
+   `Int.MaxValue`, `+-2^k` and `+-(2^k - 1)` and `+-(2^k + 1)` for every `k` that fits, and `+-3`
+   and `+-7` - and every `INT` divisor against the same list as dividends, through the double
+   route, beside a seeded random draw of pairs; the constant forms by the existing `ConstDivide`
+   sweeps and a `pmod` sweep by constant. `INT` pairs are 2^64, so the pairs themselves are the
+   SMT file's (3.3). Each sweep is a parallel stream, run in the nightly, with a sampled slice in
+   PR CI (2.10).
 3. **SMT, `sql/varka/proofs/int_divide.smt2`**, rendered by `VarkaProofFiles` from the code's
    constants: over Java's integers (`java.smt2`) the sign wrapper (`trunc` odd, the remainder's
    sign, `Long.MIN_VALUE` read unsigned), the two blends, the INT fix-ups of 2.2, MathUtils'
@@ -366,9 +374,14 @@ pull request says so.
    double routes, the constant forms of 2.4 for `INT` and narrow dividends, `Refusal.DIVIDE`, the
    null narrowing, the sweeps, the proof file's int sections, the coverage rows. Needs 342's
    lanewise `div` or its own call of it, and nothing of 343.
-4. **30b, `BIGINT`:** the paper's form, its lemmas, the long constant forms and the
-   `longMulHiDivide` arm, the `longColumnDivide` arms on AVX2 over 343's conversions, the corner
-   cases and the draw, the measurement on both hosts and the verdict. After 104 and 343a and b.
+4. **30b, `BIGINT`:** the paper's form, its lemmas, the long constant forms and both
+   `longConstDivide` arms, the `longColumnDivide` arms on AVX2 over 343's conversions, the corner
+   cases and the draw, the measurement on both hosts and the verdict. After 104, and after 343a
+   and 343b, which between them build the kernel of two lane counts the reciprocal needs, the
+   AVX2 split `L2D` and assembly `D2L`, and the conversions from a floating type (`VARKA-343.md`
+   5, steps 3 to 5; 343a holds the conversions to a floating type), the edge the G1 wave row
+   states, "its form per host by 343 and 376" (`PLAN.md` 4.1, line 1214). The conversions are
+   343's and are not rebuilt here.
 
 | file | what |
 |---|---|
@@ -376,7 +389,7 @@ pull request says so.
 | `varka/VarkaDivisionLowering.java` | the routes, the fix-ups, the paper's sequence |
 | `varka/Analysis.java`, `VarkaFusedKernel.java`, `Slots.java` | `DIVIDE`, its bit, temporaries |
 | `VarkaNodeCompiler.java` | the arms, the cast stripping, the constant edges |
-| `varka/VarkaEmitOptions.java`, `VarkaEmitOption` table | `longColumnDivide`, `longMulHiDivide` |
+| `varka/VarkaEmitOptions.java`, `VarkaEmitOption` table | `longColumnDivide`, `longConstDivide` |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weights, features, reach |
 | reference evaluator, IR fuzz grammar, Spark-level fuzzer | the node, its draw |
 | `sql/varka/proofs/int_divide.smt2`, `VarkaProofFiles.java` | 3.3 |
@@ -397,7 +410,19 @@ every type it takes but the intervals (103, 89) and the declined decimal.
 ## 7. Out of this row, and declines that stay
 
 Out: floating `%` and `pmod` (346), decimal `%` and `pmod` (363), intervals (89, 103), the column
-multiplier (95), `try_divide` (342). Declines that stay: a literal zero divisor; `BIGINT div -1`
+multiplier (95), `try_divide` (342).
+
+The boundary with row 95: this row owns `%` as an operator, over a column divisor and a literal
+one alike, with its modes and its zero divisor. Row 95's `i % k` is the constant-divisor
+specialisation that this row's kernel takes for a literal (2.4); its line is not changed here.
+
+Kept for later, not built: the reciprocal rounded to 24 bits inside the double lane by a Veltkamp
+split, one lane count instead of two, the fallback for 2.2 item 3 if 343a slips, at the cost of a
+lemma that the split equals binary32's rounding to nearest over the reciprocal's range; and the
+paper's form with a literal divisor's reciprocals folded to constants, a third whole-range literal
+arm beside 2.4's two.
+
+Declines that stay: a literal zero divisor; `BIGINT div -1`
 under ANSI until 414; on AVX2 the `DECLINE` arm if the measurement chooses it; the batch guards of
 2.5.
 
