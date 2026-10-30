@@ -122,7 +122,7 @@ marked **[I]** is inferred, not read.
 - **"Two two-vector selects" has two forms in the JDK** (items 8, 9): the two-vector `rearrange`
   under `makeZip`, which `VARKA-359.md` 2.4 names, and the two-vector `selectFrom` under
   `makeZip(...).toVector()`, the one form native at 128 bits on an AVX-512VL host. 2.2 builds
-  both as one option (open point B of the report).
+  both as one option and keeps the losing arm.
 - **The two producers are also row 351's**: its text lists `time_to_seconds` and `second` with
   its fraction. `m5/PLAN.md` 2.93, whose list is this row's done-when, makes them this row's
   proof of the store, and the compiler's decline names this row. Question 1.
@@ -159,7 +159,8 @@ both from the output's type. The reference evaluator passes the value through an
 The other shape on record is `VARKA-359.md` 2.4's: an output of two roots, the low word and
 `BitOp(SHR, lo, 63)`, bound to one `DecimalVector`. Both feed one emitter helper that takes the
 two word vectors from the stack (2.2), so the pair store of 359 reuses this row's helper whichever
-binding is chosen; this row builds the root-only node, the smaller change (open point A).
+binding is chosen; this row builds the root-only node, as 2.93 has it. Section 7 records the
+difference against 359's plan.
 
 **Where the node goes.** The compiler wraps a decimal-valued expression in `WidenDecimal` only where
 it is an output root, at the binding that knows the output's type, so the lowerings of 2.3 build
@@ -167,7 +168,8 @@ the bare long-lane value. The same expression in a value position under another 
 `time_to_seconds(t) < 10.5`, a comparison of a decimal-valued function - declines naming row 348,
 which compares decimal operands; that row can then consume the bare value with no node to remove.
 This differs from `NarrowLane`, which is allowed anywhere because an int goes anywhere; a decimal
-operand's other consumers are not built yet (open point G).
+operand's other consumers are not built yet. Row 348's plan (on its branch `varka-348-349-plan`)
+takes the same rule.
 
 ### 2.2 The store
 
@@ -185,17 +187,23 @@ Four lane calls and two stores per group, against the plain store's one. Under a
 `decimalStore` (`Reason.MACHINE`, the shape of 347's `decimalLoad`), the arm `SELECT_FROM` replaces
 step 2 with `I0.selectFrom(lo, hi)` and `I1.selectFrom(lo, hi)`, `Ik = makeZip(species,
 k).toVector()` built in the prologue; the default is `REARRANGE` until the measurement of section
-4 names one per host.
+4 names one per host. The losing arm stays behind the option, as the house rule keeps every losing
+arm.
 
-**The prologue's construction.** `makeZip` goes through the species' `shuffleFromOp`, which fills a
+**The prologue's construction, under a hard rule.** `makeZip` goes through the species'
+`shuffleFromOp`, which fills a
 `long[VLENGTH]` through a lambda inside the JDK (`Long256Vector.java:946-953`) and is not the
 intrinsic `iotaShuffle` 347's shuffles use; called in a body's prologue it may allocate once per
-body call, which the rule against allocation on a per-batch path forbids **[I, not measured]**.
-The allocation-free construction is lanewise: `iota = LongVector.zero(species).addIndex(1)`, the
-index vector `(iota >>> 1) + (iota & 1) * n + part * n / 2`, used as it is by `SELECT_FROM` and
-through `toShuffle()` by `REARRANGE`. 157a's census cells build the zip as the prologue builds it,
-not from a `static final`, so the cell's bytes a row and the allocation sampler decide between the
-two (open point H). Null rows are stored like valid ones; their slots are `lo` and `lo >> 63`
+body call **[I, not measured]**. `sql/varka/AGENTS.md` forbids allocation on a path that runs per
+batch, and a body's prologue runs once a batch, so this is not a preference: if `makeZip`
+allocates there, the lanewise construction is required. It is `iota =
+LongVector.zero(species).addIndex(1)` and the index vector `(iota >>> 1) + (iota & 1) * n + part *
+n / 2`, used as it is by `SELECT_FROM` and through `toShuffle()` by `REARRANGE`. 157a's census cells
+build the zip both ways as the prologue builds it, not from a `static final`, and each cell passes
+only if it allocates nothing at 512 and 256 bits beyond the segment a call maps (the tenth of a
+byte a row 347's slot cells read as that, `VARKA-347.md` 10.1); the form whose cell fails is not
+emitted.
+Null rows are stored like valid ones; their slots are `lo` and `lo >> 63`
 of whatever the lane holds, which no reader reads (item 0.2's `isNullAt` first).
 
 `Analysis` records the root in a `decimalOutputs` bitmask beside `decimalInputs`, and
@@ -271,8 +279,20 @@ list. The census is regenerated (section 6).
    through `(s, g)` (item 0.10), so checking every pair checks every nanosecond of a minute:
    `60 * 10^p` pairs at `TIME(p)`, Spark's `getSecondsOfTimeWithFraction` against `s * 10^p + g`,
    in parallel over the cores. That is under `10^9` evaluations for `p <= 7`, `6 * 10^9` at
-   `p = 8` and `6 * 10^10` at `p = 9`, the last being every nanosecond of a minute itself. The
-   split between the gate and the nightly's exhaustive sweeps is open point E.
+   `p = 8` and `6 * 10^10` at `p = 9`, the last being every nanosecond of a minute itself.
+   **The sweep confirms; it is not the proof.** The kernel's side is `s * 10^p + g` built from the
+   proven divisors of 0.11 (the six new ones and `10^9`), so the proof file carries its
+   exactness, and `s` only indexes 60 values. Spark's side is `x = s + g / 10^p`, a decimal of at
+   most 11 significant digits, carried through two `Double` roundings (the quotient and the sum),
+   each within half an ulp of a value below 64, so the double is within `2^-46` of `x`; Java's
+   shortest `Double.toString` lies within half an ulp of the double; and rounding `HALF_UP` to `p
+   <= 9` digits moves a value less than half of `10^-9` away from `x` back to `x` **[I, stated
+   here and not proven in a solver]**. The sweep checks that argument on every pair. Where it
+   runs: `p <= 7` in the suite's own JVM only if its measured time fits the suite's budget with a
+   margin, since `SparkFunSuite` fails a test body past 20 minutes; `p = 8` and `p = 9` in the
+   nightly, priced against the sweep budget of the milestone plan's 10.3 item 5 (row 330's). This
+   plan does not claim the nightly runs such sweeps today: whether `dev/varka_nightly.sh`'s opt-in
+   filter reaches a JUnit suite is being checked separately.
 5. **The proof file.** The six divisors of 0.11 rendered into `long_divide.smt2` by
    `VarkaProofFiles`, both forms, under Z3; `VarkaDivisorProofSuite` passes.
 6. **The fuzzers.** `VarkaIrGrammar` draws `WidenDecimal` as a root over a long subtree whose range
@@ -294,7 +314,8 @@ before the split is fixed and joined to the calibration table.
 
 - Spark's row path: row 377's `VarkaDecimalBaselineBenchmark` gains `time_to_seconds(t)` and
   `extract(SECOND FROM t)` over a `TIME(6)` column as projections, run on the EPYC 7763 at 256
-  and 128 bits (open point D names the alternative of a class of its own).
+  and 128 bits, its own pull request before any of this row's code, so the baseline is committed
+  before the change.
 - The store's own class, `VarkaDecimalStoreBenchmark` (catalyst, Java, on `VarkaBenchmarkBase`,
   kernels emitted from the IR as `VarkaLaneConversionBenchmark`'s are), over `VarkaTimeBenchmark`'s
   rungs (in L2, in L3, past L3), with four arms per shape: the `BIGINT` store of the same value
@@ -328,8 +349,11 @@ Predictions, registered before any of it is built:
 
 ## 5. Order, files and size
 
-1. **The baselines** (4), the row-path addition and the store class's first two arms, one pull
-   request.
+0. **After 347's reader merges.** Nothing here stacks on another row's unmerged branch: 157's first
+   pull request is cut from master once row 347's reader (`VarkaLaneArrow`'s decimal entry,
+   `decimalInputs`, the shuffles' prologue) has merged, and line numbers are re-read then.
+1. **The baselines** (4): the row-path addition to `VarkaDecimalBaselineBenchmark` as its own pull
+   request, then the store class's first two arms.
 2. **157a, the store:** the node, the helper and both arms, the segment, the allocator, the
    warm-up and budget rows, the store table and the guard page, the fuzz sequence, census cells for
    the zip (both forms, from and to segments) in `VarkaOperatorCensusCatalog` with a
@@ -353,10 +377,9 @@ Predictions, registered before any of it is built:
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json`, `emitted_bytes.json` |
 | generated | `census.tsv`, `operator_census.json` |
 
-**Size: medium, not small** (open point F). The baselines about half a day; 157a about two days;
-157b about two, the exhaustive check's run time included. It rests on row 347's branches being
-merged (`VarkaLaneArrow`'s decimal entry, `decimalInputs`, the shuffles' prologue) or landing
-beside them in one wave, as 4.1 orders (open point C).
+**Size: medium by this plan's count, against the table's small** (question 2). The baselines about
+half a day; 157a about two days; 157b about two, the exhaustive check's run time included. It rests
+on row 347's reader having merged (step 0), as 4.1's wave orders.
 
 ## 6. What it unlocks in the census
 
@@ -378,6 +401,13 @@ census), a big-endian host. Declines that stay, each naming its row: a decimal o
 above 18 (359), a decimal output in an int-driven kernel, and at two long lanes on x86 a store the
 measurement shows losing, as a recorded refusal with a scope item.
 
+**The shape this row and row 359 do not share.** This row's decimal output is one root, a
+`WidenDecimal` whose store derives the high word; `VARKA-359.md` 2.4 plans an output of two roots,
+the low and the high word, bound to one `DecimalVector`, and says 157's store is "the same
+interleave with `hi = lo >> 63`". The two meet in one emitter helper that takes the two word
+vectors from the stack, which this row builds and 359's binding calls. When 359a is built, its
+plan's 2.4 is corrected to name this node and the helper, so the two rows do not diverge silently.
+
 ## 8. Questions for the owner
 
 1. **The two producers, with row 351.** Row 351's text lists `time_to_seconds` and `second` with its
@@ -388,18 +418,23 @@ measurement shows losing, as a recorded refusal with a scope item.
    and so no coverage row, the case 347's question 2 answered (a) for the load; both producers
    need nothing but the long lane and constant divisions, while 351's other functions need 348 to
    350 and 360.
+2. **The row's size.** The table says small; this plan counts medium, in three pull requests (5):
+   the two producers, six proof rows, an option with two arms, a benchmark class and a byte-exact
+   suite. (a) The size cell becomes medium. (b) It stays small and the producers move out under
+   question 1 (b). *Recommended: (a)*, if question 1 is answered (a).
 
 ## 9. Done when
 
 `m5/PLAN.md` 2.93's list holds, with the corrections above: a decimal output of precision 18 or less
-is written into sixteen-byte slots by `WidenDecimal` under each arm of `decimalStore` that open
-point B keeps, the prologue allocating nothing, the store
+is written into sixteen-byte slots by `WidenDecimal` under both arms of `decimalStore`, the losing
+one kept, the prologue allocating nothing (its census cells passing), the store
 table byte-exact against Arrow's writer at 2, 4 and 8 lanes in both bodies, and the guard page
 passing; the destination is a `DecimalVector` with Spark's field; under question 1's answer,
 `time_to_seconds(t)` and `extract(SECOND FROM t)` fuse with coverage rows and agree with the row
 engine over every second of the day at `TIME(0)`, `(3)`, `(6)` and `(9)` under both consumers, and
-the fraction agrees with Spark's double round trip over every `(s, g)` of each precision as open
-point E settles; the six divisors are proven; the store's measurement against the scalar widening
+the fraction agrees with Spark's double round trip over every `(s, g)` of each precision, `p <=
+7` where section 3 item 4 places it and `p >= 8` committed as a nightly sweep with its time; the six
+divisors are proven; the store's measurement against the scalar widening
 is committed per width with its predictions scored, the store beating it on the ladder or this
 file saying by how much it does not, and the verdict naming the default arm per host; the bytes
 oracle is unchanged for every existing shape; and the PR build and the option matrix pass.
