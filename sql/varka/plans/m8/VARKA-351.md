@@ -2,17 +2,17 @@
 
 ## 0. What exists now (admission check)
 
-From master at `9aa6ee74c63` (30 October 2026; Varka paths under
+From master at `9aa6ee74c63`, reworked over `7ebd03ba6e8` (30 October 2026; Varka paths under
 `sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/` unless named, Spark
 paths under `sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/` or `sql/api/src/main/
 scala/org/apache/spark/sql/` as named), and from the plans this row builds on: on master
-`VARKA-157.md`, `VARKA-340.md`, `VARKA-344.md`, `VARKA-348.md`, `VARKA-349.md` and `VARKA-359.md`;
-on their branches `VARKA-350.md` (`varka-350-366-plan` at `a4d7e34b5de`), `VARKA-360.md`
-(`varka-360-361-plan` at `ada77eb513a`) and `VARKA-363.md` (`varka-362-363-plan` at
-`b074cc19a17`). The row's text is the milestone plan's 2.8 ("Casts and rounding below 19") and the
-G3 and F3 wave rows of 4.1. The counts marked **[A]** are from `results/VARKA-351-admission.txt`,
-a Python script and its output, run on the laptop for this plan; nothing ran Spark. A claim marked
-**[I]** is inferred, not read or run.
+`VARKA-157.md`, `VARKA-340.md`, `VARKA-344.md`, `VARKA-348.md`, `VARKA-349.md`, `VARKA-350.md` and
+`VARKA-359.md`; and two plans not yet on master, read on their branches: row 360's plan
+(`varka-360-361-plan` at `ada77eb513a`) and row 363's plan (`varka-362-363-plan` at `b074cc19a17`,
+in an open pull request), cited here in words. The row's text is the milestone plan's 2.8 ("Casts
+and rounding below 19") and the G3 and F3 wave rows of 4.1. The counts marked **[A]** are from
+`results/VARKA-351-admission.txt`, a Python script and its output, run on the laptop for this plan;
+nothing ran Spark. A claim marked **[I]** is inferred, not read or run.
 
 **The rounding functions.**
 
@@ -79,7 +79,7 @@ a Python script and its output, run on the laptop for this plan; nothing ran Spa
    from the code, not run]**. The micros come from `localDateTimeToMicros`, whose
    `multiplyExact` raises an `ArithmeticException` past the long in every mode
    (`sql/api/.../SparkDateTimeUtils.scala:136-145`, `:212-214`).
-9. **`make_dt_interval(d, h, m, sec)`** casts its seconds to `DECIMAL(18, 6)`
+9. **`make_dt_interval(d, h, m, sec)`**, row 103's (below), casts its seconds to `DECIMAL(18, 6)`
    (`expressions/intervalExpressions.scala:537`), the shorter forms taking the literal
    `Decimal(0, 18, 6)` (`:523`), and computes `u + d * D`, then `+ h * 3.6 * 10^9`, then `+ m * 6 *
    10^7` by `addExact` and `multiplyExact` in that order (`util/IntervalUtils.scala:786-803`),
@@ -89,7 +89,7 @@ a Python script and its output, run on the laptop for this plan; nothing ran Spa
     unscaled value is `floorMod(t, 6 * 10^7)` at UTC (`VARKA-340.md` 0, item 2).
     `extract(SECOND FROM dt)` is `ExtractANSIIntervalSeconds` (`intervalExpressions.scala:119-123`),
     `DECIMAL(8, 6)` of `t % (6 * 10^7)` (`util/IntervalUtils.scala:66-68`): Java's truncating
-    remainder, negative for a negative interval. Neither raises.
+    remainder, negative for a negative interval, row 103's (below). Neither raises.
 11. **Both coercions insert the seconds' cast.** `TypeCoercion.implicitCast` casts any numeric to
     a concrete numeric target (`TypeCoercion.scala:232`), and the ANSI form casts where
     `canANSIStoreAssign` allows (`AnsiTypeCoercion.scala:207-213`), which a numeric pair passes
@@ -106,16 +106,16 @@ a Python script and its output, run on the laptop for this plan; nothing ran Spa
     `ConstDivide` is exact below `2^52` (`:783`).
 13. **The plans this row composes, none of them built.** 348's `Scaled(unscaled, type)` and
     `value()` (`VARKA-348.md` 2.1), every decimal consumer's one entry point; 157's root
-    `WidenDecimal` (`VARKA-157.md` 2.1); 350's two magnitude divisions by `10^k`, `tdiv` and
-    `hdiv`, through a pre-shift and `ConstDivide` by `5^k`, with `decimalDivisionForm`'s `GUARD`
-    and `LIMB_MAGIC` arms for the twelve `(p, k)` past `2^52` (`VARKA-350.md` 2.2); 344's
+    `WidenDecimal` (`VARKA-157.md` 2.1); 350's two magnitude divisions by `10^k`, `tdiv` and `hdiv`,
+    through a pre-shift and `ConstDivide` by `5^k`, with `decimalDivisionForm`'s `GUARD` and
+    `LIMB_MAGIC` arms for the twelve `(p, k)` past `2^52` (`VARKA-350.md` 2.2); 344's
     signed-remainder rounding of an integral value (`VARKA-344.md` 2.5); 359's `Pair`, unsigned
-    compares, `gt128` and pair store (`VARKA-359.md` 2.2, 2.4); 360's sign-extended output and
-    the constant-multiplier `WideMul` of 360b (`VARKA-360.md` 2.4, 2.6); 363's `ScaleDown`, a
+    compares, `gt128` and pair store (`VARKA-359.md` 2.2, 2.4); 360's sign-extended output and the
+    constant-multiplier `WideMul` of 360b (row 360's plan, its 2.4 and 2.6); 363's `ScaleDown`, a
     `HALF_UP` or `DOWN` division of a two- or four-word magnitude by `10^k` for `k` 1 to 39, its
-    constants tabled at the bounds `10^38 - 1` and `2 * 10^38 - 2` (`VARKA-363.md` 2.2, 2.3);
+    constants tabled at the bounds `10^38 - 1` and `2 * 10^38 - 2` (row 363's plan, its 2.2, 2.3);
     340's `microsOfDay`, which leaves `SECOND` to this row (`VARKA-340.md` 8, item 1). 481 adds
-    `GuardedRange`'s `NULL` mode; 103, the day-time interval's magnitude split, is not planned.
+    `GuardedRange`'s `NULL` mode.
 14. **The baseline.** `VarkaDecimalBaselineBenchmark` times a `HALF_UP` rescale down from
     `DECIMAL(38, 10)` to `(18, 4)` on the row path at 315.1 ns a row and the cast of `(18, 4)` up
     to `(38, 10)` at 153.8 ns on the EPYC 7763 at 256 bits
@@ -137,17 +137,22 @@ a Python script and its output, run on the laptop for this plan; nothing ran Spa
   for `round` and `bround`.
 - **`try_make_timestamp_ntz`'s six-field form is in** (item 8): it is `make_timestamp_ntz` with the
   LEGACY disposal, and the census row names this row.
-- **`extract(SECOND FROM dt)` and `make_dt_interval` are also row 103's.** Row 103's text has
-  "seconds over the decimal lane" and "the partial sums of `make_dt_interval`", `VARKA-157.md` 1
-  gives `extract(SECOND FROM dt)` to 103, and the G1 wave row calls 103's decimal seconds "351's
-  shapes" while placing 103 a wave ahead. This plan designs both; who builds them is open point 1.
+- **`extract(SECOND FROM dt)` and `make_dt_interval` are row 103's** (settled by the lead, 30
+  October 2026). Row 103's text has "seconds over the decimal lane" and "the partial sums of
+  `make_dt_interval`", and `VARKA-157.md` 1 and 6, approved by the owner, give
+  `extract_dt_seconds`'s lowering to 103. The G1 wave row's "103 ... its decimal seconds being
+  351's shapes" reads as 103's outputs taking the decimal value this row defines (a `Scaled` of
+  `(8, 6)` or an `(18, 6)` operand through 348's `value()`, stored by 157), not as this row
+  building them. This plan cites 103 and 157 for both and builds neither; that row 351's text
+  still lists them is flagged in section 8.
 - **No IR node.** Every form composes existing nodes and those of 359, 360 and 363. The 128-bit
   `HALF_EVEN`, `CEILING` and `FLOOR` are built around 363's `ScaleDown`, which keeps its two modes.
 - **`time_from_seconds` needs no division**: an exact division by an odd constant is a multiply by
   its inverse modulo `2^64` (2.6).
 - **The census moves later than the row suggests** (section 6): the rounding pairs count only with
   the 128-bit forms, and the two-argument `floor` and `ceil` hold their non-decimal pairs too.
-- **Large, in four pull requests**, against the row's medium (section 5; open point 3).
+- **Large, in four pull requests**, against the row's medium (section 5; the cell is the
+  owner's, flagged in section 8).
 
 ## 1. Goal and non-goal
 
@@ -155,10 +160,10 @@ a Python script and its output, run on the laptop for this plan; nothing ran Spa
 `DECIMAL(p, s)` of either form at every precision and every literal scale, fuse with answers equal
 to Spark's in the three modes, a value of more than 38 digits declining its batch to the row engine
 that raises; and `time_from_seconds` over a decimal of either form, `make_time`, the six-field
-`make_timestamp_ntz` and `try_make_timestamp_ntz`, `make_dt_interval` and `extract(SECOND ...)` over
-`TIMESTAMP_NTZ` and a day-time interval fuse over their decimal operand or result. Not this row:
-`time_to_seconds` and `extract(SECOND FROM t)` over `TIME` (157); the casts that bring a seconds
-operand to `(16, 6)` or `(18, 6)` (350, 364); the divisions themselves (350, 363); the store
+`make_timestamp_ntz` and `try_make_timestamp_ntz`, and `extract(SECOND FROM ntz)` fuse over their
+decimal operand or result. Not this row: `time_to_seconds` and `extract(SECOND FROM t)` over `TIME`
+(157); `extract(SECOND FROM dt)` and `make_dt_interval` (103); the casts that bring a seconds
+operand to `(16, 6)` (350, 364); the divisions themselves (350, 363); the store
 (157, 359); a negative decimal scale; decimal division.
 
 ## 2. Design
@@ -170,8 +175,8 @@ above. Every decimal result is one too, so it feeds 348's comparisons and 349's 
 stored by 157's `WidenDecimal` or 359's pair store; a 64-bit value of a type above 18 is 360's
 sign-extended output. `value()` gains one row per function of this plan, in a
 `VarkaDecimalRoundCompiler` beside 350's cast compiler, under a family `DECIMAL_ROUND` whose switch
-leaves 348 to 350's forms fused; the time functions' arms sit in `VarkaTimeCompiler`,
-`VarkaIntervalCompiler` and the NTZ arms of 340, under their families.
+leaves 348 to 350's forms fused; the time functions' arms sit in `VarkaTimeCompiler`
+and the NTZ arms of 340, under their families.
 
 ### 2.2 The rounding, one table by shape
 
@@ -292,20 +297,15 @@ Spark does.
   exact under the guard, plus `h * 3.6 * 10^9 + mi * 6 * 10^7 + t` by `IntArith(ADD, FAIL)`: 338's
   day guard and 339's checked add, `FAIL` in every mode since Spark's `ArithmeticException` is
   raised in every mode (item 0.8).
-- **`make_dt_interval(d, h, m, sec)`**: `GuardedRange(d, -106751991, 106751991, FAIL)` before a
-  `WRAP` multiply by `D`, exact under it and declining exactly where `multiplyExact` raises; then
-  `u + d * D`, `+ h * 3.6 * 10^9` (which cannot overflow for an int `h`) and `+ m * 6 * 10^7` by
-  `IntArith(ADD, FAIL)` in Spark's order, so a batch declines where Spark's first partial sum
-  overflows, even if a later one would return to range.
 - **`extract(SECOND FROM ntz)`**: `Scaled(r, (8, 6))` with `r` the remainder of 340's
   `microsOfDay(t)` by `6 * 10^7` (`ConstDivide` over a dividend below `2^37`, one new proven
   divisor); `6 * 10^7` divides the day, so this is `floorMod(t, 6 * 10^7)`. 340's own sketch,
   two divisions of the nanosecond of the day over divisors already proven, is the alternative with
   no new proof row and one more division; the one-division form is chosen.
-- **`extract(SECOND FROM dt)`**: the magnitude's remainder by `D` from 103's split, then by `6 *
-  10^7`, the sign restored: Java's truncating `%`.
+Row 103's `extract(SECOND FROM dt)` and `make_dt_interval` (items 0.9, 0.10) take the same
+shapes: a `Scaled` of `(8, 6)` for the first, a `value()` operand of `(18, 6)` for the second.
 
-Each is a `Scaled` or a long-lane `TIME`, `TIMESTAMP_NTZ` or interval value, so the outputs are
+Each is a `Scaled` or a long-lane `TIME` or `TIMESTAMP_NTZ` value, so the outputs are
 157's store or the lane's own.
 
 ### 2.7 Overflow defences, as the 28 October rule asks
@@ -346,17 +346,16 @@ the five biases, held by `VarkaWarmupReachSuite`.
    `make_time` at 59.999999 and 60; the six-field `make_timestamp_ntz` at 60 (the rolled minute,
    across a day and a year), 60.000001, `4324.967296` (read as 30 seconds, Spark's answer through
    the `(int)` narrowing) and the day edges 106751991 and 106751992 with late times, in the three
-   modes; `make_dt_interval` where the first partial sum overflows and the second would return to
-   range; `extract(SECOND ...)` over `Long.MIN_VALUE`, `Long.MAX_VALUE`, -1 and the minute's
-   edges for both types.
+   modes; `extract(SECOND FROM ntz)` over `Long.MIN_VALUE`, `Long.MAX_VALUE`, -1 and the minute's
+   edges.
 4. **SMT, over integers.** A file `sql/varka/proofs/decimal_round.smt2`, run under Z3 and cvc5:
    2.3's construction equals each mode of `u / 10^d` for every `|u| <= 10^18 - 1` and `d` from 1 to
    18, the wrap stated by `mod 2^64`, the bias's headroom and the dividend bounds; the negative
    scale's no-wrap bound; on the pair, the bias within `2 * 10^38 - 2`, the `HALF_EVEN` tie test
    equal to `BigDecimal`'s for every `n < 10^38` (linear, `10^d` a constant) and the product back
    below `2^127`; `time_from_seconds`' inverse lemma for `j` 1 to 29 (`q = N * inv mod 2^64` is
-   linear with a free quotient word) and its accepted set equal to item 0.6's; the `make_time`,
-   `make_timestamp_ntz` and `make_dt_interval` sums equal to Spark's checked arithmetic over the
+   linear with a free quotient word) and its accepted set equal to item 0.6's; the `make_time`
+   and `make_timestamp_ntz` sums equal to Spark's checked arithmetic over the
    guarded ranges. `6 * 10^7` joins `long_divide.smt2`'s divisor list. 350's `5^k` file is reused,
    not repeated. Solver times stated before and after.
 5. **Coverage rows**, a "decimal rounding" family over `d9` (`DECIMAL(9, 2)`), `d18`
@@ -364,8 +363,8 @@ the five biases, held by `VarkaWarmupReachSuite`.
    `round(d18, 2)`, `round(d18, 6)` (precision 19), `round(d18, -2)`, `bround`, `truncate`,
    `floor(d18)`, `ceil(d18, 1)`, `ceiling(d3810)`, `round(d38, -1)` (a raise shape), `floor(i, 2)`
    and `ceil(l, 1)` over the cast - and a "decimal seconds" family: `time_from_seconds` over a
-   `(16, 6)` and a `(20, 10)` column, `make_time`, both six-field forms, `make_dt_interval`,
-   `extract(SECOND FROM ntz)` and `(... FROM dt)`, each naming its verification for row 490's check.
+   `(16, 6)` and a `(20, 10)` column, `make_time`, both six-field forms and
+   `extract(SECOND FROM ntz)`, each naming its verification for row 490's check.
 6. **The differential and the matrix**: the coverage differential under both consumers, the golden
    suite's Varka arm, and the option matrix dispatched on each pull request's branch.
 7. **The generated files** in `ADDING_A_TYPE.md`'s order; `emitted_bytes.json` adds rows and moves
@@ -377,11 +376,10 @@ the five biases, held by `VarkaWarmupReachSuite`.
 `VarkaDecimalBaselineBenchmark`, named so their labels survive the lanes landing, each in range for
 its mode: at `(18, 4)` `round(x, 2)`, `bround(x, 2)`, `truncate(x, 2)`, `floor(x)`, `ceil(x, 2)`,
 `round(x, 6)` (the relabel to 19) and `round(x, -2)`; at `(38, 10)` `round(x, 4)`, `bround(x, 4)`,
-`floor(x)` and `round(x, -2)`; over new columns, `time_from_seconds` of a `(16, 6)` and a `(20,
-10)` column within the day, `make_time` and the six-field `make_timestamp_ntz` over int and
-`(16, 6)` columns, `make_dt_interval` over int and `(18, 6)` columns, and `extract(SECOND ...)` over
-an NTZ and a day-time interval column. Run by `benchmark.yml` on the EPYC 7763 at 256 and 128 bits,
-committed beside the class's files.
+`floor(x)` and `round(x, -2)`; over new columns, `time_from_seconds` of a `(16, 6)` and a `(20, 10)`
+column within the day, `make_time` and the six-field `make_timestamp_ntz` over int and `(16, 6)`
+columns, and `extract(SECOND ...)` over an NTZ column. Run by `benchmark.yml` on the EPYC 7763 at
+256 and 128 bits, committed beside the class's files.
 
 Predictions, registered before the build:
 
@@ -409,10 +407,9 @@ Predictions, registered before the build:
 2. **351a, the 64-bit rounding**, after 157, 348 and 350a (`rdiv`, `GUARD`): the identity,
    relabel within 18, divide and negative shapes whose operand and result are both within 18, every
    mode, `decimal_round.smt2`'s 64-bit half, the shape table, the edges, their coverage rows.
-3. **351b, the seconds functions within 18**, after 351a's helper, 340 (`microsOfDay`), 481
-   (`NULL`), 359a (the unsigned compares) and, for `extract(SECOND FROM dt)`, 103's split under
-   open point 1's answer: every arm of 2.6 over a 64-bit operand, its proofs, named cases and
-   coverage rows; `make_time` and the two `make_timestamp_ntz` forms fuse first over a `(16, 6)`
+3. **351b, the seconds functions within 18**, after 351a's helper, 340 (`microsOfDay`), 481 (`NULL`)
+   and 359a (the unsigned compares): every arm of 2.6 over a 64-bit operand, its proofs, named cases
+   and coverage rows; `make_time` and the two `make_timestamp_ntz` forms fuse first over a `(16, 6)`
    column and over 350's cast.
 4. **351c, the 128-bit forms and the precision-19 results**, after 359b, 360b and 363: 2.4, the
    pair's negative scale, constants and raise, the relabels and negative scales from a 64-bit
@@ -422,7 +419,7 @@ Predictions, registered before the build:
 | file | what |
 |---|---|
 | `VarkaDecimalRoundCompiler.java` (new), `VarkaDecimalCompiler.java` | 2.2 to 2.5, `rdiv` |
-| `VarkaTimeCompiler.java`, `VarkaIntervalCompiler.java`, the NTZ arms of 340 | 2.6 |
+| `VarkaTimeCompiler.java`, the NTZ arms of 340 | 2.6 |
 | `varka/VarkaFamily.java` | `DECIMAL_ROUND` |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weights, features, reach |
 | `sql/varka/proofs/decimal_round.smt2`, `long_divide.smt2`, `VarkaProofFiles.java` | 3 item 4 |
@@ -432,45 +429,46 @@ Predictions, registered before the build:
 | generated | `census.tsv`, `census_curated.txt` |
 
 **Size: large, in four pull requests**, against the row's medium. The baseline about half a day;
-351a about three days (the proof file and the edges the larger part); 351b about three (six arms,
-each with its own disposal); 351c about three once its three predecessors are in. Test time: the
-shape table is a pure function; the edges and named cases are of the size of 347's slot tables,
-seconds; the proof file is priced from its spiked form at VARKA-245's observed ratio in the
+351a about three days (the proof file and the edges the larger part); 351b about two and a half
+(four arms, each with its own disposal); 351c about three once its three predecessors are in. Test
+time: the shape table is a pure function; the edges and named cases are of the size of 347's slot
+tables, seconds; the proof file is priced from its spiked form at VARKA-245's observed ratio in the
 calibration table, under twenty seconds per solver. It rests on 157, 348 and 350a for 351a; on 340,
-481, 359a and possibly 103 for 351b; on 359b, 360b and 363 for 351c; and on 350 and 364 for the
-seconds' casts.
+481 and 359a for 351b; on 359b, 360b and 363 for 351c; and on 350 and 364 for the seconds' casts.
 
 ## 6. What it unlocks in the census
 
 The milestone plan's 1.1 item 2, strictly: an entry-and-type pair counts only when every form a
-query can give it fuses, at every precision for a decimal (2.8; `VARKA-359.md` 6). Eleven decimal
-pairs name this row: `round`, `bround`, `truncate`, `floor`, `ceil`, `ceiling`,
-`time_from_seconds`, `make_time`, `make_timestamp_ntz`, `try_make_timestamp_ntz` and
-`make_dt_interval`.
+query can give it fuses, at every precision for a decimal (2.8; `VARKA-359.md` 6). Ten decimal
+pairs are this row's: `round`, `bround`, `truncate`, `floor`, `ceil`, `ceiling`,
+`time_from_seconds`, `make_time`, `make_timestamp_ntz` and `try_make_timestamp_ntz`;
+`make_dt_interval`'s, which also names this row in the census, is 103's.
 
 - **351a and 351b move no pair.** Every rounding entry has 128-bit forms, and every seconds
   function's decimal operand can be wider than 18 or cast.
 - **351c moves 7**: the six rounding entries and `time_from_seconds`, given the prerequisites of
-  section 5 (and `LIMB_MAGIC`, if the lead reads a `GUARD` batch decline as unfused, open point 4).
-- **4 count only after 350 and 364** as well: `make_time`, both six-field forms and
-  `make_dt_interval`, whose seconds arrive through a cast from every decimal type (item 0.11).
+  section 5 and 350's `LIMB_MAGIC` arm: a `GUARD` batch decline does not count as fused (settled by
+  the lead, 30 October 2026), so the twelve `(p, d)` of 2.3 hold the six rounding pairs until it.
+- **3 count only after 350 and 364** as well: `make_time` and both six-field forms, whose seconds
+  arrive through a cast from every decimal type (item 0.11).
 - **Pairs of other types this row holds**: `floor`, `ceil` and `ceiling` over `byte`, `short`,
   `int`, `bigint`, `float` and `double` (18 pairs), whose two-argument form casts to a decimal (item
   0.4), so they count after 344, this row's `RoundFloor` and `RoundCeil`, and the casts of 350, 360
-  and 346; the `int` pairs of `make_time` and both six-field forms and the `int` and `bigint` pairs
-  of `make_dt_interval`; `extract`, `date_part` and `datepart` over `ntz` (with 340) and over `dt`
-  (with 103). The census script decides each on regeneration **[I]**.
+  and 346, and never on 344's one-argument row alone; the `int` pairs of `make_time` and both
+  six-field forms; `extract`, `date_part` and `datepart` over `ntz` (with 340). The census script
+  decides each on regeneration **[I]**.
 
 Corrections to `census_curated.txt` in 351a's pull request: `second`'s rows drop 351 and its note
 on a fractional form, `second` being an int over both its types (item 0.12 and "What differs");
-`time_to_seconds` names 157 alone; `extract_dt_seconds` and `make_dt_interval` name the rows open
-point 1 settles; `floor`, `ceil` and `ceiling` note that their non-decimal pairs need the
+`time_to_seconds` names 157 alone; `make_dt_interval` names 103 alone, as `extract_dt_seconds`
+already does; `floor`, `ceil` and `ceiling` note that their non-decimal pairs need the
 two-argument cast form.
 
 ## 7. Out of this row, and declines that stay
 
-Out: `time_to_seconds` and `extract(SECOND FROM t)` over `TIME` (157); the casts that bring a
-seconds operand to `(16, 6)` or `(18, 6)` (350 below 19, 364 above); the divisions, which this row
+Out: `time_to_seconds` and `extract(SECOND FROM t)` over `TIME` (157); `extract(SECOND FROM dt)`
+and `make_dt_interval` (103); the casts that bring a seconds operand to `(16, 6)` (350 below 19,
+364 above); the divisions, which this row
 calls (350's `rdiv` core and its two arms, 363's `ScaleDown`); the stores (157, 359); the
 nanosecond timestamp types and `SecondWithFractionNanos`; the two-field `try_make_timestamp_ntz`,
 a `TryEval` (340's out list); a negative decimal scale; decimal division (owner's decision).
@@ -483,45 +481,34 @@ projection the measurement shows losing there.
 
 ## 8. Open points for the lead
 
-1. **Who builds `extract(SECOND FROM dt)` and `make_dt_interval`.** This row's text lists both;
-   row 103's text names "seconds over the decimal lane" and "the partial sums of
-   `make_dt_interval`"; `VARKA-157.md` 1 and 6 give `extract_dt_seconds`'s lowering to 103; the
-   G1 wave row calls 103's decimal seconds "351's shapes" while placing 103 (G1) a wave before 351
-   (G3). (a) 351 builds both, as its text says, and 103 lands its other forms first, as 340 left
-   `SECOND` to 351; the remainder needs 103's magnitude split either way. (b) 103 builds both, being
-   earlier and owning the split and the partial sums, over 348's `value()` and 157's store, and
-   351's text drops them, as it drops 157's two. *Leaning (b)*: both forms are 103's arithmetic
-   over an operand or a result 348 and 157 already serve, and (a) makes 103's `make_dt_interval`
-   wait a wave for an arm with no decimal arithmetic in it; but it narrows the owner's row text,
-   so it is the lead's to put to him. This plan designs both either way (2.6).
-2. **The two-argument `floor` and `ceil` over non-decimal types** (item 0.4) are `RoundFloor` and
-   `RoundCeil` over a cast. 344 leaves "every decimal form, `RoundFloor` and `RoundCeil` among them"
-   to 351 and 363; this plan takes them, so `floor(i, 2)` fuses once 350's integral cast exists.
-   Whether the census's `int` pair of `floor` may count on 344's one-argument row alone, before
-   the two-argument form fuses, is the strict rule's question; the plan reads it as no (section 6).
-3. **The size**: large in four pull requests against the row's medium (section 5). (a) The cell
-   becomes large. (b) It stays medium and 351b's seconds functions move out to a row of their own.
-   *Leaning (a)*: the seconds functions share 351a's helper and the store, and a split row would
-   still depend on all of it.
-4. **A `GUARD` batch decline and the census.** Under `GUARD` the twelve `(p, d)` shapes fuse and
-   decline the batches past `2^(52 + d)`, most of a uniform `DECIMAL(18, s)` at small `d` (2.3).
-   (a) The shape counts fused, a batch decline being like an ANSI batch decline. (b) The pair
-   waits for `LIMB_MAGIC`. 350 meets the same question and its pairs count only with 364, so this
-   row is the first to need an answer. *Leaning (b)* under the strict reading, since a query over
-   such a column reaches the row engine for most batches.
-5. **`make_timestamp_ntz`'s `(int)` narrowing is a Spark defect the kernel reproduces** (item 0.8):
-   `4324.967296` seconds is accepted as 30. Answers follow vanilla Spark, so the kernel narrows as
-   Spark does and a named test pins it; whether to file it upstream, as row 365's JIRA text was
-   prepared for the owner, is the lead's to raise.
+Settled by the lead on 30 October 2026, with the reviewer, kept as the record: `extract(SECOND
+FROM dt)` and `make_dt_interval` are row 103's ("What differs"); the two-argument `floor` and
+`ceil` over non-decimal types are this row's, and 344's one-argument row alone cannot count
+their pairs under 1.1 item 2 (section 6); a `GUARD` batch decline does not count as fused, so the
+twelve `(p, d)` wait for `LIMB_MAGIC` (section 6); the `(int)` narrowing is copied and pinned by a
+test (2.6, section 3 item 3). None is open. Flagged as the owner's text, not questions:
+
+1. **Row 351's text still lists `extract(SECOND FROM dt)` and `make_dt_interval`**, which this plan
+   leaves to row 103, as row 157's approved plan does for the first.
+2. **`census.tsv`'s `time_from_seconds` pairs over `byte`, `short`, `int`, `bigint`, `float` and
+   `double` have no owning row text**: the census names rows 351 and 343, row 351's text covers
+   only the decimal operand, and `VarkaTimeCompiler` already lowers a long-lane count.
+3. **The size cell**: this plan counts large, in four pull requests (section 5), against the row's
+   medium.
+4. **Filing the `(int)` narrowing upstream needs the owner's yes.** The witness: unscaled
+   `4324967296` in the `DECIMAL(16, 6)` seconds of the six-field `make_timestamp_ntz`, that is
+   `4324.967296` seconds, is narrowed to `30000000` and accepted as 30 seconds
+   (`DateTimeExpressionUtils.java:99`, item 0.8; `results/VARKA-351-admission.txt` item 5). The
+   kernel reproduces it whatever the answer.
 
 ## 9. Done when
 
-Row 351's text holds, with the corrections above and open point 1 as the lead settles it: `round`,
+Row 351's text holds, with the corrections above: `round`,
 `bround`, `truncate`, `floor`, `ceil` and `ceiling` over a decimal fuse at every precision up to 38
 and every literal scale in the three modes, the precision-19 and wider results stored through 359
 and 360, a raising shape declining its batch in every mode; `time_from_seconds` over a decimal of
-either form, `make_time`, both six-field `make_timestamp_ntz` forms, `make_dt_interval` and
-`extract(SECOND ...)` over `ntz` and `dt` fuse over their decimal operand or result; each with a
+either form, `make_time`, both six-field `make_timestamp_ntz` forms and
+`extract(SECOND FROM ntz)` fuse over their decimal operand or result; each with a
 coverage row naming its verification; `decimal_round.smt2` proves 2.3, the pair's biases and tie
 test, `time_from_seconds`' inverse lemma and the seconds sums under both solvers; the shape table,
 the edges and the named cases pass, the planted fault failing with its flag; no existing shape's
