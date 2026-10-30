@@ -153,7 +153,8 @@ of `m9/SCOPE.md`.
 - **`BIGINT` at a small negative scale has a declined band** (2.5): `ConstDivide`'s `2^52` bound
   (item 0.12) holds after a pre-shift for `k >= 12`, and for `k <= 11` a guard declines the
   batch beyond it, the pattern of 30's `ConstDivide` bound and 332's `2^52` guard; the full-range
-  form needs row 361's widening 64 by 64 multiply.
+  form is a widening multiply by a constant, row 360's `WideMul` (361 adds the general
+  column-by-column product).
 - **`floor(i)` over an `INT` fuses without 343** (2.4): `FLOOR(CAST(i AS DOUBLE))` is `i`
   widened to the long, exactly, and is compiled as that. A `TINYINT` or `SMALLINT` operand takes
   the same form but needs the narrow column load in a `BIGINT` kernel, which row 332 builds (its
@@ -314,8 +315,10 @@ division by `10^k` of a magnitude, and keeps the dividend below `2^52` for every
 `|x| < 2^(52 + k)` - for `k = 1`, `2^53`, about nine thousand million million - and a lane past
 it declines, the same pattern as 30's `ConstDivide` bound and 332's `2^52` guard. 344 builds the
 pre-shift and its `5^k` entries in the long-lane proof file. The band goes only with an exact
-full-range division, which needs the 64 by 64 to 128-bit product of row 361's widening multiply;
-until then it is a recorded decline.
+full-range division, which needs a 64 by 64 to 128-bit product by a constant multiplier: row
+360's `WideMul` with constant multipliers (its plan on branch `varka-360-361-plan`), row 361
+adding the general column-by-column product, which this row does not need. Until then it is a
+recorded decline.
 
 ### 2.6 `factorial`
 
@@ -600,7 +603,8 @@ and `factorial`; until 342 and 343, `width_bucket`.
    until 345, and the hook's shape depends on the answer to question 2.
 
 Settled with the lead on 30 October 2026, and so not questions: the `BIGINT` band at `k <= 11`
-declines beyond its guard, the full-range form being row 361's widening multiply (2.5); the
+declines beyond its guard, the full-range form being row 360's constant-multiplier `WideMul`
+(2.5); the
 double-valued modes are 346's (section 7); `factorial`'s gather is an option arm whose per-host
 default its census cell sets (2.6).
 
