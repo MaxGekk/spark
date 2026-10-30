@@ -345,7 +345,8 @@ this row's work, and 349a marks each unclaimed in the census register (`census_c
   `10^s` (`expressions/intervalExpressions.scala:651-652`, `:700-702`), a product past 64 bits and a
   rounding division; suggested home rows 361 and 363.
 - `DivideYMInterval` and `DivideDTInterval` by a decimal: the count over the decimal, rounded
-  `HALF_UP` (`:791-793`), a division by a variable; suggested home rows 361 and 363.
+  `HALF_UP` (`:791-793`), a division by a variable; row 363 claims them and declines them
+  until a division by a variable is planned, since its division by `10^k` does not serve them.
 - `try_eval` over a decimal subtree: it catches what the subtree raises, and 349's own nodes raise
   only in `MakeDecimal` and `CheckOverflow`; suggested home the rows whose decimal nodes raise
   (350).
