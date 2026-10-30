@@ -79,8 +79,11 @@ enum Lane {
   LONG(VarkaVectorIR.LaneType.LONG, "jdk.incubator.vector.LongVector", Long.SIZE,
       ConstantDescs.CD_long),
   /**
-   * 32-bit floating lanes: a {@code FLOAT} column (VARKA-341). No type is read here yet; the
-   * entry exists so that every switch over the lanes says what a floating lane does.
+   * 32-bit floating lanes: a {@code FLOAT} column (VARKA-341). The emitter serves the nodes that
+   * move a value's bits here - the loads and stores, the literals, the null tests and the
+   * choices - and the comparisons and picks in Spark's order, built from the lane's IEEE compares
+   * and its NaN test. The integer-only operations (shifts, bitwise, the bit count) have no
+   * meaning at this lane, and arithmetic is a row of its own.
    */
   FLOAT(VarkaVectorIR.LaneType.FLOAT, "jdk.incubator.vector.FloatVector", Float.SIZE,
       ConstantDescs.CD_float),
@@ -338,6 +341,23 @@ enum Lane {
       cb.i2b();
     } else if (laneType == VarkaVectorIR.LaneType.SHORT) {
       cb.i2s();
+    }
+  }
+
+  /**
+   * Turns a literal read from this lane's scalar table into the lane's scalar type, for a
+   * broadcast. The tables hold ints and longs, so an integral lane narrows as
+   * {@link #narrowScalar} does and a floating lane reinterprets the bits: a {@code DOUBLE}
+   * literal is its bits in the {@code long[]} table and a {@code FLOAT} one its bits in the
+   * {@code int[]} one (VARKA-341 2.3), which keeps every lane on the two existing tables.
+   */
+  void literalScalar(CodeBuilder cb) {
+    switch (laneType) {
+      case BYTE, SHORT, INT, LONG -> narrowScalar(cb);
+      case FLOAT -> cb.invokestatic(ConstantDescs.CD_Float, "intBitsToFloat",
+          MethodTypeDesc.of(ConstantDescs.CD_float, ConstantDescs.CD_int));
+      case DOUBLE -> cb.invokestatic(ConstantDescs.CD_Double, "longBitsToDouble",
+          MethodTypeDesc.of(ConstantDescs.CD_double, ConstantDescs.CD_long));
     }
   }
 

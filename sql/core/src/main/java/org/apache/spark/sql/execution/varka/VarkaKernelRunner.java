@@ -304,7 +304,7 @@ public final class VarkaKernelRunner {
       // is fixed at compile time, so this is a branch on a final field. The wrong overload would
       // not run a wrong kernel - each default throws naming the lane - but that throw would be a
       // fallback with a misleading cause.
-      if (lane == LaneType.LONG) {
+      if (lane.bits() == Long.SIZE) {
         status = kernel.run(srcData, srcValidity, srcNullCount, dstData, dstValidity, scalarArgs,
             longArgs, len, scratchAddress);
       } else {
@@ -382,7 +382,7 @@ public final class VarkaKernelRunner {
       }
       int status;
       try {
-        status = lane == LaneType.LONG
+        status = lane.bits() == Long.SIZE
             ? kernel.run(srcData, validity, nulls, data, valid, scalarArgs, longArgs, len,
                 scratchAddress)
             : kernel.run(srcData, validity, nulls, data, valid, scalarArgs, len, scratchAddress);

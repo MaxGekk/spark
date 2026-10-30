@@ -1,0 +1,288 @@
+================================================================================================
+d < d2 output, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+d < d2 output, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                        108            126          16         18.5          54.2       1.0X
+varka on                                                          101            111           8         19.8          50.4       1.1X
+
+
+================================================================================================
+d < d2 filter control, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+d < d2 filter control, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                101            107          10         19.9          50.3       1.0X
+varka on                                                                   30             37           5         65.7          15.2       3.3X
+
+
+================================================================================================
+d < d2 output, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+d < d2 output, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                   100            104           6         20.0          50.0       1.0X
+varka on                                                                     100            103           3         19.9          50.2       1.0X
+
+
+================================================================================================
+d < d2 filter control, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+d < d2 filter control, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                            88             91           2         22.6          44.2       1.0X
+varka on                                                                              28             33           6         70.5          14.2       3.1X
+
+
+================================================================================================
+l < l2 output, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+l < l2 output, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                        114            115           2         17.6          56.8       1.0X
+varka on                                                          112            114           2         17.9          56.0       1.0X
+
+
+================================================================================================
+l < l2 filter control, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+l < l2 filter control, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                106            109           2         18.8          53.2       1.0X
+varka on                                                                   61             64           2         32.6          30.6       1.7X
+
+
+================================================================================================
+l < l2 output, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+l < l2 output, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                   114            116           1         17.6          56.9       1.0X
+varka on                                                                     114            115           1         17.6          56.9       1.0X
+
+
+================================================================================================
+l < l2 filter control, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+l < l2 filter control, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                           104            106           2         19.2          52.0       1.0X
+varka on                                                                              54             58           3         37.1          27.0       1.9X
+
+
+================================================================================================
+y1 < y2 output, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+y1 < y2 output, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                         109            111           2         18.3          54.5       1.0X
+varka on                                                           110            111           2         18.2          54.9       1.0X
+
+
+================================================================================================
+y1 < y2 filter control, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+y1 < y2 filter control, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                 101            104           2         19.7          50.7       1.0X
+varka on                                                                    69             73           3         28.9          34.7       1.5X
+
+
+================================================================================================
+y1 < y2 output, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+y1 < y2 output, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                    105            107           1         19.1          52.4       1.0X
+varka on                                                                      105            110          11         19.0          52.6       1.0X
+
+
+================================================================================================
+y1 < y2 filter control, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+y1 < y2 filter control, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                             96             98           1         20.7          48.2       1.0X
+varka on                                                                               61             63           3         32.8          30.5       1.6X
+
+
+================================================================================================
+NOT b output, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+NOT b output, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                        78             80           3         25.6          39.1       1.0X
+varka on                                                          78             80           2         25.6          39.1       1.0X
+
+
+================================================================================================
+NOT b filter control, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+NOT b filter control, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                75             77           1         26.7          37.5       1.0X
+varka on                                                                  39             42           3         51.2          19.5       1.9X
+
+
+================================================================================================
+NOT b output, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+NOT b output, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                   78             81           4         25.7          39.0       1.0X
+varka on                                                                     78             80           1         25.7          39.0       1.0X
+
+
+================================================================================================
+NOT b filter control, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+NOT b filter control, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                           73             75           4         27.4          36.5       1.0X
+varka on                                                                             37             39           2         54.3          18.4       2.0X
+
+
+================================================================================================
+b AND b2 output, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+b AND b2 output, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                          117            119           3         17.1          58.6       1.0X
+varka on                                                            120            123           3         16.6          60.2       1.0X
+
+
+================================================================================================
+b AND b2 filter control, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+b AND b2 filter control, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                   97            100           5         20.5          48.7       1.0X
+varka on                                                                     43             45           2         46.4          21.6       2.3X
+
+
+================================================================================================
+b AND b2 output, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+b AND b2 output, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                     122            123           1         16.4          61.0       1.0X
+varka on                                                                       120            122           2         16.7          59.8       1.0X
+
+
+================================================================================================
+b AND b2 filter control, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+b AND b2 filter control, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                              93             96           6         21.5          46.4       1.0X
+varka on                                                                                38             39           2         53.3          18.8       2.5X
+
+
+================================================================================================
+(d < d2) AND (l < l2) output, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+(d < d2) AND (l < l2) output, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                       207            208           2          9.7         103.3       1.0X
+varka on                                                                         207            207           1          9.7         103.3       1.0X
+
+
+================================================================================================
+(d < d2) AND (l < l2) filter control, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+(d < d2) AND (l < l2) filter control, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                               188            189           2         10.6          93.9       1.0X
+varka on                                                                                  63             65           2         32.0          31.3       3.0X
+
+
+================================================================================================
+(d < d2) AND (l < l2) output, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+(d < d2) AND (l < l2) output, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                                  205            206           2          9.8         102.4       1.0X
+varka on                                                                                    206            207           2          9.7         102.8       1.0X
+
+
+================================================================================================
+(d < d2) AND (l < l2) filter control, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+(d < d2) AND (l < l2) filter control, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                                          175            182           3         11.4          87.5       1.0X
+varka on                                                                                             51             55           4         39.3          25.5       3.4X
+
+

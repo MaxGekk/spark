@@ -25,6 +25,8 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DurationVector;
+import org.apache.arrow.vector.Float4Vector;
+import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.IntervalYearVector;
 import org.apache.arrow.vector.SmallIntVector;
@@ -108,13 +110,17 @@ final class VarkaLaneArrow {
       case TIME -> new Vector(id, TimeNanoVector.class, VarkaLaneArrow::fromField);
       case DT_INTERVAL -> new Vector(id, DurationVector.class, VarkaLaneArrow::fromField);
       case TIMESTAMP_NTZ -> new Vector(id, TimeStampMicroVector.class, VarkaLaneArrow::fromField);
+      // The floating lanes (VARKA-341): IEEE 754 values in four- and eight-byte buffers, built
+      // from Spark's own field as the long lane's are.
+      case FLOAT -> new Vector(id, Float4Vector.class, VarkaLaneArrow::fromField);
+      case DOUBLE -> new Vector(id, Float8Vector.class, VarkaLaneArrow::fromField);
       // Read by no lane - a boolean column is two bitmaps, admitted by name in isArrowBacked -
       // but written: a boolean output's data bitmap holds the known-true rows and its validity
       // the known ones (VARKA-27), the only vector Spark's ArrowColumnVector reads a BOOLEAN from.
       case BOOLEAN -> new Vector(id, BitVector.class,
           (name, type, allocator) -> new BitVector(name, allocator));
       // Owed to their rows or declined by decision (VarkaTypes).
-      case FLOAT, DOUBLE, DECIMAL, TIMESTAMP -> null;
+      case DECIMAL, TIMESTAMP -> null;
     };
   }
 

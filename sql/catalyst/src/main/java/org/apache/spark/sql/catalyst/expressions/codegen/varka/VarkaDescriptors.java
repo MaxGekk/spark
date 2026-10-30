@@ -59,6 +59,11 @@ final class VarkaDescriptors {
       ClassDesc.of("jdk.incubator.vector.VectorOperators$Associative");
   static final ClassDesc VO_BINARY =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Binary;");
+  /** {@code VectorOperators.Test}, what {@code IS_NAN} is declared as. */
+  static final ClassDesc VO_TEST =
+      ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Test;");
+  /** {@code VectorMask V.test(VectorOperators.Test)}, the same at every lane. */
+  static final MethodTypeDesc VECTOR_TEST = MethodTypeDesc.of(VECTOR_MASK, VO_TEST);
   static final ClassDesc DOUBLE_VECTOR =
       ClassDesc.of("jdk.incubator.vector.DoubleVector");
   /**

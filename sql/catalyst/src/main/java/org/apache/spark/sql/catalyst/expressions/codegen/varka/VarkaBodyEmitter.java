@@ -580,7 +580,7 @@ final class VarkaBodyEmitter {
       if (broadcastSlot != null) {
         cb.aload(s.species(lane));
         lane.loadScalar(cb, scalarArg[j]);
-        lane.narrowScalar(cb);
+        lane.literalScalar(cb);
         cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
         cb.astore(broadcastSlot[j]);
       }
