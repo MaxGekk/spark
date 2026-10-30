@@ -618,12 +618,19 @@ public final class VarkaVectorSupport {
    * start clear, and a caller may hand the kernel a buffer it used before. {@code outputs} holds
    * the ordinals of those outputs, one char each. The table driver calls this once whatever the
    * count, as it calls {@link #prepareOutputValidity} once, so its size stays its calls'
-   * ({@code VARKA-190.md} 10); a kernel with no boolean output does not call it at all.
+   * ({@code VARKA-190.md} 10); a kernel with no boolean output does not call it at all. As in
+   * {@link #prepareOutputValidity}, a table naming an output the kernel was given no destination
+   * for is refused.
    */
   public static void zeroBitOutputData(long[] dstData, String outputs, int rows) {
     long bytes = ((rows + 63L) / 64) * 8;
     for (int k = 0; k < outputs.length(); k++) {
-      zero(ofAddress(dstData[outputs.charAt(k)], bytes));
+      int o = outputs.charAt(k);
+      if (o >= dstData.length) {
+        throw new IllegalArgumentException("boolean output table names output " + o
+            + " and the kernel was given " + dstData.length + " destinations");
+      }
+      zero(ofAddress(dstData[o], bytes));
     }
   }
 

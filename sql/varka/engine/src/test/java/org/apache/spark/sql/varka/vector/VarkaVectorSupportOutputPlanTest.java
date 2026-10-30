@@ -139,6 +139,12 @@ public class VarkaVectorSupportOutputPlanTest {
           .prepareOutputValidity(dst, new long[0], new int[0], "q", 8));
       assertThrows(IllegalArgumentException.class, () -> VarkaVectorSupport
           .prepareOutputValidity(dst, new long[0], new int[0], "zz", 8));
+      // The boolean outputs' table likewise: an ordinal past the destinations is refused by
+      // name, not left to the array's index fault.
+      IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+          () -> VarkaVectorSupport.zeroBitOutputData(dst, "" + (char) 0 + (char) 1, 8));
+      assertEquals("boolean output table names output 1 and the kernel was given 1 destinations",
+          e.getMessage());
     }
   }
 

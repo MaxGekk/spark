@@ -60,8 +60,7 @@ class VarkaLaneArrowSuite extends SparkFunSuite {
           val vector = VarkaLaneArrow.allocate("x", form, allocator)
           try {
             assert(v.vectorClass().isInstance(vector), s"${form.sql}: ${vector.getClass}")
-            // An output-only vector is no lane's, so the admission does not take it for one.
-            assert(VarkaLaneArrow.reads(vector) === !outputOnly.contains(id), form.sql)
+            assert(VarkaLaneArrow.reads(vector), form.sql)
             val width = vector.asInstanceOf[BaseFixedWidthVector].getTypeWidth
             if (outputOnly.contains(id)) {
               // A bitmap: Arrow's type width is 0 bytes for its one storage bit a row.

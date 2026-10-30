@@ -985,7 +985,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // The boolean-column nodes (VARKA-331), the condition as a value (VARKA-460) and the
     // boolean output (VARKA-27) are out for the same reason: they are covered by
     // `VarkaEmitterBoolSuite` and the coverage rows, and a grammar production is a row of the
-    // refit that reprices the model (row 352).
+    // refit that reprices the model (VARKA-352).
     val missing = permitted -- seen - "NarrowLane" - "WidenLane" - "NullSafeEqual" -
       "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
       "BoolOutput"

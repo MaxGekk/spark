@@ -333,17 +333,7 @@ final class VarkaBodyEmitter {
       List<VarkaVectorIR> outputs, List<Integer> prologueOutputs, Analysis analysis, Slots s) {
     for (int o : prologueOutputs) {
       VarkaVectorIR root = outputs.get(o);
-      if (root instanceof BoolOutput) {
-        // A boolean output's data is a bitmap of whole words (`VARKA-27.md` 2.2), which Arrow's
-        // BitVector allocates at every length, so a word store of the last word stays inside it.
-        // The driver zeroes it, since the per-group write ORs into it and the warm-up and the
-        // cross-body check reuse their buffers.
-        loadWholeWords(cb, analysis, P_DST_DATA, o, s.dstSeg[o]);
-        if (mode == BodyMode.DRIVER) {
-          cb.aload(s.dstSeg[o]);
-          cb.invokestatic(SUPPORT, "zero", ZERO);
-        }
-      } else if (!(root instanceof Cond)) {
+      if (!VarkaVectorIR.writesBitmaps(root)) {
         // An output whose stored lane is not the emission's - an int-valued root of a kernel
         // driven at the long lane, or a narrow root of one driven at the int lane - writes its
         // own width a row, not the driving lane's.
@@ -352,6 +342,16 @@ final class VarkaBodyEmitter {
           loadNarrowedSegment(cb, analysis, P_DST_DATA, o, s.dstSeg[o], stored);
         } else {
           loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
+        }
+      } else if (root instanceof BoolOutput) {
+        // A boolean output's data is a bitmap of whole words (`VARKA-27.md` 2.2), which Arrow's
+        // BitVector allocates at every length, so a word store of the last word stays inside it.
+        // The driver zeroes it, since the per-group write ORs into it and the warm-up and the
+        // cross-body check reuse their buffers.
+        loadWholeWords(cb, analysis, P_DST_DATA, o, s.dstSeg[o]);
+        if (mode == BodyMode.DRIVER) {
+          cb.aload(s.dstSeg[o]);
+          cb.invokestatic(SUPPORT, "zero", ZERO);
         }
       }
       // Under elideUnreadLocals a loop or epilogue body maps no validity segment for an output
@@ -488,14 +488,15 @@ final class VarkaBodyEmitter {
    * zeroed bitmap the shortcut leaves behind would deny. The loop needs no shortcut to be
    * correct there. A {@link BoolOutput} root is excluded outright for the same reason, and not
    * through the flag it inherits: a total condition over an all-null column has an answer
-   * ({@code b IS NULL} is true on every row) whatever the flag says (`VARKA-27.md` 2.2).
+   * ({@code b IS NULL} is true on every row) whatever the flag says (`VARKA-27.md` 2.2). Both are
+   * the roots that write bitmaps ({@link VarkaVectorIR#writesBitmaps}).
    */
   private static boolean shortcutApplies(boolean dense, List<VarkaVectorIR> outputs,
       Analysis analysis) {
     boolean applies = !dense;
     for (VarkaVectorIR root : outputs) {
       applies &= analysis.columns.get(root) != 0L && !analysis.skipping.get(root)
-          && !(root instanceof Cond) && !(root instanceof BoolOutput);
+          && !VarkaVectorIR.writesBitmaps(root);
     }
     return applies;
   }
@@ -1185,14 +1186,7 @@ final class VarkaBodyEmitter {
       VarkaVectorIR root = outputs.get(o);
       if (root instanceof Cond cond) {
         emitCond(cb, cond, dense, analysis, s, computed);
-        emitValidityWrite(cb, analysis, s, o, () -> {
-          if (dense) {
-            cb.aload(s.condMask.get(cond));
-            cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
-          } else {
-            cb.lload(s.kt.get(cond));
-          }
-        });
+        emitValidityWrite(cb, analysis, s, o, () -> pushKnownTrue(cb, dense, cond, s));
         continue;
       }
       if (root instanceof BoolOutput out) {
@@ -1250,13 +1244,20 @@ final class VarkaBodyEmitter {
 
   /**
    * A {@link BoolOutput} root's two bitmaps for this lane group (`VARKA-27.md` 2.2): the
-   * condition's known-true bits into the data bitmap - {@code toLong} of its mask in the dense
-   * body, {@code kt} in the masked one - and the known bits into the validity bitmap, by the
-   * value roots' rule: all ones in the dense body (or nothing here, where the driver filled
-   * them), the root's own word {@code kt | kf} in the masked one. Both go through
-   * {@link #emitValidityWrite}, so {@code validityByWord} switches the two together; the bit has
-   * no stored width, so it is written at the driving lane's count, which the epilogue's lane
-   * count truncates as it truncates a selection bitmap.
+   * condition's known-true bits into the data bitmap ({@link #pushKnownTrue}) and the known bits
+   * into the validity bitmap, by the value roots' rule: all ones in the dense body, or nothing
+   * here where the driver filled them ({@link #fillsValidityOnce}), and the root's own word
+   * {@code kt | kf} in the masked one.
+   *
+   * <p>The two go through different writers. The data bitmap is written by
+   * {@link #emitBitsWrite} into the root's data segment, through its {@code Slots.dataAcc}
+   * accumulator where it has one: {@code Slots.plan} gives one to every {@code BoolOutput} root
+   * of a loop body that writes words ({@link #wordWrites}), whether or not its validity is also
+   * written there, and none to an epilogue, which writes its group per lane group. The validity
+   * goes through {@link #emitRootValidityOr} and so {@link #emitValidityWrite}, with
+   * {@code Slots.validityAcc}, as a value root's does. The bits have no stored width, so they are
+   * written at the driving lane's count, which the epilogue's lane count truncates as it truncates
+   * a selection bitmap.
    */
   private static void emitBoolOutput(CodeBuilder cb, boolean dense, BoolOutput out, int o,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
@@ -1265,22 +1266,27 @@ final class VarkaBodyEmitter {
     line(cb, analysis, out);
     if (!dense && s.ownWord.contains(out)) {
       // valid = kT | kF: known either way, as CondValue's word.
-      cb.lload(s.kt.get(cond));
-      cb.lload(s.kf.get(cond));
-      cb.lor();
+      VarkaVectorWalk.emitOr(cb, s.kt.get(cond), s.kf.get(cond));
       storeWord(cb, s, s.wordRef.get(out));
     }
     int acc = s.dataAcc == null ? -1 : s.dataAcc[o];
-    emitBitsWrite(cb, analysis, s.dstSeg[o], acc, () -> {
-      if (dense) {
-        cb.aload(s.condMask.get(cond));
-        cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
-      } else {
-        cb.lload(s.kt.get(cond));
-      }
-    }, s);
+    emitBitsWrite(cb, analysis, s.dstSeg[o], acc, () -> pushKnownTrue(cb, dense, cond, s), s);
     if (!fillsValidityOnce(analysis, dense, out)) {
       emitRootValidityOr(cb, dense, analysis, s, o, out);
+    }
+  }
+
+  /**
+   * Pushes {@code cond}'s known-true bits for this lane group as a long, lane 0 in bit 0: the
+   * {@code toLong} of its mask in the dense body, its {@code kt} word in the masked one. What a
+   * filter root writes as its selection bitmap and a {@link BoolOutput} root as its data bitmap.
+   */
+  private static void pushKnownTrue(CodeBuilder cb, boolean dense, Cond cond, Slots s) {
+    if (dense) {
+      cb.aload(s.condMask.get(cond));
+      cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
+    } else {
+      cb.lload(s.kt.get(cond));
     }
   }
 

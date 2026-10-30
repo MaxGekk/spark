@@ -214,6 +214,18 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * Whether an output root writes bitmaps rather than a lane value a row: a {@link Cond} root,
+   * a filter's selection bitmap, and a {@link BoolOutput} root, a {@code BitVector}'s two. Such a
+   * root has no stored width, maps no lane-width data segment, stores nothing under the
+   * epilogue's bounds mask, has no pure validity word for the bitmap pass to serve, and is never
+   * answered by the all-null shortcut. Every place that asks one of those questions of a root
+   * asks it here, so a third bitmap root is added in one place.
+   */
+  static boolean writesBitmaps(VarkaVectorIR root) {
+    return root instanceof Cond || root instanceof BoolOutput;
+  }
+
+  /**
    * The lanes {@code root}'s tree holds, which is what a kernel plan's lane for it decides on
    * ({@code VarkaKernelPlan.emissionLane}).
    */

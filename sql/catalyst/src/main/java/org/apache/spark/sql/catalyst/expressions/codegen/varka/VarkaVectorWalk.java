@@ -1505,7 +1505,7 @@ final class VarkaVectorWalk {
   }
 
   /** {@code a | b} of two long locals. */
-  private static void emitOr(CodeBuilder cb, int a, int b) {
+  static void emitOr(CodeBuilder cb, int a, int b) {
     cb.lload(a);
     cb.lload(b);
     cb.lor();
