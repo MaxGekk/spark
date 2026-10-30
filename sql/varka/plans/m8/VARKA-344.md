@@ -153,8 +153,10 @@ of `m9/SCOPE.md`.
 - **`BIGINT` at a small negative scale has a declined band** (2.5): `ConstDivide`'s `2^52` bound
   (item 0.12) holds after a pre-shift for `k >= 12` and needs a guard for `k <= 11`, the route of
   the milestone plan's 2.8 for 350.
-- **`floor(i)` over a narrower integral fuses without 343** (2.4): `FLOOR(CAST(i AS DOUBLE))` is
-  `i` widened to the long, exactly, and is compiled as that.
+- **`floor(i)` over an `INT` fuses without 343** (2.4): `FLOOR(CAST(i AS DOUBLE))` is `i`
+  widened to the long, exactly, and is compiled as that. A `TINYINT` or `SMALLINT` operand takes
+  the same form but needs the narrow load at the long width, which 332 and 343a both need and the
+  first of them to land builds (`VARKA-343.md` 0, item 2 and 2.2).
 - **The ANSI guard of `floor` and `ceil` lets NaN through** (item 0.2), which 343's floating
   `GuardedRange` does not (item 0.13), so the guard reads the operand with NaN blended to `0.0`.
 - **Large, in three parts, by what each part waits for** (section 5), against the row's medium.
@@ -255,8 +257,8 @@ For `floor`, and `ceil` with `CEIL`:
 - **A `DOUBLE` operand on the `MAGIC` arm**, both modes: the same over
   `GuardedRange(nanvl(x, 0.0), nextUp(-2^51), nextDown(2^51), FAIL)`.
 - **A `BIGINT` operand**, both modes: the child.
-- **`CAST(i AS DOUBLE)`, `i` an `INT`, `SMALLINT` or `TINYINT`**, both modes:
-  `WidenLane(i, LONG)`.
+- **`CAST(i AS DOUBLE)`, `i` an `INT`**, both modes: `WidenLane(i, LONG)`. The same for a
+  `SMALLINT` or `TINYINT` `i` once the narrow load at the long width exists (332 or 343a).
 - **`CAST(f AS DOUBLE)`, `f` a `FLOAT`**, after 343a: the `DOUBLE` form over
   `ConvertLane(f, DOUBLE)`.
 
@@ -345,7 +347,8 @@ null, so a `-0.0` against `0.0` never reaches them. The interval and `TIME` form
 `I2D` (a year-month interval's months) or `L2D` (a day-time interval's microseconds, a `TIME`'s
 nanoseconds), exactly `Number.doubleValue()`'s conversion; `numBucket` from a column takes `L2D`.
 The conversion of the quotient sees a value in `[0, n]` or NaN, so on AVX2 343's default
-assembly is whole and the `MAGIC` arm declines only for `n >= 2^51`.
+assembly is whole and the `MAGIC` arm declines only for `n >= 2^51` and for a NaN quotient (the
+`inf / inf` cell).
 
 ### 2.8 Compiler, reference, cost, census, warm-up
 
@@ -441,10 +444,11 @@ declines exactly when Spark raises on one of its live rows.
 8. **No folding**: `dev/varka_emit.sh --asm` over `rint(x)` shows the add and the subtract of `C`
    in the loop (Java's floating point forbids the fold; this shows C2 kept it), and no `vfmadd`.
 9. **Coverage rows**, a family "rounding": `rint(x)`, `floor(x)` and `ceil(x)` as values and in a
-   filter (`floor(x) > 3`), `ceiling(x)`, `floor(l)`, `floor(i)`, `floor(y)` over a `SMALLINT`,
-   `round`, `bround` and `truncate` over `i`, `l` and a narrow column at scales 0, -1, -2 and -19,
-   `factorial(i)`, `width_bucket` over `x` with literal and column bounds, in both modes; after
-   343, `floor(f)` and the interval and `TIME` forms of `width_bucket`.
+   filter (`floor(x) > 3`), `ceiling(x)`, `floor(l)`, `floor(i)`, `round`, `bround` and
+   `truncate` over `i`, `l` and a narrow column at scales 0, -1, -2 and -19, `factorial(i)`,
+   `width_bucket` over `x` with literal and column bounds, in both modes; after 343, `floor(f)`,
+   `floor(y)` over a `SMALLINT` (or after 332, whichever builds the narrow long load) and the
+   interval and `TIME` forms of `width_bucket`.
 10. **The fuzzers**: the floating IR sequence draws `RoundToIntegral`; the Spark fuzzer's grammar
     gains the functions over its floating and integral columns.
 11. **Generated files** in `ADDING_AN_EXPRESSION.md`'s order, then the PR build and the option
@@ -490,8 +494,8 @@ committed files:
 1. **The baseline** (4), its own pull request.
 2. **The census cells** (2.8), on the laptop and through the census workflow on both runners.
 3. **344a, after 341 only**: `RoundToIntegral` with `RINT`, its lowering, the reference, the
-   family; the integral rounding of 2.5 and `floor` over `BIGINT` and the narrower integral types
-   (2.4); tests 3.1 to 3.3 and 3.5 to 3.11 for these forms; the SMT spike first, then the file.
+   family; the integral rounding of 2.5 and `floor` and `ceil` over `BIGINT` and `INT` (2.4);
+   tests 3.1 to 3.3 and 3.5 to 3.11 for these forms; the SMT spike first, then the file.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial` on 343b's `NULL` disposal.
 5. **344c, after 342's same-lane forms and 343**: `width_bucket`, then its interval and `TIME`
@@ -502,7 +506,8 @@ committed files:
 |---|---|---|
 | `rint(x)` | 341's lane; the reinterpretation cell | 344a |
 | integral `round`, `bround`, `truncate` | existing nodes; the pre-shift, unless 350 | 344a |
-| `floor`, `ceil` over an integral type | `WidenLane` | 344a |
+| `floor`, `ceil` over `BIGINT`, `INT` | `WidenLane` | 344a |
+| `floor`, `ceil` over `SMALLINT`, `TINYINT` | the narrow load at 64 bits (332 or 343a) | 344c |
 | `floor`, `ceil` over `DOUBLE` | 343a's width rule; 343b's `D2L` and AVX2 arms | 344b |
 | `factorial` | 343b's `NULL` disposal of `GuardedRange` | 344b |
 | `width_bucket` over `DOUBLE` | 342's `SUB`, `MUL`, `DIV`; 343b's `D2L`, `L2D` | 344c |
@@ -536,8 +541,8 @@ measurement against it (open point 1).
 - **`rint`** (`double`), all of it, in 344a.
 - **`round`, `bround`, `truncate`**: `byte`, `short`, `int`, `bigint` in 344a; `float` and
   `double` are 346's, `dec` 351's and 363's.
-- **`floor`, `ceil`, `ceiling`**: `byte`, `short`, `int`, `bigint` in 344a, `double` in 344b,
-  `float` in 344c after 343a; `dec` is 351's and 363's.
+- **`floor`, `ceil`, `ceiling`**: `int`, `bigint` in 344a, `double` in 344b, `byte`, `short`
+  and `float` in 344c after 343a (or 332 for the narrow pair); `dec` is 351's and 363's.
 - **`factorial`** (`int`) in 344b; **`width_bucket`**: `double` in 344c, `time`, `ym` and `dt`
   with 343's conversions.
 
@@ -552,10 +557,12 @@ double-valued `FLOOR` or `CEIL`, and the hardware rounding a later JDK might exp
 point 3).
 
 Declines that stay: a batch with a live lane Spark raises on (ANSI's `floor` and `ceil` past the
-long, an integral rounding past its type); on the `MAGIC` arm, a lane with `|x| >= 2^51` or NaN;
+long, an integral rounding past its type); on the `MAGIC` arm, a lane with `|x| >= 2^51`;
 a `BIGINT` rounding at `k <= 11` with a lane at or past `2^(52 + k)`; at the forced 128-bit
-species on x86, the floating forms' recorded refusals; until 343a, `floor(f)`; until 343b,
-`floor` and `ceil` over a double and `factorial`; until 342 and 343, `width_bucket`.
+species on x86, the floating forms' recorded refusals; until 343a, `floor(f)`, and `rint(i)` or
+`rint(f)`, which arrive under a cast to double; until the narrow load at 64 bits (332 or 343a),
+`floor` and `ceil` over `SMALLINT` and `TINYINT`; until 343b, `floor` and `ceil` over a double
+and `factorial`; until 342 and 343, `width_bucket`.
 
 ## 8. Open points for the lead
 
