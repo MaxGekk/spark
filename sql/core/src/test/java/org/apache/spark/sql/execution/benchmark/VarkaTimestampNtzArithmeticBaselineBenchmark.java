@@ -35,8 +35,8 @@ import org.apache.spark.sql.VarkaBenchmark;
  * <ul>
  *   <li>the arithmetic chain {@code ntz + (ntz2 - ntz3) - INTERVAL '1' HOUR}, the difference of
  *       two timestamps added and an interval literal subtracted (step 2, the plan's 2.1). It is
- *       timed here again because {@code VarkaTimestampNtzBaselineBenchmark}, which also times
- *       it, holds sections that fuse, and so refuses to run;</li>
+ *       a section of {@code VarkaTimestampNtzBaselineBenchmark} too, and is timed here again so
+ *       that the row's after-run diffs every form it fuses against one file;</li>
  *   <li>{@code ntz + dt}, a timestamp plus a day-time interval column (step 2, 2.1);</li>
  *   <li>{@code ntz + INTERVAL '1' MONTH}, a month form (step 3, 2.3 and 2.4);</li>
  *   <li>{@code timestampadd(HOUR, q, ntz)} over an int quantity (step 3, 2.2);</li>
