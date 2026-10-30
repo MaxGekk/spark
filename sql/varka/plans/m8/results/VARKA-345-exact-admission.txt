@@ -2,7 +2,7 @@ VARKA-345 admission checks for the exact default, 30 October 2026, laptop (Zen 5
 single-file source launch, about a minute a run), run under the shared heavy slot at the
 preferred 512-bit species and with -XX:MaxVectorSize=32; both outputs follow.
   java --add-modules jdk.incubator.vector -XX:CompileCommand=quiet \
-    -XX:CompileCommand=inline,Varka345Exact::exp [-XX:MaxVectorSize=32] Varka345Exact.java
+    -XX:CompileCommand=inline,Varka345Exact::exp [-XX:MaxVectorSize=32] <prototype, not kept>
 
 The program is not kept, for licence reasons. It was a feasibility check only: does a lane-wise
 copy of fdlibm's operation sequence reproduce StrictMath.exp bit for bit, and what does it cost.
@@ -28,18 +28,16 @@ What the program did:
 Part 3's timings are provisional, laptop-only numbers of a hand-written Java loop, not Varka's
 emitter. Part 1's bit-identity counts stand; part 3's timing of the port does not show what a
 lane-wise fdlibm exp costs. The port measured slower than the scalar loop at 256 bits and only
-slightly faster at 512, and the observed cause is that the port's method was mostly not inlined:
-a diagnostic run by the lead on the laptop at 512 bits, 30 October 2026, under
--XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining, printed
+slightly faster at 512, and why is unexplained. The timed runs forced inlining by
+CompileCommand (the command line above), which HotSpot honours before any size limit
+(src/hotspot/share/opto/bytecodeInfo.cpp:120-124). A run without it, by the lead on the laptop
+at 512 bits, 30 October 2026, under -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining, printed
   Varka345Exact::exp (601 bytes)   failed to inline: hot method too big
-at three call sites, and one other site late-inlined it through Double512Vector::blend. A
-Vector API value crossing a call C2 did not inline is boxed, an allocation per call, so the
-timing measured boxed vectors and allocation rather than the port's arithmetic. One
-observation is not reconciled with that: the timed runs' command line above carries
--XX:CompileCommand=inline for the method, which HotSpot honours before any size limit
-(src/hotspot/share/opto/bytecodeInfo.cpp:120-124), and a first run without it timed the same;
-whether the command took effect in the timed runs was not recorded. The timing is to be
-re-established on the IR-emitted port from the fdlibm 5.3 C sources, which has no call boundary.
+at three call sites, and one other site late-inlined it through Double512Vector::blend; a first
+timed run without the command had timed the same as the forced ones. A Vector API value crossing
+a call C2 did not inline is boxed, an allocation per call, but whether boxing explains the
+timing is not established. The IR-emitted port's run, from the fdlibm 5.3 C sources and with no
+call boundary, decides.
 
 The port's size, counted (not copied), 30 October 2026: non-blank, non-comment lines of each
 function's class in JDK 25's src/java.base/share/classes/java/lang/FdLibm.java, read only to

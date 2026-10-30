@@ -91,14 +91,11 @@ not use) and `results/VARKA-345-exact-admission.txt` (a lane-wise copy of fdlibm
    Those counts stand. Its timing does not: 3.470 ns an element against the scalar `StrictMath`
    loop's 4.080 at 512 bits, 4.748 against 4.100 at 256, with SVML's `EXP` at 0.447 and 0.623
    (part 3), are provisional, laptop-only numbers of a hand-written Java loop, and they are not a
-   finding about fdlibm in lanes. The observed cause is inlining: under `-XX:+PrintInlining` at
-   512 bits (the lead's diagnostic run, 30 October 2026, recorded in that file) C2 printed the
-   prototype's 601-bytecode `exp` as "failed to inline: hot method too big" at three call sites
-   and late-inlined it at one other, so the loop timed boxed vectors and allocation (item 0.5a)
-   rather than the port. The timed runs carried a `CompileCommand=inline` for the method, and
-   whether it took effect there was not recorded; that is unreconciled. The speed is to be
-   re-established on the IR-emitted port from the fdlibm 5.3 C sources (2.2), which has no call
-   to refuse.
+   finding about fdlibm in lanes. Why the port was not faster is unexplained: the timed runs
+   forced inlining by `CompileCommand`; a run without it (the lead's `-XX:+PrintInlining` run at
+   512 bits, 30 October 2026, recorded in that file) showed the 601-bytecode method refused
+   ("hot method too big") at three call sites, so whether boxing (item 0.5a) explains the timing
+   is not established; the IR-emitted port's run from the fdlibm 5.3 C sources (2.2) decides.
 5a. **C2 inlines a hot callee only up to 325 bytecodes, and a refused call boxes its vectors.**
    `FreqInlineSize` is 325 on x86 and aarch64 (`src/hotspot/cpu/x86/c2_globals_x86.hpp:45`,
    `cpu/aarch64/c2_globals_aarch64.hpp:47`); a larger hot callee is refused as "hot method too
@@ -272,10 +269,11 @@ Three rules hold for every row of the table:
 ### 2.2 Two parts: a vector fdlibm library as the reference, and Varka's forms
 
 The exact default has two parts with a line between them. The first is a library that stands
-alone, in this repository or in its own under github.com/vecbricks as jegg does (open point 9);
-the second is Varka's own emitter, which writes the same sequence into its kernels. **The library
-is the reference and the test oracle of the emitted ports, never a runtime dependency of a kernel**
-(the owner, 30 October 2026, open point 10).
+alone in its own repository, `vfdlibm` (https://github.com/vecbricks/vfdlibm, group
+`io.github.vecbricks`, Apache-2.0; the owner, 30 October 2026), filled one function at a time as
+Varka needs it, as its `PLAN.md` section 2 states; the second is Varka's own emitter, which writes
+the same sequence into its kernels. **The library is the reference and the test oracle of the
+emitted ports, never a runtime dependency of a kernel** (the owner, 30 October 2026, open point 10).
 
 **The library: fdlibm in lanes, with no Spark or Varka dependency.** A Java 25 module on
 `jdk.incubator.vector` alone, Apache-2.0 with Sun's fdlibm notice preserved, whose API is one
@@ -307,7 +305,8 @@ port's branch decisions (2.4) are tried and timed in it before they are emitted.
 gains a `MathForm form`, and a sibling `MathBinary(MathFn fn, MathForm form, VarkaVectorIR left,
 VarkaVectorIR right)` serves `ATAN2`, `POW` and `HYPOT`. `MathFn` gains every function of 2.1's
 first column that is one call, each member naming its Spark method (`Math` or `StrictMath`), the
-`StrictMath` method its `LANE_CALL` calls, and its `VectorOperators` constant. `MathForm` is sealed
+method its `LANE_CALL` calls (`StrictMath` for the thirteen fdlibm functions, `Math` for the five
+host-dependent ones), and its `VectorOperators` constant. `MathForm` is sealed
 and exhaustive:
 
 | form | lowering | exact | built by |
@@ -648,14 +647,14 @@ Predictions, registered before the build:
    0.8 to 1.3 times the row path's time a row, from item 0.6's per-lane loop at the scalar
    call's cost; a gain appears only with work around the call, such as `exp(x) * 2 + 1`, by the
    arithmetic's share.
-5. **The emitted `exp` port against `LANE_CALL`**: no direction is registered. The only timing
-   of a lane-wise `exp` is the prototype's, taken mostly un-inlined (item 0.5), so it predicts
-   nothing about an inline port; 5 step 4 measures it first.
-3. **The opt-in mode at 256 bits** is several times faster than the row path for a bound
+3. **The emitted `exp` port against `LANE_CALL`**: no direction is registered. The only timing
+   of a lane-wise `exp` is the prototype's, whose cause is unexplained (item 0.5), so it predicts
+   nothing about an inline port; section 5 step 4 measures it first.
+4. **The opt-in mode at 256 bits** is several times faster than the row path for a bound
    operator, as `SCOPE_FUNCTIONS.md` 3's table has it for the library against the fallback
    (2.5x to 9x at four lanes); this row registers the direction only, each function row the
    number.
-4. **The bit-identity tests' time**: 2^24 inputs a function at about 5 ns a scalar reference
+5. **The bit-identity tests' time**: 2^24 inputs a function at about 5 ns a scalar reference
    call (item 0.6) is about 0.1 s of reference calls a function on one core, under 30 s for the
    27 with the kernel runs and the sanitizer, at the calibration table's new-suite ratio of 2
    (VARKA-243). The fixed vectors add milliseconds.
@@ -664,8 +663,8 @@ Predictions, registered before the build:
 
 0. **The fdlibm 5.3 C sources, with the owner's approval.** Netlib's `fdlibm` (Sun's 5.3, the
    `e_*.c`, `s_*.c`, `k_*.c` files and `fdlibm.h`) fetched by a named source and digest, and
-   placed where the library will live (open point 9) with Sun's notice preserved. Nothing of
-   them is fetched before that yes; until then no `PORT` sequence is written, and the prototype
+   placed in `vfdlibm` (2.2), each file's Sun notice preserved in the port's source header. Nothing
+   of them is fetched before that yes; until then no `PORT` sequence is written, and the prototype
    of item 0.5 is not reused.
 1. **The baseline** (4), its own pull request.
 2. **345a, needing nothing unbuilt**: the configuration and its option, `Reason.CONTRACT`,
@@ -678,15 +677,15 @@ Predictions, registered before the build:
    expansion frame and its IR helpers (2.2), the `mathPort` option, the test hook,
    `VarkaMathExactSuite`'s harness and the vector files' format, the classification and the library
    reference; tests 3.1 (the `--asm` half), 3.2, 3.3 and 3.7 to 3.10.
-4. **The library's skeleton and the `exp` template, after step 0**: the library's module, its
-   API (2.2), the lane helpers with their test 3.2, the masked-form contract, the per-lane
-   finish, and its own runs of 2.3's tests 1 and 2 against `StrictMath`; then one function as
-   the template, `exp` from `e_exp.c`, written once in the library and once as Varka's `PORT`
-   expansion, the two held to each other and to `StrictMath`, its branch measurement (2.4), and
-   the emitted port's speed against `LANE_CALL` of `StrictMath.exp` on the laptop first and then
-   on the EPYC runners, which re-establishes item 0.5's timing on a port with no call. Whether
-   `exp`'s port becomes its default is 358's, by 2.1's rule. The other ports are their rows'
-   (section 7).
+4. **The library's skeleton and the `exp` template, after step 0**: `vfdlibm`'s first
+   function, in its own pull request paired with Varka's: the library's API (2.2), the lane helpers
+   with their test 3.2, the masked-form contract, the per-lane finish, and its own runs of 2.3's
+   tests 1 and 2 against `StrictMath`; then one function as the template, `exp` from `e_exp.c`,
+   written once in the library and once as Varka's `PORT` expansion, the two held to each other and
+   to `StrictMath`, its branch measurement (2.4), and the emitted port's speed against `LANE_CALL`
+   of `StrictMath.exp` on the laptop first and then on the EPYC runners, which re-establishes item
+   0.5's timing on a port with no call. Whether `exp`'s port becomes its default is 358's, by 2.1's
+   rule. The other ports are their rows' (section 7).
 
 | file | what |
 |---|---|
@@ -696,7 +695,7 @@ Predictions, registered before the build:
 | `varka/VarkaVectorIR.java` | `MathForm`, `MathBinary`, the `MathFn` members |
 | `varka/VarkaVectorWalk.java`, `Slots.java`, `Analysis.java` | the three lowerings, the blend |
 | `varka/VarkaMathPort.java` (new) | `PORT`'s expansion frame, the IR helpers, `exp`'s expansion |
-| the library module (open point 9) | `VectorFdlibm`, its helpers, `exp` as the template, its tests; the reference only |
+| `vfdlibm`, its own repository (2.2) | `VectorFdlibm`, its helpers, `exp` as the template, its tests; the reference only |
 | `varka/VarkaMathBound.java`, `VarkaMathBinding.java`, `VarkaMathContract.java` | 2.5 |
 | `dev/varka_emit.sh` | `--jvm-arg` |
 | tests | 3.1 to 3.9, `VarkaReference`, the library reference |
@@ -720,7 +719,7 @@ helpers and harness one, the classification and library reference one and a half
 skeleton and the `exp` template about four (the helpers and API one, the library's `exp` with its
 branch measurement one and a half, the IR expansion of `exp` and its speed against `LANE_CALL`
 one and a half), after the owner's yes on step 0. About eleven and a half days in three pull
-requests after the baseline, the library's part possibly in another repository.
+requests after the baseline, one of them in `vfdlibm`.
 
 ## 6. What it unlocks in the census
 
@@ -749,7 +748,8 @@ binding with no contract entry keeps the exact form, which is not a decline.
 
 Points 2, 3, 4, 5, 7 and 10 were settled on 30 October 2026, 10 by the owner's word and the rest by
 the lead's; each keeps its number, since the sections above cite them, and states what was
-settled. Points 1, 6, 8, 9 and 11 stay open.
+settled. Point 9, where the library lives, was settled by the owner the same day and is dropped
+from the list (2.2). Points 1, 6, 8 and 11 stay open.
 
 1. **Question 2, now the opt-in mode's only, and the owner's** (milestone plan 7, question 2;
    10.3 item 1). **It does not block 356 to 358**: their default is exact, and a discrete
@@ -791,9 +791,7 @@ settled. Points 1, 6, 8, 9 and 11 stay open.
 5. **The contracted value.** *Settled, the lead, 30 October 2026.* The contracted value is at
    least every measured line for its key. 367's probe gives a lower bound of the true maximum, so
    `VarkaMathContractSuite` fails whenever a committed measured line exceeds the contracted value
-   (2.5, 3.4); raising the value is a dated entry with that line's witness. Whether the value is
-   the measured maximum or that plus one is no longer a question: either satisfies the rule, and
-   the function row picks the number its entry states.
+   (2.5, 3.4); raising the value is a dated entry with that line's witness.
 6. **Row wording to change under the 30 October decisions** (the lead's edits):
    - **356**: "The trigonometric functions under the contract" becomes "exact by default, the
      opt-in contract as a second form": `sin`, `cos`, `tan` by `LANE_CALL` of `Math` and `sec`,
@@ -838,16 +836,6 @@ settled. Points 1, 6, 8, 9 and 11 stay open.
 8. **The size**: large, about eleven and a half days in three pull requests after the baseline,
    against the row's medium; the port written twice (library and IR expansion) and both exact
    forms built per function are what grew it (section 5).
-9. **Where the vector fdlibm library lives, and fetching its source.** Step 0 needs the owner's yes:
-   the fdlibm 5.3 C sources from netlib, by a named URL and digest (a third-party source enters only
-   with its publisher named and the owner's yes). The library has no Spark or Varka dependency
-   (2.2), so it can be (a) a module of this repository, Apache-2.0 with Sun's notice, as
-   `sql/varka/engine` is a standalone module; or (b) its own repository under github.com/vecbricks,
-   as jegg is, published under its own coordinates. Under point 10's settlement Varka takes it as
-   a test dependency only, never at run time. Evidence for (b): other engines and Java users could
-   take it, and its tests need only `StrictMath`; against: a release and a dependency bump between
-   a port fix and Varka's tests. *No recommendation*: the owner is weighing it, and the plan reads
-   the same either way, the library's API being 2.2's.
 10. **How a `PORT` reaches the kernel.** *Settled, the owner's word, 30 October 2026: option (b).*
     Varka emits the fdlibm operation sequence as IR nodes in its own kernels; the standalone
     vector fdlibm library is the reference and the test oracle, not a runtime dependency (2.2).
