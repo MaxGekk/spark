@@ -578,8 +578,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     // A boolean expression as a projection result (VARKA-27): the condition a filter would fuse,
     // written as a BOOLEAN column - the data bitmap its known-true rows, the validity its known
     // ones, so an unknown row is null. Every predicate row above is also run this way by
-    // VarkaCoverageDifferentialSuite; these rows document one per lane and form, spelled apart
-    // from the predicate rows they mirror because the generated files key a row by its SQL.
+    // VarkaCoverageHarnessSuite's booleanOutputs; these rows document one per lane and form,
+    // spelled apart from the predicate rows they mirror because the generated files key a row by
+    // its SQL.
     Family("Boolean outputs", predicates = false, Seq(
       Row("d2 > d", "a date comparison as a column, on the int lane; `d < d2` as an output"),
       Row("l2 > l", "the long lane's comparison as a column"),

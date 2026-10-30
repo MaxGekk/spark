@@ -39,6 +39,7 @@ import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.Alias;
+import org.apache.spark.sql.catalyst.expressions.AttributeReference;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
@@ -376,9 +377,18 @@ public final class VarkaCoverageHarnessSuite {
   // Every predicate row as a boolean output (VARKA-27)
   // ---------------------------------------------------------------------------------------------
 
-  /** Whether a predicate row is a bare column, which a projection forwards rather than fuses. */
-  static boolean isBareColumn(String sql) {
-    return sql.matches("[a-z][a-z0-9_]*");
+  /**
+   * Whether the output {@code c} of {@code list} is a bare column, which a projection forwards
+   * rather than fuses: read from the planned list, as {@link #folded} is, so that a row the
+   * optimizer reduces to its column counts as one too.
+   */
+  static boolean bareColumn(Seq<NamedExpression> list) {
+    for (NamedExpression e : CollectionConverters.asJava(list)) {
+      if (e instanceof Alias a && a.name().equals("c") && a.child() instanceof AttributeReference) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -412,9 +422,10 @@ public final class VarkaCoverageHarnessSuite {
       return List.of(context + ": did not stay a projection over the scan: " + q);
     }
     Seq<NamedExpression> list = p.list();
-    if (isBareColumn(row.executable())) {
-      boolean fused = VarkaExpressionCompiler.compilePartial(list, fixture.columns(),
-          VarkaColumnarToRowExec$.MODULE$.currentEmitOptions()).isPresent();
+    if (bareColumn(list)) {
+      // Under the conf the row runs with, since the emit options are read from it.
+      boolean fused = withConf(conf, () -> VarkaExpressionCompiler.compilePartial(list,
+          fixture.columns(), VarkaColumnarToRowExec$.MODULE$.currentEmitOptions()).isPresent());
       return fused ? List.of(context + ": a bare column fused, where Spark's projection runs")
           : List.of();
     }
@@ -467,10 +478,12 @@ public final class VarkaCoverageHarnessSuite {
     assertNull(VarkaExpressionHarness.sameRow(want, want, types));
     assertNotNull(VarkaExpressionHarness.sameRow(want,
         new GenericInternalRow(new Object[] {4, false}), types));
-    assertTrue(isBareColumn("b") && !isBareColumn("NOT b") && !isBareColumn("b <=> b2"));
     SQLConf conf = conf(SQLConf.get().ansiEnabled());
     VarkaHarnessPlans.Fixture fixture = FIXTURES.get("varka_coverage_mixed");
     withConf(conf, () -> {
+      assertTrue(bareColumn(projectionOf("SELECT rid, (b) AS c FROM t", fixture)));
+      assertFalse(bareColumn(projectionOf("SELECT rid, (NOT b) AS c FROM t", fixture)));
+      assertFalse(bareColumn(projectionOf("SELECT rid, (b <=> b2) AS c FROM t", fixture)));
       assertTrue(folded(projectionOf("SELECT rid, (rid IS NULL) AS c FROM t", fixture)));
       assertFalse(folded(projectionOf("SELECT rid, (d < d2) AS c FROM t", fixture)));
       return null;

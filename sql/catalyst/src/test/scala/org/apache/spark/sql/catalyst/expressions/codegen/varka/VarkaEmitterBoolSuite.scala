@@ -467,10 +467,19 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       Seq(new BoolNullSafeEq(x, y), new CondIf(x, y, z), new CondIf(new IsNotNull(x), x, y),
         new CondConst(Truth.TRUE, x.laneType()), new CondConst(Truth.FALSE, x.laneType()))
 
+  /**
+   * `CASE WHEN x THEN y END`: a choice whose missing ELSE is a null constant. It is unknown from
+   * valid inputs, which makes its whole kernel masked-only, so it is swept alone rather than in
+   * a group of [[boolForms]] whose dense body it would take away.
+   */
+  private def nullElse(x: Cond, y: Cond): Cond =
+    new CondIf(x, y, new CondConst(Truth.NULL, x.laneType()))
+
   test("a boolean output over every leaf state, in both bodies, both writers and every width") {
     for (forms <- boolForms(b0, b1, b2).grouped(5)) {
       sweep(forms.map(out), 3, "boolean outputs", writerWidths)
     }
+    sweep(Seq(out(nullElse(b0, b1))), 3, "a boolean output with a null ELSE", writerWidths)
     // A comparison of two values, beside its own condition read as a filter root would be: the
     // value compare's validity word is computed, not a leaf's.
     def v(c: Cond): CondValue = new CondValue(c, LaneType.INT)
@@ -481,12 +490,13 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("a boolean output on the long lane, in both bodies, both writers and every width") {
     val Seq(l0, l1, l2) = (0 until 3).map(new BoolColumn(_, LaneType.LONG))
-    val forms = boolForms(l0, l1, l2)
+    val forms = boolForms(l0, l1, l2) :+ nullElse(l0, l1)
     forms.foreach(c => assert(VarkaKernelPlan.emissionLane(out(c), VarkaEmitOptions.DEFAULTS) ===
       LaneType.LONG, c.toString))
-    for (group <- forms.grouped(5)) {
+    for (group <- forms.init.grouped(5)) {
       sweep(group.map(out), 3, "long-lane boolean outputs", writerWidths)
     }
+    sweep(Seq(out(forms.last)), 3, "a long-lane boolean output with a null ELSE", writerWidths)
   }
 
   test("a boolean output on the narrow lanes, whose bits are written at the driving lane") {
