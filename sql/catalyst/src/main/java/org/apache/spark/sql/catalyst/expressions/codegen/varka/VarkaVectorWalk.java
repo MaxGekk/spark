@@ -1961,6 +1961,13 @@ final class VarkaVectorWalk {
         cb.lstore(s.kf.get(node));
       }
       case IsNotNull n -> {
+        if (n.child() instanceof DecimalColumn c) {
+          // The decimal leaf's load and slot check, its value dropped: Spark's IS NULL reads a
+          // valid row's value and raises on a slot outside the precision (VARKA-347), so the test
+          // checks the slots in both bodies, the dense one included, where every row is valid.
+          emitValue(cb, c, dense, analysis, s, computed);
+          cb.pop();
+        }
         line(cb, analysis, node);
         if (dense) {
           // The dense body ran because every referenced input is null-free and no node makes
