@@ -148,7 +148,9 @@ nothing pays for it unless asked:
 
 The export goes where Spark's runtime options live: `JavaModuleOptions.DEFAULT_MODULE_OPTIONS`,
 the sbt test `javaOptions` (`project/SparkBuild.scala:347-350`), Maven's `extraJavaTestArgs`
-(`pom.xml:331`) and the census and width-audit probe forks.
+(`pom.xml:331`) and the census and width-audit probe forks. The benchmark and option-matrix
+workflows run through sbt and take the sbt options. A miss degrades silently to today's form, so
+the resolver logs once, on the driver, when the feature query is not accessible.
 
 ### 2.2 Where the fact enters
 
@@ -160,12 +162,24 @@ host (shape (a), question 3). The plan carries the record to the executors, so t
 planning and the evaluator's compile agree, which 343a's decline needs (it changes admission, not
 only bytes).
 
-A new internal conf, `spark.sql.codegen.varka.emit.hostConversions` (boolean, default true,
-`NOT_APPLICABLE` binding), turns the resolution off; the name is the lead's to settle. Every Varka
-SQL test session sets it false, so the sql suites, the reach record and the generated files
+No new conf: `spark.sql.codegen.varka.emit.useAVX` carries the choice. Its default becomes `-2`,
+"resolve from the host"; `-1` keeps today's meaning, the emitter's own default with no resolution,
+so one setting reproduces today's record on any host; `2` and up stay explicit levels. The
+resolution happens where the session's conf becomes `VarkaEmitOptions`, never in the emitter, so
+the catalyst tests, which have no session, and 502's reproduction files, which carry an explicit
+level, are untouched.
+
+Every Varka SQL test session pins `-1`, so the sql suites, the reach record and the generated files
 (`coverage.json`, `docs/sql-varka.md`) stay the same on every runner CPU: the PR Build's runners
 mix the EPYC 7763 with AVX-512 Xeons **[I]**, and a record written on one and read on another must
-not change meaning. One suite turns it on (3, test 2).
+not change meaning. The pin is explicit, not a `spark.testing` check, which would leave the
+production default unexercised outside test 3.6. It goes in `TestSQLContext.overrideConfs`, which
+reaches every `SharedSparkSession` suite, and in each test helper that builds its own session:
+`VarkaSharedSessions`, `VarkaArrowSessions`, `VarkaAutoRegistrationSuite`,
+`VarkaFallbackReasonSuite`, `VarkaSizeLadderJitProbe` and `CaseWhenInliningProbe` (from a grep of
+`SparkSession.builder` and `newSession()` over the sql/core and sql/hive test trees; sql/hive
+builds no Varka session). The benchmarks keep the default, since they measure what a user gets,
+and an A/B sets the level explicitly as it does today. One suite leaves the default on (3, test 2).
 
 Consequences, stated in the conf's doc: on a mixed cluster the driver's host decides, and both
 forms are correct; an explicit `useAVX` wins over the host; on the laptop and the Neoverse N2
@@ -209,7 +223,7 @@ None of them needs a new predicate: each needs the existing one fed the host. Ea
    true, empty false, on a non-x86 `os.arch` false; and the reflective read failing (a JVM without
    the export) answers false. On x86 the real read returns a non-empty string, as the shape-cache
    test asks of `HOST_USE_AVX`.
-2. **The session.** `VarkaSessionEmit.of` with `hostConversions` on and a fallback host gives
+2. **The session.** `VarkaSessionEmit.of` with the default level and a fallback host gives
    `useAVX = 2`; off, or with an explicit level, gives what it does today; a fallback host is
    planted through a test seam, not the JVM. A `VarkaEvaluatorComponentsSuite` case: a constant
    `BIGINT` division planned and run under the planted host emits the magic form on driver and
@@ -220,13 +234,13 @@ None of them needs a new predicate: each needs the existing one fed the host. Ea
 4. **The census test** of 2.4, at the host's flags and under `-XX:UseAVX=2`.
 5. **The width audit** passes on the laptop and the EPYC 7763 with the new key, and fails when the
    key is planted wrong (a fallback host reported as converting).
-6. **The real path, nothing planted.** One sql test with `hostConversions` on: the session's
+6. **The real path, nothing planted.** One sql test at the default level: the session's
    options answer `convertsFallBack()` as `VarkaHostIsa.conversionsFallBack()` does on the running
    JVM, and a constant `BIGINT` division planned and run through the session matches the reference.
    It passes on every CPU and runs the real export, the reflective read and `of(conf)` on whatever
    runner the Build draws: the magic form on an EPYC 7763, the conversion form on an AVX-512 host.
 7. **Unchanged.** `VarkaEmittedBytesSuite`, `width_audit.json`, `operator_census.json`'s verdicts,
-   `coverage.json` and the shape-cache test, with the config audit suite for the new conf.
+   `coverage.json` and the shape-cache test, with the config audit suite for the conf's new default.
 
 ## 4. Predictions and costs
 
@@ -255,7 +269,8 @@ None of them needs a new predicate: each needs the existing one fed the host. Ea
 | file | what |
 |---|---|
 | `varka/VarkaHostIsa.java` | the fact, 2.1 |
-| `sql/core/.../VarkaSessionEmit.java`, `SQLConf.scala` | the resolution and its conf, 2.2 |
+| `sql/core/.../VarkaSessionEmit.java`, `SQLConf.scala` | the resolution and the `-2` default of `emit.useAVX`, 2.2 |
+| `TestSQLContext.scala` and the six session helpers of 2.2 | the test pin at `-1` |
 | `launcher/.../JavaModuleOptions.java`, `project/SparkBuild.scala`, `pom.xml` | the export |
 | `varka/VarkaEmitOptions.java`, `varka/VarkaDivisionLowering.java` | javadocs only |
 | `VarkaWidthAuditSuite.scala`, `VarkaWidthAuditProbe.scala` | 2.3 |
@@ -293,13 +308,21 @@ runner files of the census, regenerated by their own workflow when 343 adds its 
 4. **This row before 343a's code.** **Recommended: yes**: 343a's decline is dead in production
    without it, and this row is two days against 343a's five.
 
+*The owner approved the plan on 31 October 2026 and had the advisor settle its questions:* all four
+recommendations stand. Question 1's gate is literal: the default flips only if step 1's EPYC pair
+shows the magic form beating the fallback at both widths. Question 2 (a) was checked against the
+JDK 25 source: `VectorSupport.getCPUFeatures()` returns `VM_Version::features_string()`
+(`vectorSupport.cpp:617-623`), which is built (`vm_version_x86.cpp:1104-1111`) after `UseAVX < 3`
+clears the AVX-512 bits (`:996-1000`); its names are separated by `", "` and DQ is `avx512dq`.
+
 ## 8. Done when
 
 On a host without AVX512DQ, a session that sets no level takes the magic form of the 64-bit
 constant division, read from the JVM's features (or, under question 1 (b), the predicate and the
 three plans say what it means); the planted AVX-512 host without DQ takes it too; test 3.6 passes
-on the PR Build's runners with nothing planted; the census test passes on the laptop at both flag
-sets, on the EPYC 7763 and on the Neoverse N2; prediction 1 is
+on the PR Build's runners with nothing planted; the census test passes on the EPYC 7763 and on
+the Neoverse N2 on CI, and on the laptop at both flag sets, because the laptop's Ryzen AI 9 HX 370
+is the project's only host with AVX512DQ (the EPYC 7763 is Zen 3, the N2 is Arm); prediction 1 is
 scored from a committed file; `emitted_bytes.json`, `width_audit.json` and `coverage.json` are
 unchanged; the PR Build and the option matrix pass.
 
@@ -307,13 +330,13 @@ unchanged; the PR Build and the option matrix pass.
 
 ## 10. Open points for the lead
 
-1. **One place for the Varka SQL test sessions' conf.** 2.2 needs every Varka SQL test session to
-   set `hostConversions` false. Whether one shared trait or `SharedSparkSession` conf reaches them
-   all was not checked; if not, the build lists the suites, or the resolution defaults off in tests
-   by `spark.testing`.
+1. **One place for the Varka SQL test sessions' conf.** Settled in 2.2: `TestSQLContext` plus the
+   six helpers that build their own session.
 2. **The runners' CPU mix** (2.2) is taken from row 516's draws, not re-read here.
-3. **The conf's name** and whether it is a new conf at all, against a value of `emit.useAVX`.
+3. **The conf's name.** Settled in 2.2: no new conf, a `-2` default of `emit.useAVX`.
 4. **Step 1's vehicle.** `benchmark.yml` measures `VarkaTimeBenchmark`'s two kernel arms. Row 121's
    unrun second arm, the `TIME` surface with `emit.useAVX=2` through `varka-surface-benchmark.yml`
    (its `extra-confs` input, line 109), would score the same prediction end to end against
    `VARKA-121.md` 5.1's file. The kernel pair is cheaper; the surface arm is the user's view.
+   Settled: the kernel pair in `benchmark.yml`, which scores prediction 1 directly; the surface arm
+   stays row 121's.
