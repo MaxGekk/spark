@@ -58,6 +58,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.package$;
@@ -1177,13 +1178,22 @@ public final class VarkaExpressionCompiler {
   /**
    * An output root: {@code VarkaNodeCompiler.compileNode} over the expression, or over its
    * replacement where it is a {@code RuntimeReplaceable}.
+   *
+   * <p>A {@code BOOLEAN} root is compiled as a condition and written as a {@link BoolOutput}
+   * (`VARKA-27.md` 2.3), so every predicate a filter fuses is also an output, with the
+   * condition's own decline reason where it does not. A bare boolean column never reaches here:
+   * {@code classify} forwards it first.
    */
   private static Optional<VarkaVectorIR> compileRoot(
       Expression expr, VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
-    return switch (expr) {
-      case RuntimeReplaceable r -> compileRoot(r.replacement(), inputs, literals, sink);
-      default -> VarkaNodeCompiler.compileNode(expr, inputs, literals, sink);
-    };
+    if (expr instanceof RuntimeReplaceable r) {
+      return compileRoot(r.replacement(), inputs, literals, sink);
+    }
+    if (expr.dataType().equals(DataTypes.BooleanType)) {
+      return VarkaConditionCompiler.compileCond(expr, inputs, literals, sink)
+          .map(BoolOutput::new);
+    }
+    return VarkaNodeCompiler.compileNode(expr, inputs, literals, sink);
   }
 
   /**
