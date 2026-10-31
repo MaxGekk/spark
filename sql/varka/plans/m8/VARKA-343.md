@@ -362,9 +362,9 @@ The `DATE` pairs follow 333 in either.
 
 1. **The baseline**, its own pull request on the unchanged code:
    `VarkaFloatingCastBaselineBenchmark` over `CAST(l AS FLOAT)`, `CAST(l AS DOUBLE)`,
-   `CAST(i AS DOUBLE)`, `CAST(x AS INT)` in LEGACY and ANSI, `try_cast(x AS BIGINT)`,
-   `CAST(x AS FLOAT)`, `CAST(x AS BOOLEAN)` under a filter and `time_from_seconds(x)`, with and
-   without nulls; its fuse check behind a property, which 377's class gains too.
+   `CAST(i AS DOUBLE)`, `CAST(w AS INT)` in LEGACY, `CAST(x AS INT)` in ANSI,
+   `try_cast(w AS BIGINT)`, `CAST(x AS FLOAT)`, `coalesce(CAST(x AS BOOLEAN), false)` under a
+   filter and `time_from_seconds(s)`, with and without nulls, under the shared fuse check.
    *31 October 2026, as built:* the fuse check is the per-section one row 342's baseline built
    (`VarkaSqlBenchmarkBase.requireBaseline`, lifted by `-Dvarka.baseline.fuseCheck=false`),
    which 377's class already has, so this step adds none. The `try_cast` reads its own column

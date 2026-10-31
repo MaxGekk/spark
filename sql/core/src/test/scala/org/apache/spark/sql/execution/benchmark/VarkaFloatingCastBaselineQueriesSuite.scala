@@ -114,10 +114,17 @@ class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSe
           s"""select count_if(isnan(w) and cast(w as int) = 0),
              |       count_if(w = $inf and cast(w as int) = ${Int.MaxValue}),
              |       count_if(w = -$inf and cast(w as int) = ${Int.MinValue}),
-             |       count_if(w > power(2, 31) and cast(w as int) = ${Int.MaxValue})
+             |       count_if(w >= power(2, 31) and w < $inf),
+             |       count_if(w >= power(2, 31) and w < $inf and cast(w as int) = ${Int.MaxValue}),
+             |       count_if(w < -power(2, 31) and w > -$inf),
+             |       count_if(w < -power(2, 31) and w > -$inf and cast(w as int) = ${Int.MinValue})
              |from $view""".stripMargin).head()
         assert(legacy.getLong(0) === rows / 1000 && legacy.getLong(1) === rows / 1000)
-        assert(legacy.getLong(2) === rows / 1000 && legacy.getLong(3) > 0)
+        assert(legacy.getLong(2) === rows / 1000)
+        // Every finite value past the int range saturates, and about three in seven of the rows
+        // are past it on each side, so the infinities alone cannot meet the check.
+        assert(legacy.getLong(3) > rows / 4 && legacy.getLong(4) === legacy.getLong(3))
+        assert(legacy.getLong(5) > rows / 4 && legacy.getLong(6) === legacy.getLong(5))
       }
 
       val sections = VarkaFloatingCastBaselineBenchmark.sections().asScala.toSeq
