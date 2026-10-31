@@ -39,6 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -724,6 +725,7 @@ final class Analysis {
         case Least n -> { }
         case IfElse n -> { }
         case CondValue n -> { }
+        case BoolOutput n -> { }
         case DayOfWeek n -> { }
         case WeekDay n -> { }
         case DayOfWeekIso n -> { }
@@ -835,7 +837,7 @@ final class Analysis {
           DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
           BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolColumn _, BoolCompare _,
           CondIf _, BoolNullSafeEq _, CondConst _, And _, Or _, Not _, IsNotNull _,
-          InRanges _, CondValue _ -> false;
+          InRanges _, CondValue _, BoolOutput _ -> false;
     };
   }
 
@@ -1061,7 +1063,10 @@ final class Analysis {
    * destination with no scratch. A tree that mixes the two - {@code datediff(greatest(d, d2),
    * greatest(d3, d4))} - needs a second live intermediate, and is declined rather than
    * served: it keeps its per-group write and its word, which is today's path and always
-   * right. {@code Cond} roots are not values and are never served.
+   * right. A root that writes bitmaps ({@link VarkaVectorIR#writesBitmaps}) is never served: a
+   * {@code Cond} root is not a value, and a {@code BoolOutput} root's validity is its condition's
+   * known word {@code kt | kf}, a function of the operands' values, so no boolean root has a pure
+   * word (`VARKA-27.md` 2.1).
    */
   void planBitmapPass(List<VarkaVectorIR> outputs) {
     served = new BitmapPass[outputs.size()];
@@ -1070,7 +1075,7 @@ final class Analysis {
     }
     for (int o = 0; o < outputs.size(); o++) {
       VarkaVectorIR root = outputs.get(o);
-      if (root instanceof Cond) {
+      if (VarkaVectorIR.writesBitmaps(root)) {
         continue;
       }
       WordExpr pure = pureWord.get(root);
@@ -1186,6 +1191,9 @@ final class Analysis {
       // The condition's known words, kt | kf: a function of the condition's operands' values,
       // not of their bitmaps alone.
       case CondValue n -> null;
+      // A boolean output's validity is the same kt | kf, so it has no pure word either
+      // (`VARKA-27.md` 2.1): no boolean root has a pure word.
+      case BoolOutput n -> null;
       case MakeDate n -> null;
       // A condition has no validity word; its known-true and known-false words are its own.
       case Compare _, NullSafeEqual _, CondConst _, BoolCompare _, CondIf _, BoolNullSafeEq _,
@@ -1449,6 +1457,10 @@ final class Analysis {
       // condition's own flag (And, Or, the null-safe equality, the null test, CondIf), and so is
       // a null from valid inputs (CondConst(NULL)).
       case CondValue n -> analyzeOp(node, false, n.cond());
+      // Analyzed as CondValue: null where the condition is unknown, its flags the condition's,
+      // so a CondConst(NULL) under it keeps the kernel masked-only. The all-null shortcut
+      // excludes it outright (VarkaBodyEmitter.shortcutApplies), not through the flag.
+      case BoolOutput n -> analyzeOp(node, false, n.cond());
       case Compare n -> analyzeOp(node, false, n.left(), n.right());
       // A known answer from a null input (two nulls are equal), the flag IfElse and the picks
       // set; shortcutApplies excludes a condition root, so no shortcut changes.
@@ -1533,8 +1545,14 @@ final class Analysis {
       if (child instanceof Cond && !(node instanceof IfElse) && !(node instanceof And)
           && !(node instanceof Or) && !(node instanceof Not) && !(node instanceof IsNotNull)
           && !(node instanceof BoolCompare) && !(node instanceof CondIf)
-          && !(node instanceof BoolNullSafeEq) && !(node instanceof CondValue)) {
+          && !(node instanceof BoolNullSafeEq) && !(node instanceof CondValue)
+          && !(node instanceof BoolOutput)) {
         requireValue(child, "child of " + node.getClass().getSimpleName());
+      }
+      // A boolean output writes the output's two bitmaps itself, so it is a root or nothing.
+      if (child instanceof BoolOutput) {
+        throw VarkaErrors.illegalArgument("a boolean output below a root, under "
+            + node.getClass().getSimpleName() + ": " + child);
       }
       analyze(child);
       set |= columns.get(child);

@@ -187,6 +187,10 @@ public final class VarkaReference {
         case FALSE -> OptionalInt.of(0);
         case UNKNOWN -> OptionalInt.empty();
       };
+      // Two bitmaps, not a lane value: a test answers it by cond(), its data bit the known-true
+      // and its validity bit the known.
+      case BoolOutput n -> throw new IllegalArgumentException(
+          "boolean output " + n + " evaluated as a value; answer its condition");
       case Cond c -> throw new IllegalArgumentException("condition " + c + " evaluated as a value");
     };
   }
@@ -478,6 +482,8 @@ public final class VarkaReference {
         case FALSE -> OptionalLong.of(0);
         case UNKNOWN -> OptionalLong.empty();
       };
+      case BoolOutput n -> throw new IllegalArgumentException(
+          "boolean output " + n + " evaluated as a value; answer its condition");
       case BoundedDivide n -> throw new IllegalArgumentException(
           "a bounded division is an int-lane node: " + n);
       // Java's long operators: the shifts mask their count to six bits.

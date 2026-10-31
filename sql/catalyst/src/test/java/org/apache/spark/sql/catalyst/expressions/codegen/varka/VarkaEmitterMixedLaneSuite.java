@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
@@ -292,6 +293,36 @@ public final class VarkaEmitterMixedLaneSuite {
         false);
     check("i < l OR i2 IS NOT NULL", List.of(new Or(lt, new IsNotNull(new ColumnRef(2,
         LaneType.LONG)))), 3, new int[0], new long[0], VarkaEmitterMixedLaneSuite::value, false);
+  }
+
+  @Test
+  @DisplayName("a boolean output in a kernel of both lanes, its bits written at the long lane by "
+      + "each writer")
+  void booleanOutputs() {
+    // VARKA-27: a condition written as a BOOLEAN column in a kernel that converts between
+    // lanes, whose epilogue is the mixed one (`emitMixedEpilogue`): a long comparison over a
+    // widened int, a disjunction with a long null test, an int comparison over a narrowed long,
+    // and a boolean output beside a value output over the same condition.
+    var lt = new Compare(CompareOp.LT, widen(I), L);
+    var narrowEq = new Compare(CompareOp.EQ, narrow(L), I);
+    List<UnaryOperator<VarkaEmitOptions>> writers = List.of(o -> o,
+        o -> o.toBuilder().validityByWord(true).build(),
+        o -> o.toBuilder().validityByWord(true).denseValidityOnce(false).build(),
+        o -> o.toBuilder().driverOutputTable(false).denseValidityOnce(false).build());
+    for (var writer : writers) {
+      check("i < l as a boolean output", List.of(new BoolOutput(lt)), 2, new int[0],
+          new long[0], VarkaEmitterMixedLaneSuite::value, false, null, writer);
+      check("i < l OR i2 IS NOT NULL as a boolean output", List.of(new BoolOutput(new Or(lt,
+          new IsNotNull(new ColumnRef(2, LaneType.LONG))))), 3, new int[0], new long[0],
+          VarkaEmitterMixedLaneSuite::value, false, null, writer);
+      check("CAST(l AS INT) = i as a boolean output", List.of(new BoolOutput(narrowEq)), 2,
+          new int[0], new long[0], VarkaEmitterMixedLaneSuite::value, false, null, writer);
+      check("i < l beside CASE WHEN i < l THEN i ELSE l END", List.of(new BoolOutput(lt),
+          new IfElse(lt, widen(I), L)), 2, new int[0], new long[0],
+          VarkaEmitterMixedLaneSuite::value, false, null, writer);
+    }
+    assertEquals(LaneType.LONG, VarkaKernelPlan.emissionLane(new BoolOutput(narrowEq),
+        VarkaEmitOptions.DEFAULTS));
   }
 
   @Test
