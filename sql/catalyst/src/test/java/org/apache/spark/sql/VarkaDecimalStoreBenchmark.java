@@ -68,9 +68,9 @@ import static org.apache.spark.sql.catalyst.util.DateTimeConstants.SECONDS_PER_M
  *   <li><b>the {@code BIGINT} store</b>, the control: the value's eight bytes a row, which is what
  *     the long lane writes for any long output;
  *   <li><b>the {@code BIGINT} store, then the scalar widening</b>: the same kernel, then {@link
- *     #widen} writing {@code u} and {@code u >> 63} into a {@link DecimalVector}'s data buffer,
- *     the kernel having written the validity into the vector's own validity buffer. This is the
- *     baseline the store has to beat.
+ *     Buffers#widen} writing {@code u} and {@code u >> 63} into a {@link DecimalVector}'s data
+ *     buffer, the kernel having written the validity into the vector's own validity buffer. This
+ *     is the baseline the store has to beat.
  * </ul>
  * The store's own arms, one per arm of its {@code decimalStore} option, join these with 157b.
  *
@@ -107,15 +107,17 @@ import static org.apache.spark.sql.catalyst.util.DateTimeConstants.SECONDS_PER_M
  *
  * <p><b>Compiled code first.</b> Every arm is driven at its own turn, just before it is timed, at
  * least eight times with C2 idle after each drive, until two drives take the same time, every
- * dense loop method of its kernel is C2 code and, for the widening arm, {@link #widen} is too
- * (row 407's rule, {@code VARKA-347.md} 0, item 13). Both are read through {@link
+ * dense loop method of its kernel is C2 code and, for the widening arm, {@link Buffers#widen} is
+ * too (row 407's rule, {@code VARKA-347.md} 0, item 13). Both are read through {@link
  * VarkaTierWitness}, which tells an on-stack replacement from a method's own version and sees a
  * method C2 inlined into a caller, which has no code of its own in {@code Compiler.codelist}. Its
- * JFR recording runs from before the first kernel call and is paused while an arm is timed, and
- * between an arm's timing and the next arm's turn; a compile that finishes while it is paused is
- * not counted, which can only make an arm read as unsettled. Its tier state is written as a line
- * beside its table; an arm that does not settle in 60 seconds, or whose recording does not
- * deliver in time on a loaded machine, says so in a note and is timed as it is.
+ * one JFR recording runs from before the first kernel call to the end of the run, timed arms
+ * included, so that it misses no compile of the kernels and the widening, which every rung
+ * reuses. Between events its steady-state cost is JFR's flush thread, which wakes about once a
+ * second; the compiles and inlining decisions it records are made during the warm-up, not while
+ * an arm is timed. Each arm's tier state is written as one line after its table; an arm that
+ * does not settle in 60 seconds, or whose recording does not deliver in time on a loaded
+ * machine, says so there and is timed as it is.
  *
  * <pre>
  *   build/sbt "catalyst/Test/runMain org.apache.spark.sql.VarkaDecimalStoreBenchmark"
@@ -138,12 +140,24 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
   private record Arm(String label, VarkaFusedKernel kernel, boolean widens) { }
 
   /**
-   * How an arm's warm-up ended, written beside its number: the dense loops' levels, which decide
-   * it, and every compiled method of the kernel class with its level, which shows a loop C2
-   * inlined into its caller (no version of its own, the caller at level 4).
+   * One read of the tier state, from one snapshot of the code list: whether each dense loop of
+   * the kernel is C2 code and whether {@link Buffers#widen} is, as the tier witness reads them,
+   * and every compiled method of the kernel class with its level, which shows a loop C2 inlined
+   * into its caller (no version of its own, the caller at level 4).
    */
-  private record TierState(boolean settled, int drives, Map<String, Integer> loopLevels,
-      Map<String, Integer> kernelLevels, int widenLevel) { }
+  private record Tiers(Map<String, Boolean> loopsC2, boolean widenC2,
+      Map<String, Integer> kernelLevels) {
+
+    boolean c2() {
+      return !loopsC2.isEmpty() && !loopsC2.containsValue(false) && widenC2;
+    }
+  }
+
+  /**
+   * How an arm's warm-up ended, written beside its number: whether it settled, after how many
+   * drives, its last tiers read, and for an arm that did not settle, why, in one clause.
+   */
+  private record TierState(boolean settled, int drives, Tiers tiers, String why) { }
 
   /**
    * The ladder. The widening arm, the larger, touches the column's 8 bytes a row, the long
@@ -242,23 +256,6 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
   }
 
   // ---------------------------------------------------------------------------------------
-  // The scalar widening, the baseline arm's second pass
-  // ---------------------------------------------------------------------------------------
-
-  /**
-   * Writes each of {@code numRows} longs of {@code src} into the sixteen-byte slots of {@code
-   * slots}: the value at {@code 16 i} and its sign extension at {@code 16 i + 8}, little-endian,
-   * which is what {@code DecimalVector.set(int, long)} writes into a slot.
-   */
-  static void widen(MemorySegment src, MemorySegment slots, int numRows) {
-    for (int i = 0; i < numRows; i++) {
-      long u = src.get(ValueLayout.JAVA_LONG_UNALIGNED, i * 8L);
-      slots.set(ValueLayout.JAVA_LONG_UNALIGNED, i * 16L, u);
-      slots.set(ValueLayout.JAVA_LONG_UNALIGNED, i * 16L + 8, u >> 63);
-    }
-  }
-
-  // ---------------------------------------------------------------------------------------
   // Emitting the kernels
   // ---------------------------------------------------------------------------------------
 
@@ -300,7 +297,7 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
           witness.watch(arm.kernel().getClass().getName());
         }
       }
-      witness.watch(VarkaDecimalStoreBenchmark.class.getName());
+      witness.watch(Buffers.class.getName());
       section("decimal outputs before the widening store", () -> {
         for (Rung rung : LADDER) {
           runRung(rung, shapes, arms);
@@ -337,6 +334,22 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
       }
       if (slots != null) {
         widen(longs, slots, numRows);
+      }
+    }
+
+    /**
+     * The scalar widening, the baseline arm's second pass: writes each of {@code numRows} longs
+     * of {@code src} into the sixteen-byte slots of {@code slots}, the value at {@code 16 i} and
+     * its sign extension at {@code 16 i + 8}, little-endian, which is what {@code
+     * DecimalVector.set(int, long)} writes into a slot. It is a member of this class, the class
+     * of its callers, because the tier witness credits a method C2 inlined into a caller only
+     * when the two are of the same class.
+     */
+    static void widen(MemorySegment src, MemorySegment slots, int numRows) {
+      for (int i = 0; i < numRows; i++) {
+        long u = src.get(ValueLayout.JAVA_LONG_UNALIGNED, i * 8L);
+        slots.set(ValueLayout.JAVA_LONG_UNALIGNED, i * 16L, u);
+        slots.set(ValueLayout.JAVA_LONG_UNALIGNED, i * 16L + 8, u >> 63);
       }
     }
 
@@ -440,22 +453,15 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
 
   /**
    * An arm's turn before it is timed: its outputs poisoned, its first call checked, the drives to
-   * C2 code with the witness recording, and the check of the compiled code once the recording is
-   * paused again. Returns its tier state, for the note beside the table.
+   * C2 code, and the check of the compiled code. Returns its tier state, for the note beside the
+   * table.
    */
   private String prepare(String label, Buffers b, long[] expected, DecimalVector vector,
       boolean widens, int reps) {
-    var witness = VarkaTierWitness.get();
-    TierState t;
-    witness.resume();
-    try {
-      b.poison();
-      b.runOnce();
-      check(label + " (first call)", b, expected, vector);
-      t = driveToCompiledCode(label, b, reps, widens);
-    } finally {
-      witness.pause();
-    }
+    b.poison();
+    b.runOnce();
+    check(label + " (first call)", b, expected, vector);
+    TierState t = driveToCompiledCode(b, reps, widens);
     check(label + " (compiled)", b, expected, vector);
     return describe(t, widens);
   }
@@ -499,33 +505,53 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
   // ---------------------------------------------------------------------------------------
 
   /**
-   * Each method of {@code className} that has compiled code in use, with its highest level, as
-   * the code list shows it now: for the note, where it shows how C2 laid the kernel out. An
-   * on-stack-replacement version is not told from a standard one here, and a method C2 inlined
-   * into its caller has no version of its own, so a missing method can mean inlined.
+   * The tiers now, from one read of the code list. The loops and the widening are read through
+   * the tier witness: a {@link VarkaTierWitness.Decision} over that read, confirmed against
+   * every compile the recording has delivered, counts a method as C2 code only for a level-4
+   * version of its own that is not an on-stack replacement, or a level-4 caller of its class it
+   * was inlined into. Each loop gets its own decision, so the note can name the one that is not
+   * C2 code. Read after {@link VarkaTierWitness#settle}, so a version compiled before it is known.
    */
-  private static Map<String, Integer> codeLevels(String className) {
-    var levels = new TreeMap<String, Integer>();
-    for (VarkaTierWitness.CodeEntry e : VarkaTierWitness.parse(
-        VarkaTierWitness.readCodeList(), className)) {
+  private static Tiers readTiers(VarkaTierWitness witness, Class<?> kernelClass, Set<String> loops,
+      boolean widens) {
+    String codeList = VarkaTierWitness.readCodeList();
+    var kernelCode = VarkaTierWitness.parse(codeList, kernelClass.getName());
+    var loopsC2 = new TreeMap<String, Boolean>();
+    for (String loop : loops) {
+      loopsC2.put(loop,
+          witness.confirmed(new VarkaTierWitness.Decision(kernelCode, Set.of(loop), true)));
+    }
+    boolean widenC2 = !widens || witness.confirmed(new VarkaTierWitness.Decision(
+        VarkaTierWitness.parse(codeList, Buffers.class.getName()), Set.of("widen"), true));
+    // Each method of the kernel class with compiled code in use, at its highest level, for the
+    // note: an on-stack-replacement version is not told from a standard one here, and a method
+    // C2 inlined into its caller has no version of its own, so a missing method can mean inlined.
+    var kernelLevels = new TreeMap<String, Integer>();
+    for (VarkaTierWitness.CodeEntry e : kernelCode) {
       if (e.inUse()) {
-        levels.merge(e.method(), e.level(), Math::max);
+        kernelLevels.merge(e.method(), e.level(), Math::max);
       }
     }
-    return levels;
+    return new Tiers(loopsC2, widenC2, kernelLevels);
   }
 
   /**
    * Waits up to {@link #SETTLE_WAIT_MILLIS} for the tier witness's recording to deliver what the
-   * drives compiled. False where it did not, which a loaded runner can reach: the arm is then
-   * not settled, and is timed as it is rather than failing the run.
+   * drives compiled. False where it did not deliver in time, which a loaded runner can reach:
+   * the arm is then not settled, and is timed as it is rather than failing the run. Any other
+   * failure of the witness propagates, an interrupt among them: the witness has already
+   * restored the thread's interrupt flag before it throws.
    */
   private static boolean settled(VarkaTierWitness witness) {
     try {
       witness.settle(SETTLE_WAIT_MILLIS);
       return true;
     } catch (IllegalStateException e) {
-      return false;
+      // VarkaTierWitness.waitUntil's message for a timeout, its one recoverable failure.
+      if (e.getMessage() != null && e.getMessage().contains("did not deliver")) {
+        return false;
+      }
+      throw e;
     }
   }
 
@@ -533,15 +559,14 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
    * Drives an arm until the timed run will measure C2's code: at least {@link #MIN_WARM_DRIVES}
    * drives, C2 idle after the last, the last two drives within {@link #STEADY_FRACTION} of each
    * other, and then, read by the tier witness once its recording has caught up, every dense loop
-   * method of the kernel C2 code and, for the widening arm, {@link #widen} too: a level-4
-   * version of its own that is not an on-stack replacement, or inlined into a level-4 caller of
-   * its own class. The code list alone cannot tell either: a loop whose code was thrown away and
-   * that C2 then compiled only inside its caller has no version of its own, which the past-L3
-   * rung showed on five of six arms in a first laptop run. Bounded by {@link #WARM_WAIT_MILLIS};
-   * an arm that does not settle, or whose recording does not deliver in time, says so in a note
-   * and is timed as it is.
+   * method of the kernel C2 code and, for the widening arm, {@link Buffers#widen} too. The code
+   * list alone cannot tell either: a loop whose code was thrown away and that C2 then compiled
+   * only inside its caller has no version of its own, which the past-L3 rung showed on five of
+   * six arms in a first laptop run. Bounded by {@link #WARM_WAIT_MILLIS}; an arm that does not
+   * settle, or whose recording does not deliver in time, says why in its tier state, and is
+   * timed as it is.
    */
-  private TierState driveToCompiledCode(String label, Buffers b, int reps, boolean widens) {
+  private TierState driveToCompiledCode(Buffers b, int reps, boolean widens) {
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WARM_WAIT_MILLIS);
     Class<?> kernelClass = b.kernel().getClass();
     Set<String> loops = VarkaEmitterTestSupport.loopLevels(kernelClass).keySet();
@@ -555,48 +580,44 @@ public class VarkaDecimalStoreBenchmark extends VarkaBenchmarkBase {
       drives++;
       boolean idle = VarkaEmitterTestSupport.awaitC2Idle(IDLE_WAIT_MILLIS);
       boolean steady = previous > 0 && Math.abs(took - previous) <= previous * STEADY_FRACTION;
+      // Whether this drive waited for the recording, and whether it delivered: a wait that has
+      // just timed out is not repeated at the deadline.
+      boolean waited = false;
       boolean delivered = false;
+      Tiers tiers = null;
       if (drives >= MIN_WARM_DRIVES && idle && steady) {
         // A second or so for the recording to deliver what the drives compiled, paid only once
         // the cheap conditions hold.
+        waited = true;
         delivered = settled(witness);
         if (delivered) {
-          var levels = witness.levelsNow(kernelClass.getName(), loops);
-          int widenLevel = widenLevel(witness, widens);
-          if (VarkaEmitterTestSupport.allLoopsC2(levels) && widenLevel == 4) {
-            return new TierState(true, drives, levels, codeLevels(kernelClass.getName()),
-                widenLevel);
+          tiers = readTiers(witness, kernelClass, loops, widens);
+          if (tiers.c2()) {
+            return new TierState(true, drives, tiers, "");
           }
         }
       }
       if (System.nanoTime() > deadline) {
-        if (!delivered) {
+        if (!waited) {
           delivered = settled(witness);
         }
-        note("VarkaDecimalStoreBenchmark: " + label + " at " + b.numRows() + " rows is not "
-            + "settled after " + WARM_WAIT_MILLIS + " ms (the last drive "
+        if (tiers == null) {
+          tiers = readTiers(witness, kernelClass, loops, widens);
+        }
+        String why = " after " + WARM_WAIT_MILLIS + " ms (the last drive "
             + TimeUnit.NANOSECONDS.toMicros(took) + " us after "
             + TimeUnit.NANOSECONDS.toMicros(previous) + " us, C2 " + (idle ? "idle" : "busy")
-            + (delivered ? "" : ", the tier witness's recording behind") + "); it is timed as"
-            + " it is");
-        return new TierState(false, drives, witness.levelsNow(kernelClass.getName(), loops),
-            codeLevels(kernelClass.getName()), widenLevel(witness, widens));
+            + (delivered ? "" : ", the tier witness's recording behind") + "; timed as it is)";
+        return new TierState(false, drives, tiers, why);
       }
       previous = took;
     }
   }
 
-  /** {@link #widen}'s level as the witness reads it, or 4 for an arm that does not widen. */
-  private static int widenLevel(VarkaTierWitness witness, boolean widens) {
-    return widens
-        ? witness.levelsNow(VarkaDecimalStoreBenchmark.class.getName(), Set.of("widen"))
-            .get("widen")
-        : 4;
-  }
-
   private static String describe(TierState t, boolean widens) {
-    return (t.settled() ? "settled" : "not settled") + " after " + t.drives() + " drives, loop "
-        + "levels " + t.loopLevels() + (widens ? ", widen level " + t.widenLevel() : "")
-        + ", kernel code " + t.kernelLevels();
+    Tiers tiers = t.tiers();
+    return (t.settled() ? "settled" : "not settled" + t.why()) + " after " + t.drives()
+        + " drives, loops C2 " + tiers.loopsC2() + (widens ? ", widen C2 " + tiers.widenC2() : "")
+        + ", kernel code " + tiers.kernelLevels();
   }
 }

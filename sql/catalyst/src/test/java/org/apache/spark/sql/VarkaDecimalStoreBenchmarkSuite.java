@@ -21,7 +21,6 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -62,8 +61,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @VarkaSuite(ownJvm = true)
 public final class VarkaDecimalStoreBenchmarkSuite {
 
-  /** The byte the validity buffer is filled with before a kernel writes it. */
-  private static final byte SENTINEL = (byte) 0x5A;
+  /** Bytes past the end of the validity buffer that a kernel must leave as they were. */
+  private static final int GUARD_BYTES = 64;
+  /** The byte those guard bytes hold. */
+  private static final byte GUARD = (byte) 0xC3;
 
   /** Emits {@code shape}'s kernel from the matrix's options as {@code name}. */
   private static VarkaFusedKernel emit(VarkaGeneratedClassLoader loader, String name,
@@ -133,9 +134,9 @@ public final class VarkaDecimalStoreBenchmarkSuite {
   }
 
   @Test
-  @DisplayName("with no input validity the widening arm's kernel writes its DecimalVector's "
-      + "validity all valid, in exactly (n + 7) / 8 bytes and nothing past them")
-  void validityIsAllValidInItsOwnBytes() {
+  @DisplayName("with no input validity the widening arm's kernel sets the first n bits of its "
+      + "zeroed validity buffer, leaves every other bit zero and writes nothing past it")
+  void validityIsAllValid() {
     int[] lengths = {1, 7, 8, 9, 63, 64, 65, 1000, 4097};
     var loader = new VarkaGeneratedClassLoader(getClass().getClassLoader());
     try (Arena arena = Arena.ofConfined();
@@ -147,6 +148,7 @@ public final class VarkaDecimalStoreBenchmarkSuite {
         VarkaFusedKernel kernel = emit(loader,
             "org.apache.spark.sql.varka.execution.VarkaDecimalStoreValidity" + k, shape);
         for (int n : lengths) {
+          String what = shape.name() + " over " + n + " rows";
           MemorySegment column = arena.allocate(n * 8L, 64);
           for (int i = 0; i < n; i++) {
             column.set(ValueLayout.JAVA_LONG, i * 8L, VarkaDecimalStoreBenchmark.timeOfRow(i, n));
@@ -154,26 +156,35 @@ public final class VarkaDecimalStoreBenchmarkSuite {
           MemorySegment longs = arena.allocate(n * 8L, 64);
           try (DecimalVector vector = new DecimalVector("v", allocator, 18, 0)) {
             vector.allocateNew(n);
-            long capacity = vector.getValidityBuffer().capacity();
-            MemorySegment validity =
-                VarkaSegments.map(vector.getValidityBuffer().memoryAddress(), capacity);
-            validity.fill(SENTINEL);
-            // The benchmark's widening arm: the kernel into the vector's validity buffer, with
-            // the input's validity 0L, then the widening into its data buffer.
+            // The kernel writes into a buffer of the vector's own validity capacity, zeroed as
+            // the driver zeroes a destination, with guard bytes after it. A lowering may OR its
+            // bits in or store whole words, so any write within the capacity is legal; the
+            // bits, not the bytes written, are checked, and nothing may land past the end.
+            int capacity = (int) vector.getValidityBuffer().capacity();
+            MemorySegment bitmap = arena.allocate(capacity + GUARD_BYTES, 64);
+            bitmap.asSlice(0, capacity).fill((byte) 0);
+            bitmap.asSlice(capacity).fill(GUARD);
+            // The benchmark's widening arm: the kernel, with the input's validity 0L, then the
+            // widening into the vector's data buffer.
             new VarkaDecimalStoreBenchmark.Buffers(kernel, new long[] {column.address()},
-                new long[] {longs.address()}, new long[] {validity.address()}, longs,
+                new long[] {longs.address()}, new long[] {bitmap.address()}, longs,
                 VarkaSegments.map(vector.getDataBuffer().memoryAddress(), n * 16L), n)
                 .runOnce();
-            byte[] want = new byte[(int) capacity];
-            Arrays.fill(want, SENTINEL);
-            Arrays.fill(want, 0, n / 8, (byte) 0xFF);
-            if (n % 8 != 0) {
-              want[n / 8] = (byte) ((1 << (n % 8)) - 1);
+            for (int bit = 0; bit < capacity * 8; bit++) {
+              boolean set = (bitmap.get(ValueLayout.JAVA_BYTE, bit >>> 3) >>> (bit & 7) & 1) != 0;
+              if (set != bit < n) {
+                assertEquals(bit < n, set, what + ": bit " + bit);
+              }
             }
-            assertArrayEquals(want, validity.toArray(ValueLayout.JAVA_BYTE),
-                shape.name() + " over " + n + " rows");
+            for (int i = capacity; i < capacity + GUARD_BYTES; i++) {
+              assertEquals(GUARD, bitmap.get(ValueLayout.JAVA_BYTE, i),
+                  what + ": byte " + i + ", past the validity buffer's " + capacity);
+            }
+            MemorySegment.copy(bitmap, 0,
+                VarkaSegments.map(vector.getValidityBuffer().memoryAddress(), capacity), 0,
+                capacity);
             vector.setValueCount(n);
-            assertEquals(0, vector.getNullCount(), shape.name() + " over " + n + " rows");
+            assertEquals(0, vector.getNullCount(), what);
           }
         }
       }
@@ -207,7 +218,7 @@ public final class VarkaDecimalStoreBenchmarkSuite {
       }
       widened.setValueCount(n);
       arrow.setValueCount(n);
-      VarkaDecimalStoreBenchmark.widen(longs,
+      VarkaDecimalStoreBenchmark.Buffers.widen(longs,
           VarkaSegments.map(widened.getDataBuffer().memoryAddress(), n * 16L), n);
       byte[] got = new byte[n * 16];
       byte[] want = new byte[n * 16];
