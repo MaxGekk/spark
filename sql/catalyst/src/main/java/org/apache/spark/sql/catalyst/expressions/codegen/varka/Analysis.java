@@ -338,7 +338,8 @@ final class Analysis {
     DAY_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_DAY_RANGE),
     /**
      * {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries - a
-     * value the row engine throws on, or a date column outside the column bound (VARKA-379).
+     * value the row engine throws on, or a date column outside the column bound (VARKA-379). A
+     * {@code NULL}-mode guard is not one: it nulls its lane and declines nothing.
      */
     VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE),
     /**
@@ -617,8 +618,8 @@ final class Analysis {
 
   /**
    * Whether {@code node}'s guard checks a column's stored values, null rows included: the column
-   * bound, the int-lane {@link GuardedRange} over a bare {@link ColumnRef} with the bounds
-   * {@link VarkaChrono#CONTRACT_MIN_DAYS} and {@link VarkaChrono#CONTRACT_MAX_DAYS} that
+   * bound, the int-lane {@code FAIL} {@link GuardedRange} over a bare {@link ColumnRef} with the
+   * bounds {@link VarkaChrono#CONTRACT_MIN_DAYS} and {@link VarkaChrono#CONTRACT_MAX_DAYS} that
    * {@code VarkaRangeAnalysis.guardColumns} wraps a date column in (VARKA-379). Every other guard
    * ANDs its condemning mask with the lanes' validity, so that a null lane's undefined value cannot
    * condemn the batch; this one does not, because turning the validity word into a lane mask costs
@@ -631,7 +632,8 @@ final class Analysis {
    * {@link Slots#rangeAcc}.
    */
   static boolean guardsStoredValues(VarkaVectorIR node) {
-    return node instanceof GuardedRange g && g.child() instanceof ColumnRef c
+    return node instanceof GuardedRange g && g.mode() == Overflow.FAIL
+        && g.child() instanceof ColumnRef c
         && c.lane() == VarkaVectorIR.LaneType.INT
         && g.lo() == VarkaChrono.CONTRACT_MIN_DAYS && g.hi() == VarkaChrono.CONTRACT_MAX_DAYS;
   }
@@ -711,7 +713,13 @@ final class Analysis {
           }
         }
         case GuardedDay n -> refuse(node, Refusal.DAY_RANGE);
-        case GuardedRange n -> refuse(node, Refusal.VALUE_RANGE);
+        // A NULL guard nulls the lanes outside its bounds, as a NULL IntArith does, and like it
+        // declines nothing.
+        case GuardedRange n -> {
+          if (n.mode() == Overflow.FAIL) {
+            refuse(node, Refusal.VALUE_RANGE);
+          }
+        }
         case DecimalColumn n -> refuse(node, Refusal.DECIMAL_SLOT);
         // Everything else computes every lane it is given. Written out rather than defaulted.
         case ColumnRef n -> { }
@@ -1115,7 +1123,9 @@ final class Analysis {
       case DayOfWeekIso n -> wordOwner.get(n.days());
       case ThursdayOf n -> wordOwner.get(n.days());
       case GuardedDay n -> wordOwner.get(n.days());
-      case GuardedRange n -> wordOwner.get(n.child());
+      case GuardedRange n -> n.mode() == Overflow.NULL
+          ? new WordOwner.Own(node)
+          : wordOwner.get(n.child());
       case WidenLane n -> wordOwner.get(n.child());
       case NarrowLane n -> wordOwner.get(n.child());
       case Year n -> wordOwner.get(n.days());
@@ -1175,7 +1185,8 @@ final class Analysis {
       case DayOfWeekIso n -> pureWord.get(n.days());
       case ThursdayOf n -> pureWord.get(n.days());
       case GuardedDay n -> pureWord.get(n.days());
-      case GuardedRange n -> pureWord.get(n.child());
+      // A NULL guard's word, like a NULL IntArith's, follows the values and not the bitmaps.
+      case GuardedRange n -> n.mode() == Overflow.NULL ? null : pureWord.get(n.child());
       case WidenLane n -> pureWord.get(n.child());
       case NarrowLane n -> pureWord.get(n.child());
       case Year n -> pureWord.get(n.days());
@@ -1359,7 +1370,12 @@ final class Analysis {
                 + name + " bounds: " + node);
           }
         }
+        // A NULL guard nulls a lane whose child is valid, which a dense body cannot hold: the
+        // reason nullsFromValidInputs exists, set here as a NULL IntArith sets it.
         analyzeOp(node, false, n.child());
+        if (n.mode() == Overflow.NULL) {
+          nullsFromValidInputs = true;
+        }
       }
       case Year n -> analyzeOp(node, false, n.days());
       case Month n -> analyzeOp(node, false, n.days());
