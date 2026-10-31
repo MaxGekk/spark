@@ -92,6 +92,7 @@ final class VarkaProofFiles {
     files.put("narrow_range.smt2", narrowRange());
     files.put("narrow_deferred.smt2", narrowDeferred());
     files.put("ym_divide.smt2", ymDivide());
+    files.put("decimal_slot.smt2", decimalSlot());
     files.put("refinement.smt2", VarkaRefinementFile.render());
     return files;
   }
@@ -2658,6 +2659,69 @@ final class VarkaProofFiles {
     var all = new ArrayList<>(decl);
     all.addAll(assertions);
     return all;
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The decimal leaf's digit check (VARKA-347).
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * {@code decimal_slot.smt2}: the digit check of a {@code DecimalColumn}'s load, one unsigned
+   * compare, condemns exactly the low words outside {@code [-B, B]} with {@code B = 10^p - 1},
+   * the leaf's {@link VarkaVectorIR.DecimalColumn#bound}, at every precision the leaf admits; a
+   * comparand one off either way is refuted. The identity needs no more of the bound than that
+   * it is a non-negative long, which the last check shows over a symbolic bound.
+   */
+  static String decimalSlot() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The decimal leaf's digit check (VarkaVectorWalk.emitDecimalLoad, VARKA-347). Per lane,
+        ; lo the slot's low word as a long and B = 10^p - 1 the precision's largest unscaled value
+        ; (DecimalColumn.bound), the walk condemns the lane where
+        ;
+        ;   Long.compareUnsigned(lo + B, 2 * B) > 0        LongVector.lanewise ADD, compare UGT
+        ;
+        ; in place of the two signed compares lo > B || lo < -B. Over 64-bit vectors, whose bvadd
+        ; and bvugt are Java's long + and the unsigned compare exactly: the two agree for every
+        ; long at every precision from 1 to MAX_LONG_PRECISION, and a comparand one off either way
+        ; disagrees somewhere. A lo inside [-B, B] moves to [0, 2B] without wrapping; one above B
+        ; lands past 2B, wrapping or not; one below -B wraps to at least 2^63 + B, past 2B. So the
+        ; identity holds for any bound from 0 to 2^63 - 1, which the last check states over a
+        ; symbolic B. The file declares ALL so that the prelude, which it does not use, can be
+        ; inserted.
+        """);
+    out.append(rendered("ALL"));
+    out.append("""
+
+        (define-fun dec.signed ((lo (_ BitVec 64)) (b (_ BitVec 64))) Bool
+          (or (bvsgt lo b) (bvslt lo (bvneg b))))
+        (define-fun dec.unsigned ((lo (_ BitVec 64)) (b (_ BitVec 64)) (c (_ BitVec 64))) Bool
+          (bvugt (bvadd lo b) c))
+        """);
+    String lo = "(declare-const lo (_ BitVec 64))";
+    for (int p = 1; p <= VarkaVectorIR.DecimalColumn.MAX_LONG_PRECISION; p++) {
+      long b = new VarkaVectorIR.DecimalColumn(0, VarkaVectorIR.LaneType.LONG, p).bound();
+      for (long off : new long[] {0, -1, 1}) {
+        String what = off == 0
+            ? "precision " + p + ": (lo + " + b + ") UGT " + 2 * b + " is lo outside [-" + b
+                + ", " + b + "] for every long"
+            : "and with the comparand " + (2 * b + off) + " it is not";
+        check(out, what, off == 0 ? "unsat" : "sat", List.of(lo,
+            "(assert (not (= (dec.unsigned lo " + bv64(b) + " " + bv64(2 * b + off) + ") "
+                + "(dec.signed lo " + bv64(b) + "))))"));
+      }
+    }
+    check(out, "and for every bound B from 0 to 2^63 - 1, with 2B wrapped as the code's long "
+        + "multiply wraps it", "unsat", List.of(lo, "(declare-const b (_ BitVec 64))",
+            "(assert (bvsge b #x0000000000000000))",
+            "(assert (not (= (dec.unsigned lo b (bvmul b #x0000000000000002)) "
+                + "(dec.signed lo b))))"));
+    return out.toString();
+  }
+
+  /** A long as a 64-bit SMT-LIB bit-vector literal. */
+  private static String bv64(long v) {
+    return String.format("#x%016x", v);
   }
 
   // -----------------------------------------------------------------------------------------

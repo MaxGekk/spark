@@ -26,7 +26,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType, StringType}
+import org.apache.spark.sql.types.{DateType, DecimalType, DoubleType, IntegerType, StringType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -432,6 +432,21 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     val besideString = VarkaFusionReport.predicateLines(
       And(doubleResidual, EqualTo(s, Literal("a"))), withDouble :+ s)
     assert(besideString.head === "(f > 5.0D): fused", besideString)
+  }
+
+  test("a floating conjunct beside a decimal column no kernel reads still fuses") {
+    // `dbl > 1.5 AND dec > 1.0`: the registry gives a decimal of precision up to 18 the long
+    // lane, but while no operator over it is built no kernel reads it, so its conjunct goes to
+    // the row filter, as a string's does, and must not count as an integral read that would
+    // refuse the floating conjunct the kernel (VARKA-347).
+    val dec = AttributeReference("dec", DecimalType(10, 2))()
+    val decimalConjunct =
+      GreaterThan(dec, Literal.create(new java.math.BigDecimal("1.00"), DecimalType(10, 2)))
+    val lines = VarkaFusionReport.predicateLines(And(doubleResidual, decimalConjunct),
+      withDouble :+ dec)
+    assert(lines.head === "(f > 5.0D): fused", lines)
+    assert(!lines(1).endsWith(": fused"), lines)
+    assert(lines(1).contains("no operator over a decimal is built yet"), lines)
   }
 
   test("a nondeterministic filter is declined with its reason, conjunct by conjunct") {
