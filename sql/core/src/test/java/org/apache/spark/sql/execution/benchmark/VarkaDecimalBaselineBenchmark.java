@@ -168,10 +168,13 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
 
   /**
    * The lane pair's precisions whose columns the table adds: those of {@link #PAIR_PRECISIONS}
-   * that {@link #PRECISIONS} does not already give columns, in their order.
+   * whose suffix, the name of their columns, no entry of {@link #PRECISIONS} already has, in
+   * their order.
    */
   static List<Precision> pairOnlyPrecisions() {
-    return PAIR_PRECISIONS.stream().filter(p -> !PRECISIONS.contains(p)).toList();
+    return PAIR_PRECISIONS.stream()
+        .filter(p -> PRECISIONS.stream().noneMatch(q -> q.suffix().equals(p.suffix())))
+        .toList();
   }
 
   /**
@@ -262,7 +265,8 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
             "SELECT " + x + " FROM varka_decimal WHERE " + x + " < " + y));
         out.add(new Section(type + " arithmetic chain, " + density,
             "SELECT (" + x + " + " + y + ") * " + z + " - " + x + " AS a FROM varka_decimal"));
-        String castTo = p.castTo().orElseThrow();
+        String castTo = p.castTo().orElseThrow(() -> new IllegalStateException(p.type()
+            + " has no cast type, so its cast section has nothing to cast to"));
         out.add(new Section(type + " cast to " + castTo + ", " + density,
             "SELECT CAST(" + x + " AS " + castTo + ") AS a FROM varka_decimal"));
         out.add(new Section(type + " choice, " + density,

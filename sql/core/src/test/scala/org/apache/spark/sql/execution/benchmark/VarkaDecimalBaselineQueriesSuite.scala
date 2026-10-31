@@ -51,13 +51,9 @@ class VarkaDecimalBaselineQueriesSuite extends QueryTest with VarkaSharedSession
             DecimalType(p.precision, p.scale))
         }
       } ++ Seq("t", "tn").map(_ -> TimeType(VarkaDecimalBaselineBenchmark.TIME_PRECISION)) ++
-        VarkaDecimalBaselineBenchmark.pairOnlyPrecisions().asScala.flatMap { p =>
-          VarkaDecimalBaselineBenchmark.PAIR_ROLES.asScala.flatMap { role =>
-            val name = role + p.suffix
-            Seq(name -> DecimalType(p.precision, p.scale), name + "n" ->
-              DecimalType(p.precision, p.scale))
-          }
-        }
+        // The lane pair's own columns, written out rather than derived from the helpers that
+        // build the table, so that the check does not test the generator against itself.
+        Seq("x20", "x20n", "y20", "y20n").map(_ -> DecimalType(20, 2))
       val schema = spark.table("varka_decimal").schema
       assert(schema.map(f => f.name -> f.dataType) === expected)
 
@@ -70,8 +66,9 @@ class VarkaDecimalBaselineQueriesSuite extends QueryTest with VarkaSharedSession
       val chain = Map(9 -> DecimalType(21, 4), 18 -> DecimalType(38, 7), 38 -> DecimalType(38, 6))
       val resultTypes = VarkaDecimalBaselineBenchmark.PRECISIONS.asScala.flatMap { p =>
         val own = DecimalType(p.precision, p.scale)
-        val cast =
-          spark.sql(s"SELECT CAST(NULL AS ${p.castTo.orElseThrow()}) AS c").schema.head.dataType
+        val castTo = p.castTo.orElseThrow(() => new IllegalStateException(
+          s"${p.`type`} has no cast type, so its cast section has nothing to cast to"))
+        val cast = spark.sql(s"SELECT CAST(NULL AS $castTo) AS c").schema.head.dataType
         Seq(own, chain(p.precision), cast, own, own, chain(p.precision), cast, own)
       } ++ Seq.fill(2)(Seq(DecimalType(14, 6), DecimalType(8, 6))).flatten ++
         VarkaDecimalBaselineBenchmark.PAIR_PRECISIONS.asScala.flatMap { p =>
