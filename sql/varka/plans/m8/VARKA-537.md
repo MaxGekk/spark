@@ -331,6 +331,10 @@ for the first weekly run and its record.
 5. **Cadence.** *Recommended*: the parallel sweeps nightly, the serial ones weekly on Wednesday
    night; 344's thirty in a nightly job of their own when they land.
 
+*The owner took all five recommendations (31 October 2026):* the sweeps run on vecbricks/varka in
+a new `varka-sweeps.yml`, the `SMALLINT` sweeps split by filter and stay serial, the done-when
+reads "no JUnit suite under sbt's `-z`", and the cadence is nightly parallel, weekly serial.
+
 ## 8. Done when
 
 - `varka-sweeps.yml` has run every line of `sql/varka/sweeps.tsv` on CI once, green, and each
