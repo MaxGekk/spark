@@ -18,6 +18,7 @@ package org.apache.spark.sql.execution.benchmark;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.VarkaBenchmark;
@@ -102,9 +103,20 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
 
   /**
    * A precision the class measures: the column type, the suffix of its columns, the largest
-   * integer part its values take, and the type its cast section converts to.
+   * integer part its values take, and the type its cast section converts to, if it has one.
    */
-  record Precision(int precision, int scale, String suffix, long maxIntegerPart, String castTo) {
+  record Precision(int precision, int scale, String suffix, long maxIntegerPart,
+      Optional<String> castTo) {
+
+    /** A precision with a cast section. */
+    Precision(int precision, int scale, String suffix, long maxIntegerPart, String castTo) {
+      this(precision, scale, suffix, maxIntegerPart, Optional.of(castTo));
+    }
+
+    /** A precision with no cast section. */
+    Precision(int precision, int scale, String suffix, long maxIntegerPart) {
+      this(precision, scale, suffix, maxIntegerPart, Optional.empty());
+    }
 
     String type() {
       return "DECIMAL(" + precision + ", " + scale + ")";
@@ -130,15 +142,11 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
   /**
    * The two precisions of the lane pair's sections: {@code DECIMAL(38, 10)}, whose columns the
    * table already has, and {@code DECIMAL(20, 2)}, whose {@code x} and {@code y} come after the
-   * {@code TIME} columns. No section casts the second; its cast type is the widening a cast
-   * section would take, there for the record's sake.
+   * {@code TIME} columns. No section casts the second, so it has no cast type.
    */
   static final List<Precision> PAIR_PRECISIONS = List.of(
-      PRECISIONS.get(2),
-      new Precision(20, 2, "20", 500_000_000_000_000_000L, "DECIMAL(38, 10)"));
-
-  /** The operands of the lane pair's sections over {@code DECIMAL(20, 2)}. */
-  static final List<String> PAIR_ROLES = List.of("x", "y");
+      precision(38),
+      new Precision(20, 2, "20", 500_000_000_000_000_000L));
 
   /** The precision of the {@code TIME} column the two time sections read. */
   static final int TIME_PRECISION = 6;
@@ -148,6 +156,23 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
 
   /** The three operands of every section, in the order a shape uses them. */
   static final List<String> ROLES = List.of("x", "y", "z");
+
+  /** The two operands of the lane pair's sections, the columns a pair precision adds. */
+  static final List<String> PAIR_ROLES = ROLES.subList(0, 2);
+
+  /** The entry of {@link #PRECISIONS} of {@code precision} digits. */
+  static Precision precision(int precision) {
+    return PRECISIONS.stream().filter(p -> p.precision() == precision).findFirst()
+        .orElseThrow(() -> new IllegalArgumentException("no measured precision " + precision));
+  }
+
+  /**
+   * The lane pair's precisions whose columns the table adds: those of {@link #PAIR_PRECISIONS}
+   * that {@link #PRECISIONS} does not already give columns, in their order.
+   */
+  static List<Precision> pairOnlyPrecisions() {
+    return PAIR_PRECISIONS.stream().filter(p -> !PRECISIONS.contains(p)).toList();
+  }
 
   /**
    * One column's value: an integer part spread evenly over {@code -max} to {@code max}, plus a
@@ -186,32 +211,37 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
     List<String> columns = new ArrayList<>();
     int seed = 0;
     for (Precision p : PRECISIONS) {
-      int nullRow = 1;
-      for (String role : ROLES) {
-        String name = role + p.suffix();
-        values.add(valueSql(p, seed++) + " as " + name);
-        columns.add(name);
-        columns.add("case when id % 10 = " + nullRow + " then null else " + name + " end as "
-            + name + "n");
-        nullRow += 3;
-      }
+      seed = addColumns(p, ROLES, seed, values, columns);
     }
     values.add(timeSql(seed) + " as t");
     columns.add("t");
     columns.add("case when id % 10 = 2 then null else t end as tn");
     seed++;
-    Precision wide = PAIR_PRECISIONS.get(1);
+    for (Precision p : pairOnlyPrecisions()) {
+      seed = addColumns(p, PAIR_ROLES, seed, values, columns);
+    }
+    return "select " + String.join(", ", columns) + " from (select id, "
+        + String.join(", ", values) + " from range(0, " + rows + "))";
+  }
+
+  /**
+   * Adds a column of precision {@code p} for each of {@code roles}, the role and the precision's
+   * suffix its name, each from its own seed starting at {@code seed}, and its copy with one row
+   * in ten null, at a different row in each column. Returns the next unused seed.
+   */
+  private static int addColumns(Precision p, List<String> roles, int seed, List<String> values,
+      List<String> columns) {
+    int next = seed;
     int nullRow = 1;
-    for (String role : PAIR_ROLES) {
-      String name = role + wide.suffix();
-      values.add(valueSql(wide, seed++) + " as " + name);
+    for (String role : roles) {
+      String name = role + p.suffix();
+      values.add(valueSql(p, next++) + " as " + name);
       columns.add(name);
       columns.add("case when id % 10 = " + nullRow + " then null else " + name + " end as "
           + name + "n");
       nullRow += 3;
     }
-    return "select " + String.join(", ", columns) + " from (select id, "
-        + String.join(", ", values) + " from range(0, " + rows + "))";
+    return next;
   }
 
   /**
@@ -232,8 +262,9 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
             "SELECT " + x + " FROM varka_decimal WHERE " + x + " < " + y));
         out.add(new Section(type + " arithmetic chain, " + density,
             "SELECT (" + x + " + " + y + ") * " + z + " - " + x + " AS a FROM varka_decimal"));
-        out.add(new Section(type + " cast to " + p.castTo() + ", " + density,
-            "SELECT CAST(" + x + " AS " + p.castTo() + ") AS a FROM varka_decimal"));
+        String castTo = p.castTo().orElseThrow();
+        out.add(new Section(type + " cast to " + castTo + ", " + density,
+            "SELECT CAST(" + x + " AS " + castTo + ") AS a FROM varka_decimal"));
         out.add(new Section(type + " choice, " + density,
             "SELECT CASE WHEN " + x + " < " + y + " THEN " + x + " ELSE " + y
                 + " END AS a FROM varka_decimal"));
