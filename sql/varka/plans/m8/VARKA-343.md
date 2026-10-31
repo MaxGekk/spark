@@ -368,14 +368,19 @@ The `DATE` pairs follow 333 in either.
    *31 October 2026, as built:* the fuse check is the per-section one row 342's baseline built
    (`VarkaSqlBenchmarkBase.requireBaseline`, lifted by `-Dvarka.baseline.fuseCheck=false`),
    which 377's class already has, so this step adds none. The `try_cast` reads its own column
-   `w`, about one row in ten past the long range, and `time_from_seconds` its own `s`, inside
-   the day: an ANSI cast or a `time_from_seconds` with a value out of range raises and ends the
-   run, so `x` stays inside the int range. The filter's two sections are listed as fusing: the
-   optimizer infers `x IS NOT NULL` from the cast, and that conjunct fuses into a
-   `VarkaFilterColumnarToRow` under Spark's `Filter`, which still evaluates the cast on the row
-   path (checked by the class's dry run, 31 October 2026); every other section plans no Varka
-   node. The results files at both widths come from the EPYC runners and are committed before it
-   merges.
+   `w`, about one row in a hundred past the long range (at one in ten the section timed mostly
+   Spark's TRY path raising and catching an exception per such row) and one row in a thousand
+   each NaN, `+Infinity` and `-Infinity`, and LEGACY's `CAST(w AS INT)` reads it too, so its
+   saturation runs, about six rows in seven being past the int range; `time_from_seconds` reads
+   its own `s`, inside the day: an ANSI cast or a `time_from_seconds` with a value out of range
+   raises and ends the run, so `x`, which ANSI's `CAST(x AS INT)` reads, stays inside the int
+   range. The filter's condition is
+   `coalesce(CAST(x AS BOOLEAN), false)`: from the bare cast the optimizer infers
+   `x IS NOT NULL`, and that conjunct alone fuses into a `VarkaFilterColumnarToRow` under
+   Spark's `Filter`, so the fuse check could not see this row start fusing the cast; `coalesce`
+   infers nothing. No section is listed as fusing, and none plans a Varka node (checked by the
+   class's dry run, 31 October 2026). The results files at both widths come from the EPYC
+   runners and are committed before it merges.
 2. **The census cells** (item 0.5), on the laptop and through the census workflow on both runners.
 3. **`ConvertLane` with `convertShape`** and the kernel rules (2.1, 2.2), with the same-count
    `VectorMask.cast` crossing #1065 leaves owed, built here first: the to-floating pairs and

@@ -21,6 +21,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.execution.VarkaSharedSessions
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 
 /**
@@ -33,12 +34,16 @@ import org.apache.spark.sql.types._
  *
  * The fixture is the benchmark's table over its first 2000 ids. Its columns are hashes of the
  * id, so these rows already reach the regions the benchmark's javadoc states, which the suite
- * checks before it runs the sections: `l` past `2^53` on both sides and below `2^24`, `i` over
- * both halves of the int range, `x` inside the int range with its zeros, `w` with a fraction, past
- * `2^53` inside the long range and past the long range, and `s` inside the day. A section over
- * the columns with no null must answer no null, except `try_cast`, which must answer null exactly
- * on the rows of `w` past the long range, so a value that left its type into a null fails here
- * rather than going into the timed run as a cheap null.
+ * checks before it runs the sections: `l` past `2^53` on both sides, between `2^51` and `2^53`
+ * on both sides and below `2^24`, `i` over both halves of the int range, `x` inside the int range
+ * with its `0.0` and `-0.0` zeros told apart by their sign, `w` with a fraction, past the int
+ * range, past `2^53` inside the long range and past the long range, its NaN and infinities, and
+ * `s` inside the day. A section over the columns with no null must answer no null, except
+ * `try_cast`, which must answer null exactly on the rows of `w` past the long range, NaN or
+ * infinite, so a value that left its type into a null fails here rather than going into the timed
+ * run as a cheap null. A section over the columns with one row in ten null must answer exactly
+ * those nulls, and the `try_cast` the same rows of `w_n` past the long range besides; the filter
+ * answers no null in either, keeping the rows whose `x` is neither zero nor null.
  */
 class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSessions {
 
@@ -69,25 +74,51 @@ class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSe
         session.catalog.cacheTable(view)
       }
       val longEdge = "9.223372036854775807E18"
+      val p51 = "power(2, 51)"
+      val p53 = "power(2, 53)"
+      val inf = "double('Infinity')"
       val r = spark.sql(
-        s"""select min(l) < -power(2, 53), max(l) > power(2, 53),
-           |       count(l > -power(2, 24) and l < power(2, 24)),
+        s"""select min(l) < -$p53, max(l) > $p53,
+           |       count_if(l > -power(2, 24) and l < power(2, 24)),
+           |       count_if(l > $p51 and l <= $p53), count_if(l < -$p51 and l >= -$p53),
            |       min(i) < -power(2, 30), max(i) > power(2, 30),
-           |       max(abs(x)) <= power(2, 31) / 7, count(if(x = 0.0d, 1, null)),
-           |       count(if(abs(w) > $longEdge, 1, null)),
-           |       count(if(w % 1 <> 0, 1, null)),
-           |       count(if(abs(w) > power(2, 53) and abs(w) <= $longEdge, 1, null)),
-           |       min(s) >= 0, max(s) < 86400, max(s) > 86000
+           |       max(abs(x)) <= power(2, 31) / 7,
+           |       count_if(cast(x as string) = '0.0'), count_if(cast(x as string) = '-0.0'),
+           |       count_if(not isnan(w) and abs(w) <> $inf and abs(w) > $longEdge),
+           |       count_if(isnan(w)), count_if(w = $inf), count_if(w = -$inf),
+           |       count_if(w % 1 <> 0),
+           |       count_if(abs(w) > power(2, 31) and abs(w) < $p53),
+           |       count_if(abs(w) > $p53 and abs(w) <= $longEdge),
+           |       min(s) >= 0, max(s) < 86400, max(s) > 86000,
+           |       count_if(w_n is null),
+           |       count_if(w_n is null or isnan(w_n) or abs(w_n) > $longEdge)
            |from $view""".stripMargin).head()
       assert(r.getBoolean(0) && r.getBoolean(1))
-      assert(r.getLong(2) > 0)
-      assert(r.getBoolean(3) && r.getBoolean(4))
-      assert(r.getBoolean(5))
-      assert(r.getLong(6) === rows / 4)
-      val overflows = r.getLong(7)
-      assert(overflows > rows / 20 && overflows < rows / 5)
-      assert(r.getLong(8) > 0 && r.getLong(9) > 0)
-      assert(r.getBoolean(10) && r.getBoolean(11) && r.getBoolean(12))
+      assert(r.getLong(2) > 0 && r.getLong(3) > 0 && r.getLong(4) > 0)
+      assert(r.getBoolean(5) && r.getBoolean(6))
+      assert(r.getBoolean(7))
+      assert(r.getLong(8) === rows / 8 && r.getLong(9) === rows / 8)
+      val overflows = r.getLong(10)
+      assert(overflows > rows / 125 && overflows <= rows / 100)
+      assert(r.getLong(11) === rows / 1000)
+      assert(r.getLong(12) === rows / 1000 && r.getLong(13) === rows / 1000)
+      assert(r.getLong(14) > 0 && r.getLong(15) > 0 && r.getLong(16) > 0)
+      assert(r.getBoolean(17) && r.getBoolean(18) && r.getBoolean(19))
+      // The rows of w the try_cast answers null for, and those of w_n with its own nulls besides.
+      val tryNulls = overflows + 3 * rows / 1000
+      assert(r.getLong(20) === rows / 10)
+      assert(r.getLong(21) === rows / 10 + tryNulls)
+      // LEGACY's cast saturates past the int range and answers 0 for NaN, rather than null.
+      withBothConf(SQLConf.ANSI_ENABLED.key, "false") {
+        val legacy = spark.sql(
+          s"""select count_if(isnan(w) and cast(w as int) = 0),
+             |       count_if(w = $inf and cast(w as int) = ${Int.MaxValue}),
+             |       count_if(w = -$inf and cast(w as int) = ${Int.MinValue}),
+             |       count_if(w > power(2, 31) and cast(w as int) = ${Int.MaxValue})
+             |from $view""".stripMargin).head()
+        assert(legacy.getLong(0) === rows / 1000 && legacy.getLong(1) === rows / 1000)
+        assert(legacy.getLong(2) === rows / 1000 && legacy.getLong(3) > 0)
+      }
 
       val sections = VarkaFloatingCastBaselineBenchmark.sections().asScala.toSeq
       assert(sections.size === 2 * resultTypes.size)
@@ -98,10 +129,17 @@ class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSe
             assert(answer.schema.map(_.name) === Seq("a"))
             assert(answer.schema.head.dataType === resultTypes(index % resultTypes.size))
             checkAnswer(varkaSpark.sql(s.query), answer)
-            if (s.title.endsWith("no nulls")) {
-              val nulls = if (s.query.contains("try_cast")) overflows else 0L
-              assert(answer.where("a IS NULL").count() === nulls)
+            val noNulls = s.title.endsWith("no nulls")
+            val nulls = if (s.query.contains("WHERE")) {
+              // The filter drops the null x_n with the zeros: coalesce answers false for both.
+              val kept = rows * 3 / 4 - (if (noNulls) 0 else rows / 10)
+              assert(answer.count() === kept)
+              0L
+            } else {
+              val overflowed = if (s.query.contains("try_cast")) tryNulls else 0L
+              (if (noNulls) 0L else rows / 10) + overflowed
             }
+            assert(answer.where("a IS NULL").count() === nulls)
           }
         }
       }

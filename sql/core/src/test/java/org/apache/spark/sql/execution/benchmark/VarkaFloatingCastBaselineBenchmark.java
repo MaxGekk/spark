@@ -32,27 +32,31 @@ import org.apache.spark.sql.internal.SQLConf;
  * session's mode and {@code FLOAT} to {@code DOUBLE}; this class times the pairs it does not.
  *
  * <p>The casts are {@code CAST(l AS FLOAT)} and {@code CAST(l AS DOUBLE)} from a {@code BIGINT},
- * {@code CAST(i AS DOUBLE)} from an {@code INT}, {@code CAST(x AS INT)} under LEGACY and under
- * ANSI, the two modes whose out-of-range value Spark disposes of differently,
- * {@code try_cast(w AS BIGINT)}, {@code CAST(x AS FLOAT)}, {@code CAST(x AS BOOLEAN)} as a
- * filter's condition, and {@code time_from_seconds(s)} with the {@code TIME} type enabled, each
- * with no nulls and with one row in ten null. The casts other than {@code CAST(x AS INT)} have one
- * answer in every mode, and run in the session's default one.
+ * {@code CAST(i AS DOUBLE)} from an {@code INT}, {@code CAST(w AS INT)} under LEGACY, which
+ * saturates the values past the int range and answers 0 for NaN, and {@code CAST(x AS INT)} under
+ * ANSI, which would raise on them, {@code try_cast(w AS BIGINT)}, {@code CAST(x AS FLOAT)},
+ * {@code coalesce(CAST(x AS BOOLEAN), false)} as a filter's condition, and
+ * {@code time_from_seconds(s)} with the {@code TIME} type enabled, each with no nulls and with one
+ * row in ten null. The casts other than {@code CAST(... AS INT)} have one answer in every mode,
+ * and run in the session's default one.
  *
  * <p>Each section has two arms, named so the labels survive the row landing:
  * {@code spark row path (varka off)}, a session without the Varka rule, and {@code varka on}, a
- * session with it. Today both are the row path, so they should tie.
+ * session with it. Today no section plans a Varka node, so both arms are the row path and should
+ * tie.
  *
  * <p>A baseline is only one while nothing fuses: before any section is timed, the run checks
  * each section's plan on the Varka session against the section's {@code fuses} flag, the list of
  * the sections a row has fused, and fails when an unlisted section fuses or a listed one does not;
- * the results file notes each section that fuses. The two filter sections are listed: the
- * optimizer infers {@code x IS NOT NULL} from the null-intolerant cast, and that conjunct fuses
- * into a {@code VarkaFilterColumnarToRow} under Spark's own {@code Filter}, which still evaluates
- * the cast on the row path. So their {@code varka on} arm holds a Varka node while the cast itself
- * declines, and their {@code spark row path (varka off)} arm is the cast's baseline. No other
- * section is listed. A row that fuses a section lists it, so that its fusion cannot turn a
- * baseline section into a fused one unnoticed.
+ * the results file notes each section that fuses. No section is listed. The filter's condition
+ * is the cast under {@code coalesce} rather than the bare cast: from a bare
+ * {@code WHERE CAST(x AS BOOLEAN)} the optimizer infers {@code x IS NOT NULL}, since the cast is
+ * null-intolerant, and that conjunct alone fuses into a {@code VarkaFilterColumnarToRow} under
+ * Spark's {@code Filter}, which would put a Varka node in the plan while the cast declines, so
+ * the check could not see the row start fusing the cast itself. {@code coalesce} is not
+ * null-intolerant, so nothing is inferred, and it keeps the same rows, a null cast being false.
+ * A row that fuses a section lists it, so that its fusion cannot turn a baseline section into a
+ * fused one unnoticed.
  *
  * <p>To run this benchmark, on a GitHub runner (the results come back as an artifact):
  * <pre>
@@ -103,10 +107,17 @@ public class VarkaFloatingCastBaselineBenchmark extends VarkaSqlBenchmarkBase {
    *       the int range and ANSI's {@code CAST(x AS INT)} never raises, and its sevenths keep
    *       more bits than a float has. It is {@code 0.0} at one row in eight and {@code -0.0} at
    *       another, so the boolean filter keeps three rows in four.</li>
-   *   <li>{@code w} is {@code hash(id, 2) / 7.0} scaled by {@code 2^(id % 41)}, up to about
-   *       {@code 2^68}, so about one row in ten is past the long range, where
-   *       {@code try_cast(w AS BIGINT)} answers null, and the rest run from values with a fraction
-   *       to whole values past {@code 2^53}.</li>
+   *   <li>{@code w} is {@code hash(id, 2) / 7.0} scaled by {@code 2^(id % 35)}, within
+   *       {@code +-2^62.2}, from values with a fraction to whole values past {@code 2^53}, and
+   *       about six in seven past the int range, where LEGACY's {@code CAST(w AS INT)}
+   *       saturates. One row in a hundred is scaled by {@code 2^40} instead, up to about
+   *       {@code 2^68}, so about one row in a hundred is past the long range: there
+   *       {@code try_cast(w AS BIGINT)} answers null, and Spark's TRY path raises and catches an
+   *       exception per row, so a share as large as the earlier one in ten made the section time
+   *       mostly exceptions. One row in a thousand each is NaN, {@code +Infinity} and
+   *       {@code -Infinity}, which LEGACY's cast answers 0, {@code Integer.MAX_VALUE} and
+   *       {@code Integer.MIN_VALUE} for, and {@code try_cast} null. None of these rows is among
+   *       {@code w_n}'s nulls.</li>
    *   <li>{@code s} is {@code pmod(hash(id, 3), 86400000) / 1000.0}, seconds of the day from
    *       {@code 0} to {@code 86399.999}: {@code time_from_seconds} raises outside
    *       {@code [0, 86400)} in every mode.</li>
@@ -134,7 +145,11 @@ public class VarkaFloatingCastBaselineBenchmark extends VarkaSqlBenchmarkBase {
                      case when id %% 8 = 0 then 0.0d
                           when id %% 8 = 4 then -0.0d
                           else hash(id, 1) / 7.0d end as x,
-                     hash(id, 2) / 7.0d * power(2.0d, id %% 41) as w,
+                     case when id %% 1000 = 11 then double('NaN')
+                          when id %% 1000 = 333 then double('Infinity')
+                          when id %% 1000 = 555 then double('-Infinity')
+                          else hash(id, 2) / 7.0d
+                               * power(2.0d, if(id %% 100 = 41, 40, id %% 35)) end as w,
                      pmod(hash(id, 3), 86400000) / 1000.0d as s
               from %s)""".formatted(ids);
   }
@@ -159,16 +174,17 @@ public class VarkaFloatingCastBaselineBenchmark extends VarkaSqlBenchmarkBase {
           "SELECT CAST(" + l + " AS DOUBLE)" + from, Map.of(), false));
       out.add(new Section("INT CAST(i AS DOUBLE)" + density,
           "SELECT CAST(" + i + " AS DOUBLE)" + from, Map.of(), false));
-      out.add(new Section("DOUBLE CAST(x AS INT), LEGACY" + density,
-          "SELECT CAST(" + x + " AS INT)" + from, legacy, false));
+      out.add(new Section("DOUBLE CAST(w AS INT), LEGACY" + density,
+          "SELECT CAST(" + w + " AS INT)" + from, legacy, false));
       out.add(new Section("DOUBLE CAST(x AS INT), ANSI" + density,
           "SELECT CAST(" + x + " AS INT)" + from, ansi, false));
       out.add(new Section("DOUBLE try_cast(w AS BIGINT)" + density,
           "SELECT try_cast(" + w + " AS BIGINT)" + from, Map.of(), false));
       out.add(new Section("DOUBLE CAST(x AS FLOAT)" + density,
           "SELECT CAST(" + x + " AS FLOAT)" + from, Map.of(), false));
-      out.add(new Section("DOUBLE filter CAST(x AS BOOLEAN)" + density,
-          "SELECT " + x + from + " WHERE CAST(" + x + " AS BOOLEAN)", Map.of(), true));
+      out.add(new Section("DOUBLE filter coalesce(CAST(x AS BOOLEAN), false)" + density,
+          "SELECT " + x + from + " WHERE coalesce(CAST(" + x + " AS BOOLEAN), false)", Map.of(),
+          false));
       out.add(new Section("DOUBLE time_from_seconds(s)" + density,
           "SELECT time_from_seconds(" + s + ")" + from, time, false));
     }
