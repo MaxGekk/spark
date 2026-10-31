@@ -21,19 +21,19 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.DecimalVector;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixRuns;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSegments;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuite;
 import org.apache.spark.sql.util.ArrowUtils;
@@ -50,23 +50,37 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * What {@link VarkaDecimalStoreBenchmark} times, checked in every build at a small scale: its
  * hand-built {@code TIME} lowerings ({@code VARKA-157.md} 2.3) against Spark's row functions over
  * every second of the day, and its scalar widening against the bytes Arrow's own writer puts in a
- * slot. The benchmark checks the same on its rungs before it times them; this fails a pull request
- * rather than a runner dispatch.
+ * slot, and the validity bits the kernel writes into the decimal vector. The benchmark checks the
+ * values on its rungs before it times them; this fails a pull request rather than a runner
+ * dispatch.
  *
- * <p>Its subject is the benchmark's kernels, emitted at the defaults, so it pins the defaults. In
- * its own JVM, as the long-lane emitter suites are ({@code VarkaSpeciesGuard}).
+ * <p>Its kernels are emitted from the matrix base ({@code VarkaMatrixRuns.BASE}), so the option
+ * matrix reruns them under each configuration: its subject is the answers and the bytes written,
+ * not the emitted structure. In its own JVM, as the long-lane emitter suites are ({@code
+ * VarkaSpeciesGuard}).
  */
 @VarkaSuite(ownJvm = true)
-@Tag(VarkaSuite.PINS_DEFAULTS)
 public final class VarkaDecimalStoreBenchmarkSuite {
+
+  /** The byte the validity buffer is filled with before a kernel writes it. */
+  private static final byte SENTINEL = (byte) 0x5A;
+
+  /** Emits {@code shape}'s kernel from the matrix's options as {@code name}. */
+  private static VarkaFusedKernel emit(VarkaGeneratedClassLoader loader, String name,
+      VarkaDecimalStoreBenchmark.Shape shape) {
+    return VarkaBenchmarkBase.defineKernel(loader, name, VarkaLoopEmitter.emit(name,
+        List.of(shape.root()), 1, shape.numLiterals(), null, null, VarkaMatrixRuns.BASE));
+  }
 
   /**
    * Five rows a second of the day - its first microsecond, its last, one hashed between, a
    * hashed nanosecond, and the half microsecond before the next second, where {@code
    * time_to_seconds} rounds up - and the day's last microsecond once more, so the batch ends in a
    * partial lane group. The benchmark's column is a {@code TIME(6)}, at whole microseconds; the
-   * two rows off the microsecond hold the lowerings to Spark at every {@code TIME} precision, the
-   * {@code + 500} of {@code time_to_seconds} included.
+   * two rows off the microsecond, the hashed nanosecond and the half microsecond, check the
+   * lowerings against Spark's {@code TIME(6)} answers on inputs that are not whole microseconds,
+   * which holds the {@code + 500} of {@code time_to_seconds} to Spark's rounding. Only precision
+   * 6 is checked.
    */
   private static long[] times() {
     int seconds = (int) SECONDS_PER_DAY;
@@ -101,10 +115,8 @@ public final class VarkaDecimalStoreBenchmarkSuite {
       var shapes = VarkaDecimalStoreBenchmark.shapes();
       for (int k = 0; k < shapes.size(); k++) {
         var shape = shapes.get(k);
-        String name = "org.apache.spark.sql.varka.execution.VarkaDecimalStoreCheck" + k;
-        VarkaFusedKernel kernel = VarkaBenchmarkBase.defineKernel(loader, name,
-            VarkaLoopEmitter.emit(name, List.of(shape.root()), 1, shape.numLiterals(), null,
-                null, VarkaEmitOptions.DEFAULTS));
+        VarkaFusedKernel kernel =
+            emit(loader, "org.apache.spark.sql.varka.execution.VarkaDecimalStoreCheck" + k, shape);
         int status = kernel.run(new long[] {column.address()}, new long[] {0L}, new int[] {0},
             new long[] {dst.address()}, new long[] {validity.address()}, new int[0],
             VarkaDecimalStoreBenchmark.LONG_LITS, n);
@@ -114,6 +126,56 @@ public final class VarkaDecimalStoreBenchmarkSuite {
           want[i] = shape.spark().applyAsLong(times[i]);
         }
         assertArrayEquals(want, dst.toArray(ValueLayout.JAVA_LONG), shape.name());
+      }
+    } finally {
+      loader.release();
+    }
+  }
+
+  @Test
+  @DisplayName("with no input validity the widening arm's kernel writes its DecimalVector's "
+      + "validity all valid, in exactly (n + 7) / 8 bytes and nothing past them")
+  void validityIsAllValidInItsOwnBytes() {
+    int[] lengths = {1, 7, 8, 9, 63, 64, 65, 1000, 4097};
+    var loader = new VarkaGeneratedClassLoader(getClass().getClassLoader());
+    try (Arena arena = Arena.ofConfined();
+         BufferAllocator allocator = ArrowUtils.rootAllocator()
+             .newChildAllocator("varka-decimal-store-validity", 0, Long.MAX_VALUE)) {
+      var shapes = VarkaDecimalStoreBenchmark.shapes();
+      for (int k = 0; k < shapes.size(); k++) {
+        var shape = shapes.get(k);
+        VarkaFusedKernel kernel = emit(loader,
+            "org.apache.spark.sql.varka.execution.VarkaDecimalStoreValidity" + k, shape);
+        for (int n : lengths) {
+          MemorySegment column = arena.allocate(n * 8L, 64);
+          for (int i = 0; i < n; i++) {
+            column.set(ValueLayout.JAVA_LONG, i * 8L, VarkaDecimalStoreBenchmark.timeOfRow(i, n));
+          }
+          MemorySegment longs = arena.allocate(n * 8L, 64);
+          try (DecimalVector vector = new DecimalVector("v", allocator, 18, 0)) {
+            vector.allocateNew(n);
+            long capacity = vector.getValidityBuffer().capacity();
+            MemorySegment validity =
+                VarkaSegments.map(vector.getValidityBuffer().memoryAddress(), capacity);
+            validity.fill(SENTINEL);
+            // The benchmark's widening arm: the kernel into the vector's validity buffer, with
+            // the input's validity 0L, then the widening into its data buffer.
+            new VarkaDecimalStoreBenchmark.Buffers(kernel, new long[] {column.address()},
+                new long[] {longs.address()}, new long[] {validity.address()}, longs,
+                VarkaSegments.map(vector.getDataBuffer().memoryAddress(), n * 16L), n)
+                .runOnce();
+            byte[] want = new byte[(int) capacity];
+            Arrays.fill(want, SENTINEL);
+            Arrays.fill(want, 0, n / 8, (byte) 0xFF);
+            if (n % 8 != 0) {
+              want[n / 8] = (byte) ((1 << (n % 8)) - 1);
+            }
+            assertArrayEquals(want, validity.toArray(ValueLayout.JAVA_BYTE),
+                shape.name() + " over " + n + " rows");
+            vector.setValueCount(n);
+            assertEquals(0, vector.getNullCount(), shape.name() + " over " + n + " rows");
+          }
+        }
       }
     } finally {
       loader.release();

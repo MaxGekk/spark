@@ -386,12 +386,15 @@ public final class VarkaTierWitness {
    */
   public static synchronized void close() {
     if (instance != null) {
-      instance.stream.close();
+      instance.pause();
       instance = null;
     }
   }
 
-  private final RecordingStream stream = new RecordingStream();
+  /** Guards {@link #stream}, apart from `this`, which the stream's handlers take. */
+  private final Object streamLock = new Object();
+  /** The recording, or null while {@link #pause}d. */
+  private RecordingStream stream;
   private final AtomicLong calls = new AtomicLong();
   private final Set<String> watched = ConcurrentHashMap.newKeySet();
   /** Every finished compile of a watched class, by id: true for an on-stack replacement. */
@@ -424,16 +427,48 @@ public final class VarkaTierWitness {
   private volatile long settledThrough;
 
   private VarkaTierWitness() {
-    stream.enable("jdk.Compilation").withThreshold(Duration.ZERO);
-    stream.enable("jdk.Deoptimization").withoutStackTrace();
-    stream.enable("jdk.CompilerInlining").withoutStackTrace();
-    stream.enable(VarkaCheckedCallEvent.class).withThreshold(Duration.ZERO);
-    stream.onEvent("jdk.Compilation", this::onCompilation);
-    stream.onEvent("jdk.Deoptimization", this::onDeoptimization);
-    stream.onEvent("jdk.CompilerInlining", this::onInlining);
-    stream.onEvent("varka.CheckedCall", this::onCall);
-    stream.onFlush(this::onFlush);
-    stream.startAsync();
+    stream = open();
+  }
+
+  /** A new recording on the witness's events, started. */
+  private RecordingStream open() {
+    var s = new RecordingStream();
+    s.enable("jdk.Compilation").withThreshold(Duration.ZERO);
+    s.enable("jdk.Deoptimization").withoutStackTrace();
+    s.enable("jdk.CompilerInlining").withoutStackTrace();
+    s.enable(VarkaCheckedCallEvent.class).withThreshold(Duration.ZERO);
+    s.onEvent("jdk.Compilation", this::onCompilation);
+    s.onEvent("jdk.Deoptimization", this::onDeoptimization);
+    s.onEvent("jdk.CompilerInlining", this::onInlining);
+    s.onEvent("varka.CheckedCall", this::onCall);
+    s.onFlush(this::onFlush);
+    s.startAsync();
+    return s;
+  }
+
+  /**
+   * Stops the recording and keeps what it reported, for a benchmark that times code it has just
+   * read the tier of and does not want JFR running while it does. {@link #resume} records again
+   * into the same witness, so a compile reported before the pause still counts. A compile that
+   * finishes while it is paused is never reported, and {@link #levels} then does not count its
+   * version: a pause can make a method read lower than it is, never higher.
+   */
+  public void pause() {
+    synchronized (streamLock) {
+      if (stream != null) {
+        stream.close();
+        stream = null;
+      }
+    }
+  }
+
+  /** Records again after {@link #pause}; a witness that is recording is left as it is. */
+  public void resume() {
+    synchronized (streamLock) {
+      if (stream == null) {
+        stream = open();
+      }
+    }
   }
 
   /** The class a recorded method belongs to, or null. */
@@ -628,6 +663,11 @@ public final class VarkaTierWitness {
    * is a failure of the witness, never of a kernel's answer.
    */
   public void settle(long timeoutMillis) {
+    synchronized (streamLock) {
+      if (stream == null) {
+        throw new IllegalStateException("the tier witness is paused: resume() before settle()");
+      }
+    }
     long covered = calls.get();
     long token;
     synchronized (this) {

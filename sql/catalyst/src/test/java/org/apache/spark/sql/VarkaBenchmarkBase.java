@@ -97,8 +97,8 @@ public abstract class VarkaBenchmarkBase extends BenchmarkBase {
 
   /**
    * Prints {@code line} and writes it to the results file, if the run writes one: a fact a
-   * section's tables depend on, kept beside them so the file says what was measured. The same
-   * method as {@code VarkaSqlBenchmarkBase.note} in sql/core.
+   * section's tables depend on, kept beside them so the file says what was measured. The sql/core
+   * benchmarks, {@code VarkaSqlBenchmarkBase}'s among them, use this one.
    */
   protected final void note(String line) {
     System.out.println(line);
