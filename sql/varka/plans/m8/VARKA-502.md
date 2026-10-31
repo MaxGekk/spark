@@ -231,6 +231,9 @@ depends on it to build.
    the sweep. It needs no upkeep and catches new enum members, at the price of one reflective
    helper in a test.
 
+*The owner took both recommendations (31 October 2026):* `NOT_PARSED_YET` is deleted, and the
+variant sweep is the reflective one.
+
 ## 8. Done when
 
 - the five boolean records have parse arms, and `NOT_PARSED_YET` is gone;
