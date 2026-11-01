@@ -462,7 +462,7 @@ scored; and the PR build and the option matrix pass.
 
 ## 10. Outcome
 
-(Written when the work lands; the spike's reading is below.)
+(Written when the work lands; the spike's reading is below, and 359a's first half in 10.2.)
 
 ### 10.1 Step 2: the spike's reading, the laptop beside the EPYC 7763
 
@@ -523,6 +523,61 @@ the laptop's 512-bit column, double-pumped on its 256-bit datapath, agrees with 
 The reading also shows the arithmetic travelling as section 2.1 expects: P's product and rescale
 lead S at 512 and 256 bits on the laptop as on the EPYC (2.2 against 5.3 and 2.2 against 7.9 ns a
 row in L3 at 512), and S leads everything at 128 bits.
+
+### 10.2 359a, the layout-independent half (1 November 2026)
+
+*Branch `varka-359a-pair`, from master at `5c660201b35` with the plan, the laptop reading and
+branch `varka-503-two-lane-decline` merged, then master again after row 157's store (#1249).
+Local commits only; one agent session of about four hours.* Built, in 11.5's order, each commit
+leaving `emitted_bytes.json` unchanged (`VarkaEmittedBytesSuite` green on each head):
+
+1. **The registry** (11.5 item 1). `Info.storageBits` is `Storage` (`Plain`, `Bitmap`,
+   `DecimalSlot`); `VarkaTypes.read(DataType)` answers a `Read.Lanes(lane, words, storage)`; the
+   decimal's admission is `ByPrecision` over two `Band`s, 18 digits and one word (row 347, read)
+   and 38 digits and two words (row 359, owed); `lane(DataType)` answers only for plain storage.
+   The readers that must still see a decimal ask `read`: `VarkaDecimalCompiler`, the conjunct
+   planner's integral-lane test in `VarkaExpressionCompiler`, `VarkaArrowSource` and
+   `VarkaAnsiForm`; the others (`VarkaTimeCompiler`'s long-column arm, `VarkaNodeCompiler`,
+   `VarkaConditionCompiler`, `VarkaFloatingCompiler`, `VarkaTypeConformance`) never meant a
+   decimal and now cannot see one. `types.tsv` gains `storage` and `words`, and
+   `dev/varka_new_lane.py` reads `by_precision`. Row 157's output admission
+   (`decimalOutputDeclineReason`) is restated over the bands in the master merge, its messages
+   unchanged.
+2. **The unsigned compares** (item 2). `CompareOp` gains `ULT`, `ULE`, `UGT`, `UGE`; a `Compare`
+   refuses one over a floating lane and a `BoolCompare` refuses them all. The walk already emits a
+   compare by its operator's name, the warm-up's long block already holds the four operators, and
+   the budget weighs them as any integral compare. The reference orders them by
+   `Long.compareUnsigned`. The committed corpora, the series and the cost fit draw
+   `CompareOp.signed()`, so nothing they draw moves; the unsigned ones have their own long-lane
+   draw (`UNSIGNED_FUZZ_SEED`) in `VarkaIrFuzzSuite`, and their cost features are on row 352's
+   refit list.
+3. **The ring layer** (item 3), `proofs/decimal128.smt2` from `VarkaProofFiles`: the word
+   lowerings of `<`, `<=`, `=`, `>`, `>=` and `<=>` equal to the value comparisons, the signed low
+   compare refuted, and for each precision 19 to 38 the check over the constant pairs of
+   `DecimalWords.bound` exact, with a bound one off either way refuted; 67 checks, each solver well
+   under a second on the laptop.
+4. **The compiler's front half** (item 4): `VarkaDecimalCompiler.Pair`, `literalPair` (two
+   long-table slots through `DecimalWords`) and `widened` (`(x, x >> 63)`), checked directly by
+   `VarkaDecimalPairFrontSuite` since nothing emits a pair; the declines above 18 digits name
+   360 and 363 for two scales and the pair's word leaf for one; the census's comparison notes and
+   the rows of 21 of section 6's 22 pairs name 360 and 363 (`between` carries no 359 entry).
+
+**Departures.** `Info.lane()` is kept rather than renamed `lanes()`: the record's existing `lanes`
+component already lists the lanes a kernel loads in, and `lane()` now says it is the lane a type
+computes on, whatever its storage. `types.tsv` keeps `storage_bits` beside the two new columns. A
+band carries its row and whether its reader is built, not an optional reader row. `widened` takes
+the sink because `BitOp`'s shift count is a node, so 63 is a long-table slot. The unsigned draw
+runs a third of the corpora's iterations: at the full 300 it took about three and a half minutes
+on the laptop, a cost the Build would pay on every run. Item 6 is discharged by the merge of
+`varka-503-two-lane-decline`, not built as a twin.
+
+**Not built** (owed by 359a, in 11.9's order): 11.5 item 5, the fixtures and the decimal
+conformance suite (`VarkaTypeConformance` has no sixteen-byte path, and its `Owed("Decimal",
+"348")` entry turns into a suite only with all seven checks answered or cancelled); all of 11.6,
+items 7 to 11 (the word leaf and its shared load, the check, the lowerings, the carry layer, the
+coverage rows and the generated files after them); and 11.7's planted faults and pair tests, which
+need the word leaf. 11.7's predictions 1 to 7 stand as registered; none is scorable until a pair
+emits, and none was measured.
 
 ## 11. 359a, the build plan (1 November 2026)
 
@@ -623,8 +678,9 @@ ask as the counter-evidence, not as a veto: a win on one machine is a machine-de
 and whether it pays for a replan is the owner's call. The verdict is written below with the
 laptop's file named; the cell of row 359 is updated in the same commit.
 
-**The laptop reading and the verdict.** (Written when the laptop's 512-, 256- and 128-bit files
-are committed: the files and their run facts, this rule applied, and the layout 359a builds.)
+**The laptop reading and the verdict.** *1 November 2026:* the laptop's 512-, 256- and 128-bit
+files and their run facts are in 10.1; rule 1 holds on both hosts (neither A nor S ahead of P by
+1.3x on either section at 256 or 512 bits), so 359a builds P.
 
 ### 11.4 The width rule: what runs at two long lanes on x86
 
