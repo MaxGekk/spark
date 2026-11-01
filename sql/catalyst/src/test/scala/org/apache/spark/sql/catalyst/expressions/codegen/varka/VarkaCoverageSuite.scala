@@ -852,7 +852,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     // are the operand and of an int its widening; round, bround and truncate at a negative
     // scale are the signed remainder of a truncating division by 10^k, wrapped as Spark's
     // BigDecimal.intValue() is, ANSI's two overflowing tails declined by a guard; a bigint
-    // operand is guarded to the 2^52 the long division is exact under.
+    // operand is rounded over its magnitude, its quotient (|l| >>> k) / 5^k, the sign restored
+    // after, guarded to |l| < 2^(52 + k) up to k = 10, Long.MIN_VALUE apart at k = 11, and
+    // unguarded from k = 12.
     Family("Rounding", predicates = false, Seq(
       Row("floor(l)", "the identity over a bigint, in every mode"),
       Row("ceil(l)"),
@@ -878,12 +880,15 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("bround(y1, -1)", "", domain = Some("y1 BETWEEN -125 AND 125")),
       Row("round(s1, -1)", "", domain = Some("s1 BETWEEN -32764 AND 32764")),
       Row("truncate(s1, -2)"),
-      Row("round(l, -3)", "the long division is exact under 2^52, so a batch with a lane past "
-        + "it declines", domain = Some("l BETWEEN -4503599627370495 AND 4503599627370495")),
+      Row("round(l, -3)", "the pre-shift divides |l| >>> 3 by 125, exact under 2^55, so a batch "
+        + "with a lane past it declines",
+        domain = Some("l BETWEEN -36028797018963967 AND 36028797018963967")),
       Row("bround(l, -3)", "",
-        domain = Some("l BETWEEN -4503599627370495 AND 4503599627370495")),
+        domain = Some("l BETWEEN -36028797018963967 AND 36028797018963967")),
       Row("truncate(l, -3)", "",
-        domain = Some("l BETWEEN -4503599627370495 AND 4503599627370495")),
+        domain = Some("l BETWEEN -36028797018963967 AND 36028797018963967")),
+      Row("round(l, -12)", "from -12 the pre-shift divides every bigint exactly, so there is no "
+        + "guard"),
       Row("round(l, -19)", "10^19 is past the long, so the quotient is 0 and the answer the "
         + "sign of the rounding times 10^19 wrapped",
         domain = Some("l BETWEEN -4999999999999999999 AND 4999999999999999999")),

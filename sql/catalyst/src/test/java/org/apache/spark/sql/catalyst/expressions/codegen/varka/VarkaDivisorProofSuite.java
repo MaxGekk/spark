@@ -166,6 +166,18 @@ public final class VarkaDivisorProofSuite {
         collect(compiled, sql, divisors);
       }
     }
+    // Every scale at which the integral rounding of a BIGINT divides (VarkaRoundingCompiler's
+    // pre-shift, by 5^k), so a scale no coverage row names is still held to the proof. The
+    // divisor depends on the scale alone, not on the mode or the function.
+    for (int k = 1; k <= 18; k++) {
+      for (String fn : List.of("round", "bround", "truncate")) {
+        String sql = fn + "(l, -" + k + ")";
+        var compiled = compile(VarkaCoverageRows.resolve(sql, table.columns()), table.columns(),
+            false);
+        assertTrue(compiled.isPresent(), sql + " does not compile, so its divisor is not seen");
+        collect(compiled, sql, divisors);
+      }
+    }
     // Every legal cast between two forms, in every mode, as VarkaCastMatrixSuite probes them.
     for (DataType[] froms : VarkaCastMatrixSuite.TYPES.values()) {
       for (DataType[] tos : VarkaCastMatrixSuite.TYPES.values()) {

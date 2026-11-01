@@ -609,6 +609,30 @@ committed files:
    and `SMALLINT` sweeps of 3.5, which the cells and the coverage harness reach but no kernel sweep
    does, the long-lane proof file of 3.6 and the probe of 3.7; the integral forms add no node, so no
    proof file is owed by them.
+   *1 November 2026, the pre-shift built (open point 5's decision), correcting the departure above
+   and its last sentence:* `BIGINT` at `1 <= k <= 18` now rounds by 2.5's pre-shift over the
+   magnitude, `s = x >> 63`, `a = (x ^ s) - s`, `Q = (a >>> k) / 5^k`, `r = a - Q * 10^k`, `Q`
+   stepped up past the half (at it for `HALF_UP`, at it for an odd `Q` for `HALF_EVEN`), times
+   `10^k`, and the sign restored by `(M ^ s) - s`. Restoring the sign to `Q` first and reusing the
+   int lane's signed remainder form was built first and refused by the emitter for `bround`: its
+   chain is 17 deep, past `MAX_CHAIN_DEPTH` of 16, where the magnitude form's is 16. The guard is
+   `|x| < 2^(52 + k)` for `k <= 10` (`2^53` at -1, `2^55` at -3, `2^62` at -10), every long but
+   `Long.MIN_VALUE` at `k = 11` (its magnitude `2^63` shifted by 11 is `2^52`, one past the
+   division's bound), and none from `k = 12`, where every long, `Long.MIN_VALUE` included, is
+   divided exactly; under ANSI it is intersected with the mode's tails, as before, and the bound
+   `ConstDivide` is told is derived from the intersected guard (`preShiftBound`). The 2.5 plan put
+   the edge at `k >= 12`; it holds as planned, `k = 11` losing only `Long.MIN_VALUE`. A bounded
+   lowering is owed its proof after all: `integral_round.smt2` (3.6) proves, per scale, that the
+   guard keeps `a >>> k` under the stated bound, that `Q` is `floor(|x| / 10^k)` over the guard,
+   and, per mode, that the steps from that `Q` are the rounding wrapped for every long;
+   the sign tests at -19, the zero from -20, ANSI's windows with one past each end overflowing, and
+   the specification pinned to `BigDecimal`. The `5^k` divisors join `long_divide.smt2`
+   (`ROUNDING_DIVISORS`), whose division by them it composes with, and `VarkaDivisorProofSuite`
+   compiles every scale from -1 to -18 so a scale no coverage row names is still held to it.
+   `VarkaEmitterRoundingSuite` asserts the window, not only the answers: for each function, scale
+   -1 to -20 and mode, the longs at the window's edge and beside `2^52`, `2^55`, `5 * 10^18` and
+   the extremes, with the ties beside each and a seeded draw, are answered exactly in one chunk
+   where they lie inside the window and Spark answers, and each other one is declined.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
    disposal.
@@ -716,11 +740,16 @@ and `factorial`; until 342 and 343, `width_bucket`.
    passes; (b) open the pull request with the `2^52` window and the pre-shift as a further part.
    *Recommended: (a)*, since with (b) the measurement of 5.6 would time the decline for both
    bigint sections.
+   *Decided by the lead, 1 November 2026: (a)*, the pre-shift and its proof file built before the
+   pull request opens, so `round` and `truncate` over `BIGINT` fuse up to `2^55` at -3 rather than
+   declining every batch past `2^52` (5.3, as built).
 6. **Splitting 344a.** (a) One pull request with the integral forms and `rint`, as section 5 has
    it; (b) the integral forms first, `rint` with its node, lowering, proof file, twin and probe
    as a pull request of its own. *Recommended: (b)*: the integral forms add no node and are most
    of the census movement, while `rint` is a new IR node with its own proofs, and the two share
    no code.
+   *Decided by the lead, 1 November 2026: (b)*, this pull request the integral forms only, and
+   `rint` with its node, lowering, `fp_round.smt2`, twin and probe a later pull request of its own.
 
 Settled with the lead on 30 October 2026, and so not questions: the `BIGINT` band at `k <= 11`
 declines beyond its guard, the full-range form being row 360's constant-multiplier `WideMul`

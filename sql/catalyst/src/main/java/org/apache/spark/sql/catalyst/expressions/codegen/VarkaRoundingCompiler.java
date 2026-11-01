@@ -78,8 +78,12 @@ import org.apache.spark.sql.types.DataTypes;
  * tails, found here at compile time by bisection over {@code BigDecimal}'s own answer, and a
  * {@link GuardedRange} declines the batch holding one, so the row engine raises. A scale
  * {@code >= 0} is the identity in every mode.
+ *
+ * <p>Public for {@code VarkaProofFiles}, which renders {@code integral_round.smt2} from
+ * {@link #preShiftLimit}, {@link #preShiftBound} and {@link #window}; the family is reached
+ * through {@link #arm} alone.
  */
-final class VarkaRoundingCompiler {
+public final class VarkaRoundingCompiler {
 
   /**
    * The deepest negative scale admitted. Every integral value rounds to 0 long before it, while
@@ -213,26 +217,27 @@ final class VarkaRoundingCompiler {
   /**
    * The rounding at the long lane. {@code 10^k} is a long up to {@code k = 18}, and the
    * conversion route of {@link ConstDivide} is exact only for a dividend under
-   * {@link ConstDivide#EXACT_DIVIDEND_BOUND}, so the operand is guarded to that bound and a
-   * batch with a lane past it declines; ANSI's tails lie far outside it at those scales. At
-   * {@code k = 19} the quotient is 0 for every long, so the remainder is the operand and needs
-   * no division, and from {@code k = 20} every long rounds to 0.
+   * {@link ConstDivide#EXACT_DIVIDEND_BOUND}, so the rounding is {@link #preShiftForm}'s, over
+   * the magnitude, whose dividend is {@code |x| >>> k}: the operand is
+   * guarded to {@link #preShiftLimit}, {@code |x| < 2^(52 + k)}, and a batch with a lane past it
+   * declines; from {@code k = 12} every long is inside. ANSI's tails narrow the guard where they
+   * reach into it. At {@code k = 19} the quotient is 0 for every long, so the remainder is the
+   * operand and needs no division, and from {@code k = 20} every long rounds to 0.
    */
   private static VarkaVectorIR roundLong(VarkaVectorIR x, int k, RoundingMode mode,
       boolean ansi, DeclineSink sink) {
     long[] w = ansi ? window(LaneType.LONG, k, mode) : NO_WINDOW;
     if (k <= 18) {
-      long bound = ConstDivide.EXACT_DIVIDEND_BOUND - 1;
-      long lo = -bound;
-      long hi = bound;
+      long[] ends = preShiftGuard(k);
+      long lo = ends[0];
+      long hi = ends[1];
       if (w.length > 0) {
         lo = Math.max(lo, w[0]);
         hi = Math.min(hi, w[1]);
       }
-      VarkaVectorIR g = new GuardedRange(x, lo, hi, Overflow.FAIL);
-      long d = BigInteger.TEN.pow(k).longValueExact();
-      return remainderForm(g, new ConstDivide(g, d, ConstDivide.EXACT_DIVIDEND_BOUND),
-          sink::longSlot, d, mode);
+      VarkaVectorIR g = lo == Long.MIN_VALUE && hi == Long.MAX_VALUE ? x
+          : new GuardedRange(x, lo, hi, Overflow.FAIL);
+      return preShiftForm(g, k, lo, hi, mode, sink);
     }
     VarkaVectorIR g = w.length == 0 ? x : new GuardedRange(x, w[0], w[1], Overflow.FAIL);
     if (k >= 20) {
@@ -252,6 +257,97 @@ final class VarkaRoundingCompiler {
     VarkaVectorIR q = new IntArith(IntOp.SUB, Overflow.WRAP, new CondValue(up, LaneType.LONG),
         new CondValue(down, LaneType.LONG));
     return new IntArith(IntOp.MUL, Overflow.WRAP, q, sink.longSlot(dWrapped));
+  }
+
+  /**
+   * The largest magnitude the pre-shift at scale {@code -k} divides exactly, so that the guard
+   * is {@code [-limit, limit]}: {@code 2^(52 + k) - 1} up to {@code k = 10}, every long but
+   * {@code Long.MIN_VALUE} at {@code k = 11}, and every long from {@code k = 12}, answered as
+   * {@code Long.MAX_VALUE}, where {@link #preShiftGuard} admits {@code Long.MIN_VALUE} too. At
+   * {@code k = 11} the magnitude of {@code Long.MIN_VALUE} is {@code 2^63}, and
+   * {@code 2^63 >>> 11} is {@code 2^52}, one past the division's bound.
+   */
+  public static long preShiftLimit(int k) {
+    if (k < 1 || k > 18) {
+      throw VarkaErrors.illegalArgument("the pre-shift serves scales -1 to -18, not -" + k);
+    }
+    return k >= 11 ? Long.MAX_VALUE : (1L << (52 + k)) - 1;
+  }
+
+  /**
+   * The pre-shift's own guard at scale {@code -k}, as {@code [lo, hi]}: {@code [-limit, limit]}
+   * of {@link #preShiftLimit}, and every long from {@code k = 12}.
+   */
+  public static long[] preShiftGuard(int k) {
+    long limit = preShiftLimit(k);
+    return new long[] {k >= 12 ? Long.MIN_VALUE : -limit, limit};
+  }
+
+  /**
+   * The rounding of {@code x} inside {@code [lo, hi]} at scale {@code -k}, over its magnitude:
+   * {@code s = x >> 63} is 0 or -1, {@code a = (x ^ s) - s} is {@code |x|} (read unsigned, so
+   * {@code Long.MIN_VALUE} gives {@code 2^63}), {@code a >>> k} is {@code floor(|x| / 2^k)}, and
+   * its quotient {@code Q} by {@code 5^k} is {@code floor(|x| / 10^k)}, since nested floor
+   * divisions by positive integers compose. The remainder {@code R = a - Q * 10^k} is not
+   * negative, so {@code Q} steps up by one past the half - at it too for {@code HALF_UP}, at it
+   * only for an odd {@code Q} for {@code HALF_EVEN}, never for {@code DOWN} - and the magnitude
+   * {@code M} times {@code 10^k} gets its sign back as it lost it, {@code (M ^ s) - s}, every
+   * step wrapping: the rounding is symmetric in the sign, and its low 64 bits are
+   * {@code longValue()}'s. The signed remainder form of the int lane would be two levels deeper
+   * here, past the emitter's chain depth for {@code HALF_EVEN}. The dividend {@code a >>> k} is
+   * under the bound stated to the division, derived from the guard's ends;
+   * {@code integral_round.smt2} proves each step.
+   */
+  private static VarkaVectorIR preShiftForm(VarkaVectorIR x, int k, long lo, long hi,
+      RoundingMode mode, DeclineSink sink) {
+    long bound = preShiftBound(k, lo, hi);
+    long d = BigInteger.TEN.pow(k).longValueExact();
+    VarkaVectorIR s = new BitOp(BitOpKind.SHR, x, sink.longSlot(63L));
+    VarkaVectorIR a = new IntArith(IntOp.SUB, Overflow.WRAP,
+        new BitOp(BitOpKind.XOR, x, s), s);
+    VarkaVectorIR t = new BitOp(BitOpKind.USHR, a, sink.longSlot(k));
+    long five = BigInteger.valueOf(5).pow(k).longValueExact();
+    VarkaVectorIR q = new ConstDivide(t, five, bound);
+    VarkaVectorIR dSlot = sink.longSlot(d);
+    VarkaVectorIR qd = new IntArith(IntOp.MUL, Overflow.WRAP, q, dSlot);
+    VarkaVectorIR m;
+    if (mode == RoundingMode.DOWN) {
+      m = qd;
+    } else {
+      VarkaVectorIR r = new IntArith(IntOp.SUB, Overflow.WRAP, a, qd);
+      VarkaVectorIR half = sink.longSlot(d / 2);
+      Cond up;
+      if (mode == RoundingMode.HALF_UP) {
+        up = new Compare(CompareOp.GE, r, half);
+      } else {
+        VarkaVectorIR one = sink.longSlot(1L);
+        Cond odd = new Compare(CompareOp.EQ, new BitOp(BitOpKind.AND, q, one), one);
+        up = new Or(new Compare(CompareOp.GT, r, half),
+            new And(new Compare(CompareOp.EQ, r, half), odd));
+      }
+      // CondValue, not IfElse: see remainderForm.
+      m = new IntArith(IntOp.MUL, Overflow.WRAP,
+          new IntArith(IntOp.ADD, Overflow.WRAP, q, new CondValue(up, LaneType.LONG)), dSlot);
+    }
+    return new IntArith(IntOp.SUB, Overflow.WRAP, new BitOp(BitOpKind.XOR, m, s), s);
+  }
+
+  /**
+   * The exclusive bound on the pre-shift's dividend {@code |x| >>> k} over {@code x} in
+   * {@code [lo, hi]}, which is what the division is told: the larger end's magnitude, read
+   * unsigned, shifted, plus one. It refuses a range whose dividend passes
+   * {@link ConstDivide#EXACT_DIVIDEND_BOUND}.
+   */
+  public static long preShiftBound(int k, long lo, long hi) {
+    long magLo = lo == Long.MIN_VALUE ? Long.MIN_VALUE : -Math.min(lo, 0L);
+    long magHi = Math.max(hi, 0L);
+    long mag = Long.compareUnsigned(magLo, magHi) >= 0 ? magLo : magHi;
+    long bound = (mag >>> k) + 1;
+    if (bound > ConstDivide.EXACT_DIVIDEND_BOUND) {
+      throw VarkaErrors.illegalState("the pre-shift at scale -" + k + " over [" + lo + ", " + hi
+          + "] gives a dividend past the division's bound");
+    }
+    return bound;
   }
 
   /** A literal on the computing lane. */
@@ -317,7 +413,7 @@ final class VarkaRoundingCompiler {
    * {@code BigDecimal}'s exact rounding, which is monotone in the input, so the bounds are
    * Spark's own.
    */
-  static long[] window(LaneType lane, int k, RoundingMode mode) {
+  public static long[] window(LaneType lane, int k, RoundingMode mode) {
     long min = minOf(lane);
     long max = maxOf(lane);
     long lo = min;

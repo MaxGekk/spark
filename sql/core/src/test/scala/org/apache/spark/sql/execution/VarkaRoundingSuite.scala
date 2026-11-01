@@ -29,10 +29,11 @@ import org.apache.spark.sql.types.{ByteType, IntegerType, LongType, ShortType, S
  * The rounding functions over integral operands (VARKA-344) against the row engine, end to end:
  * `floor`, `ceil` and `ceiling` over `BIGINT` and `INT`, and `round`, `bround` and `truncate`
  * over `TINYINT`, `SMALLINT`, `INT` and `BIGINT`, at the cells of `VARKA-344.md` 3.1 - the ties,
- * the ends of ANSI's windows, the extremes of each type, the `2^52` bound of the long division
- * and the scales past the type. Under LEGACY the whole table fuses and answers as the row engine
- * does; under ANSI every cell is run on its own, and Varka's answer or error is the row engine's,
- * a cell Spark raises on reaching it through the declined batch.
+ * the ends of ANSI's windows, the extremes of each type, the edges of the long pre-shift's window
+ * (`2^(52 + k)`, so `2^53` at -1 and `2^55` at -3) and the scales past the type. Under LEGACY
+ * the whole table fuses and answers as the row engine does; under ANSI every cell is run on its
+ * own, and Varka's answer or error is the row engine's, a cell Spark raises on reaching it
+ * through the declined batch.
  */
 // varka-session-lint: allow the cells of the plan's 3.1 through the cached Arrow path, each
 // raising cell its own query, so the error is the row engine's after the kernel declines its batch
@@ -48,7 +49,9 @@ class VarkaRoundingSuite extends QueryTest with VarkaSharedSessions with VarkaTe
   private val longs: Seq[java.lang.Long] = Seq[Long](0, 5, -5, 1500, -1500, 2500, -2500, 3499,
     3500, -3500, two52 - 1, -(two52 - 1), two52, -two52, two52 + 500, 4999999999999999999L,
     -4999999999999999999L, 5000000000000000000L, -5000000000000000000L, 5000000000000000001L,
-    -5000000000000000001L, Long.MaxValue, Long.MinValue, 123456789012345678L).map(Long.box)
+    -5000000000000000001L, Long.MaxValue, Long.MinValue, 123456789012345678L,
+    (1L << 53) - 1, 1L << 53, (1L << 55) - 1, -((1L << 55) - 1), 1L << 55,
+    36028797018963500L, -36028797018963500L, (1L << 62) - 1).map(Long.box)
 
   private val bytes: Seq[java.lang.Byte] =
     Seq[Int](0, 5, -5, 15, -15, 25, 124, -124, 125, -125, 127, -128).map(v => Byte.box(v.toByte))
@@ -89,6 +92,7 @@ class VarkaRoundingSuite extends QueryTest with VarkaSharedSessions with VarkaTe
     "round(y, -1)", "bround(y, -1)", "truncate(y, -1)", "round(y, -2)", "round(y, -3)",
     "round(s, -2)", "bround(s, -2)", "truncate(s, -3)", "round(s, -4)",
     "round(l, 0)", "round(l, -1)", "bround(l, -3)", "truncate(l, -3)", "round(l, -3)",
+    "round(l, -11)", "bround(l, -12)", "truncate(l, -15)",
     "round(l, -18)", "round(l, -19)", "bround(l, -19)", "truncate(l, -19)", "round(l, -20)")
 
   /** The forms ANSI raises on for some cell, each run cell by cell. */

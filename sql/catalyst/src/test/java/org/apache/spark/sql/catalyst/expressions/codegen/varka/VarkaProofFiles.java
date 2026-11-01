@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -33,6 +34,7 @@ import java.util.function.LongBinaryOperator;
 import com.google.common.math.IntMath;
 
 import org.apache.spark.sql.catalyst.expressions.BitmapExpressionUtils;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaRoundingCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDivisionLowering.MulHiMagic;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange.Range;
 import org.apache.spark.sql.catalyst.util.DateTimeConstants;
@@ -93,6 +95,7 @@ final class VarkaProofFiles {
     files.put("narrow_deferred.smt2", narrowDeferred());
     files.put("ym_divide.smt2", ymDivide());
     files.put("decimal_slot.smt2", decimalSlot());
+    files.put("integral_round.smt2", integralRound());
     files.put("refinement.smt2", VarkaRefinementFile.render());
     return files;
   }
@@ -216,18 +219,42 @@ final class VarkaProofFiles {
    * -60, which takes the sign branch a positive divisor does not, and {@link #NTZ_DAY_ODD}.
    * {@code VarkaDivisorProofSuite} holds the list to the compiler (VARKA-496): it fails on a
    * long-lane divisor the coverage rows or the cast matrix compile that is missing here, and on
-   * one here that none compiles, -60 apart.
+   * one here that none compiles, -60 apart. The {@link #ROUNDING_DIVISORS} close the list.
    */
-  static final List<Long> LONG_DIVISORS = List.of(
-      DateTimeConstants.NANOS_PER_MICROS,
-      DateTimeConstants.NANOS_PER_MILLIS,
-      DateTimeConstants.NANOS_PER_SECOND,
-      DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE,
-      DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE
-          * DateTimeConstants.MINUTES_PER_HOUR,
-      (long) DateTimeConstants.SECONDS_PER_MINUTE,
-      -60L,
-      NTZ_DAY_ODD);
+  static final List<Long> LONG_DIVISORS = longDivisors();
+
+  /**
+   * The divisors of the integral rounding's pre-shift over a {@code BIGINT}
+   * ({@code VarkaRoundingCompiler.preShiftForm}, VARKA-344): {@code 5^k} for each scale
+   * {@code -k} from -1 to -18. Their dividend is {@code |x| >>> k}, which the guard keeps under
+   * 2^52, so the conversion form's behaviour past 2^53 is no fact about them and is not stated.
+   */
+  static final List<Long> ROUNDING_DIVISORS = roundingDivisors();
+
+  private static List<Long> roundingDivisors() {
+    var out = new ArrayList<Long>();
+    long five = 1;
+    for (int k = 1; k <= 18; k++) {
+      five *= 5;
+      out.add(five);
+    }
+    return List.copyOf(out);
+  }
+
+  private static List<Long> longDivisors() {
+    var out = new ArrayList<Long>(List.of(
+        DateTimeConstants.NANOS_PER_MICROS,
+        DateTimeConstants.NANOS_PER_MILLIS,
+        DateTimeConstants.NANOS_PER_SECOND,
+        DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE,
+        DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE
+            * DateTimeConstants.MINUTES_PER_HOUR,
+        (long) DateTimeConstants.SECONDS_PER_MINUTE,
+        -60L,
+        NTZ_DAY_ODD));
+    out.addAll(roundingDivisors());
+    return List.copyOf(out);
+  }
 
   private static final long P52 = 1L << 52;
   private static final long P53 = 1L << 53;
@@ -310,7 +337,7 @@ final class VarkaProofFiles {
       // Where the conversion form first goes wrong past 2^53 is a fact about the TIME divisors,
       // whose dividends reach the bound. The day's odd part is still exact at the dividend the
       // rule renders - both solvers say so - and its caller states a bound near 2^50.
-      if (d != NTZ_DAY_ODD) {
+      if (d != NTZ_DAY_ODD && !ROUNDING_DIVISORS.contains(d)) {
         conversionBound(out, d, m);
       }
       magicExact(out, d, m);
@@ -1938,6 +1965,230 @@ final class VarkaProofFiles {
   private static String bitmapBucket(String op, int k) {
     return "(ite (> v 0) (jlong.add (" + op + " w " + k + ") 1) (jlong.neg (" + op + " w " + k
         + ")))";
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The integral rounding over BIGINT, its pre-shift and its remainder form (VARKA-344).
+  // -----------------------------------------------------------------------------------------
+
+  /** The three modes the integral rounding takes, each with its spec's name in the file. */
+  private static final List<RoundingMode> ROUND_MODES =
+      List.of(RoundingMode.HALF_UP, RoundingMode.HALF_EVEN, RoundingMode.DOWN);
+
+  private static String roundSpec(RoundingMode mode) {
+    return switch (mode) {
+      case HALF_UP -> "rnd.half.up";
+      case HALF_EVEN -> "rnd.half.even";
+      case DOWN -> "rnd.down";
+      default -> throw new IllegalArgumentException(mode.toString());
+    };
+  }
+
+  private static String roundName(RoundingMode mode) {
+    return switch (mode) {
+      case HALF_UP -> "round";
+      case HALF_EVEN -> "bround";
+      case DOWN -> "truncate";
+      default -> throw new IllegalArgumentException(mode.toString());
+    };
+  }
+
+  /**
+   * {@code integral_round.smt2}: {@code VarkaRoundingCompiler}'s rounding of a {@code BIGINT} at
+   * a negative scale is Spark's {@code BigDecimal.setScale(-k, mode).longValue()} for every long
+   * its guard admits, with the guard's ends, the division's stated bound and ANSI's windows
+   * rendered from the compiler's own methods.
+   */
+  static String integralRound() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The integral rounding of a BIGINT at scale -k (VARKA-344), round, bround and truncate,
+        ; is Spark's BigDecimal.setScale(-k, HALF_UP | HALF_EVEN | DOWN).longValue() for every
+        ; long its guard admits. What VarkaRoundingCompiler.preShiftForm emits, per lane, for
+        ; 1 <= k <= 18, d = 10^k, h = d / 2, every operation the long lane's wrapping one:
+        ;
+        ;   guard  x in [lo, hi]           GuardedRange: the pre-shift's window, narrowed by
+        ;                                  ANSI's tails; a batch with a lane outside declines
+        ;   s  = x >> 63                   0 or -1
+        ;   a  = (x ^ s) - s               |x|, Long.MIN_VALUE giving itself
+        ;   t  = a >>> k                   floor(|x| / 2^k), a read unsigned
+        ;   Q  = t / 5^k                   ConstDivide, told t < preShiftBound(k, lo, hi)
+        ;   r  = a - Q * d                 the magnitude's remainder, in [0, d)
+        ;   M  = (Q + [up]) * d            HALF_UP:   up = r >= h
+        ;                                  HALF_EVEN: up = r > h or (r = h and Q & 1 = 1)
+        ;                                  DOWN:      M = Q * d
+        ;   out = (M ^ s) - s              the sign put back
+        ;
+        ; At k = 19, 10^19 is past the long range: q0 = 0, r = x, and out is q times 10^19
+        ; wrapped, q = [x >= h] - [x <= -h] (or > and <), h = 5 * 10^18; DOWN is x * 0, and so is
+        ; every mode from k = 20.
+        ;
+        ; The specification is the rounding in unbounded integers: the magnitude |x| divided by
+        ; d, raised by one past the half (HALF_UP at it too, HALF_EVEN at it for an odd
+        ; quotient), the sign put back, times d; longValue() is its low 64 bits, jlong.wrap. It
+        ; is pinned to BigDecimal at sample values. The division itself is not proven here:
+        ; long_divide.smt2 proves the ConstDivide exact by each 5^k for every dividend under
+        ; 2^52, and these checks take Q as the exact floor of a non-negative t, beside a check
+        ; per scale that the guard keeps t under the bound the compiler states, which is at
+        ; most 2^52. So the claims split at the quotient: over the guard the pre-shift gives
+        ; floor(|x| / d), and the steps after it give the rounding from that Q, over every long,
+        ; Long.MIN_VALUE's wrapped magnitude included. x ^ s
+        ; is written as an ite on s, which is Java's XOR for s in {0, -1}, and a first check
+        ; shows s is one of them. Beside the claims: each guard's end is tight (one past it
+        ; reaches the bound, or overflows ANSI's long), and the arithmetic shift in place of the
+        ; logical one is wrong at Long.MIN_VALUE.
+        """);
+    out.append(rendered("ALL"));
+    out.append("""
+
+        (define-fun xor.sign ((v Int) (s Int)) Int (ite (= s (- 1)) (jlong.not v) v))
+
+        (define-fun rnd.half.up ((x Int) (d Int)) Int
+          (let ((m (+ (div (abs x) d) (ite (>= (* 2 (mod (abs x) d)) d) 1 0))))
+            (ite (< x 0) (- (* m d)) (* m d))))
+        (define-fun rnd.half.even ((x Int) (d Int)) Int
+          (let ((q (div (abs x) d)) (r2 (* 2 (mod (abs x) d))))
+            (let ((m (+ q (ite (or (> r2 d) (and (= r2 d) (= (mod q 2) 1))) 1 0))))
+              (ite (< x 0) (- (* m d)) (* m d)))))
+        (define-fun rnd.down ((x Int) (d Int)) Int
+          (let ((m (div (abs x) d)))
+            (ite (< x 0) (- (* m d)) (* m d))))
+
+        ; The steps after the quotient, per mode, from the magnitude a, its quotient Q and the
+        ; sign s.
+        (define-fun form.half.up ((a Int) (Q Int) (s Int) (d Int) (h Int)) Int
+          (let ((r (jlong.sub a (jlong.mul Q d))))
+            (let ((m (jlong.mul (jlong.add Q (ite (>= r h) 1 0)) d)))
+              (jlong.sub (xor.sign m s) s))))
+        (define-fun form.half.even ((a Int) (Q Int) (s Int) (d Int) (h Int)) Int
+          (let ((r (jlong.sub a (jlong.mul Q d))) (odd (= (jlong.and.low Q 2) 1)))
+            (let ((m (jlong.mul (jlong.add Q (ite (or (> r h) (and (= r h) odd)) 1 0)) d)))
+              (jlong.sub (xor.sign m s) s))))
+        (define-fun form.down ((a Int) (Q Int) (s Int) (d Int) (h Int)) Int
+          (jlong.sub (xor.sign (jlong.mul Q d) s) s))
+        """);
+    String x = "(declare-const x Int)\n(assert (jlong.in x))";
+    check(out, "s = x >> 63 is 0 or -1 for every long", "unsat",
+        List.of(x, "(assert (not (or (= (jlong.shr x 63) 0) (= (jlong.shr x 63) (- 1)))))"));
+    for (int k = 1; k <= 18; k++) {
+      long[] g = VarkaRoundingCompiler.preShiftGuard(k);
+      long bound = VarkaRoundingCompiler.preShiftBound(k, g[0], g[1]);
+      long five = BigInteger.valueOf(5).pow(k).longValueExact();
+      long d = BigInteger.TEN.pow(k).longValueExact();
+      String in = "(assert (and (<= " + lit(g[0]) + " x) (<= x " + lit(g[1]) + ")))";
+      String shift = preShift("jlong.ushr", k);
+      String window = k >= 12 ? "every long" : "[" + g[0] + ", " + g[1] + "]";
+      check(out, "k = " + k + ": over " + window + " the dividend a >>> k lies in [0, " + bound
+          + "), the bound the division is told, at most 2^52", "unsat",
+          List.of(x, in, shift, "(assert (not (and (<= 0 t) (< t " + bound + ") (<= " + bound
+              + " " + VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND + "))))"));
+      check(out, "k = " + k + ": over " + window + " Q = (a >>> k) / " + five
+          + " is |x| / 10^" + k, "unsat",
+          List.of(x, in, shift, "(declare-const Q Int)", "(assert (= Q (div t " + five + ")))",
+              "(assert (not (= Q (div (abs x) " + d + "))))"));
+      if (k < 12) {
+        long past = k == 11 ? Long.MIN_VALUE : g[1] + 1;
+        check(out, "k = " + k + ": and at x = " + past + ", one past the guard, the dividend "
+            + "reaches 2^52", "sat", List.of(x, "(assert (= x " + lit(past) + "))", shift,
+                "(assert (>= t " + VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND + "))"));
+      }
+      for (RoundingMode mode : ROUND_MODES) {
+        // Under ANSI the guard is the pre-shift's narrowed by the mode's window, and the bound
+        // the division is told is derived from the narrower range.
+        long[] w = VarkaRoundingCompiler.window(VarkaVectorIR.LaneType.LONG, k, mode);
+        if (w.length > 0 && (w[0] > g[0] || w[1] < g[1])) {
+          long lo = Math.max(g[0], w[0]);
+          long hi = Math.min(g[1], w[1]);
+          long b = VarkaRoundingCompiler.preShiftBound(k, lo, hi);
+          check(out, "k = " + k + ", ANSI " + roundName(mode) + ": over [" + lo + ", " + hi
+              + "] the dividend lies in [0, " + b + "), the bound the division is told", "unsat",
+              List.of(x, "(assert (and (<= " + lit(lo) + " x) (<= x " + lit(hi) + ")))", shift,
+                  "(assert (not (and (<= 0 t) (< t " + b + "))))"));
+        }
+        String form = roundSpec(mode).replace("rnd.", "form.");
+        check(out, "k = " + k + ": " + roundName(mode) + "'s steps from Q = |x| / 10^" + k
+            + " are the rounding wrapped, for every long", "unsat",
+            List.of(x, shift, "(declare-const Q Int)", "(assert (= Q (div (abs x) " + d + ")))",
+                "(assert (not (= (" + form + " a Q s " + d + " " + (d / 2) + ") (jlong.wrap ("
+                    + roundSpec(mode) + " x " + d + ")))))"));
+      }
+    }
+    check(out, "k = 1: bround's steps in round's place are not round", "sat",
+        List.of(x, preShift("jlong.ushr", 1), "(declare-const Q Int)",
+            "(assert (= Q (div (abs x) 10)))",
+            "(assert (not (= (form.half.even a Q s 10 5) (jlong.wrap (rnd.half.up x 10)))))"));
+    check(out, "k = 12: with the arithmetic shift in place of the logical one the dividend is "
+        + "negative at Long.MIN_VALUE", "sat", List.of(x, "(assert (= x jlong.MIN))",
+            preShift("jlong.shr", 12), "(assert (< t 0))"));
+    long h19 = 5_000_000_000_000_000_000L;
+    long d19 = BigInteger.TEN.pow(19).longValue();
+    String ten19 = BigInteger.TEN.pow(19).toString();
+    check(out, "k = 19: round's sign test is the rounding wrapped, for every long", "unsat",
+        List.of(x, "(assert (not (= (jlong.mul (jlong.sub (ite (>= x " + h19 + ") 1 0) (ite (<= x "
+            + lit(-h19) + ") 1 0)) " + lit(d19) + ") (jlong.wrap (rnd.half.up x " + ten19
+            + ")))))"));
+    check(out, "k = 19: bround's sign test is the rounding wrapped, for every long", "unsat",
+        List.of(x, "(assert (not (= (jlong.mul (jlong.sub (ite (> x " + h19 + ") 1 0) (ite (< x "
+            + lit(-h19) + ") 1 0)) " + lit(d19) + ") (jlong.wrap (rnd.half.even x " + ten19
+            + ")))))"));
+    for (int k : new int[] {19, 20}) {
+      for (RoundingMode mode : ROUND_MODES) {
+        if (k == 19 && mode != RoundingMode.DOWN) {
+          continue;
+        }
+        check(out, "k = " + k + ": " + roundName(mode) + " is x * 0 for every long", "unsat",
+            List.of(x, "(assert (not (= (jlong.mul x 0) (jlong.wrap (" + roundSpec(mode) + " x "
+                + BigInteger.TEN.pow(k) + ")))))"));
+      }
+    }
+    for (int k = 1; k <= 19; k++) {
+      String dk = BigInteger.TEN.pow(k).toString();
+      for (RoundingMode mode : ROUND_MODES) {
+        long[] w = VarkaRoundingCompiler.window(VarkaVectorIR.LaneType.LONG, k, mode);
+        if (w.length == 0) {
+          continue;
+        }
+        String spec = "(" + roundSpec(mode) + " x " + dk + ")";
+        check(out, "ANSI, k = " + k + ": " + roundName(mode) + " over [" + w[0] + ", " + w[1]
+            + "] stays a long", "unsat", List.of(x, "(assert (and (<= " + lit(w[0]) + " x) (<= x "
+                + lit(w[1]) + ")))", "(assert (not (jlong.in " + spec + ")))"));
+        if (w[1] < Long.MAX_VALUE) {
+          check(out, "ANSI, k = " + k + ": and at " + (w[1] + 1) + " it overflows", "unsat",
+              List.of(x, "(assert (= x " + lit(w[1] + 1) + "))", "(assert (jlong.in " + spec
+                  + "))"));
+        }
+        if (w[0] > Long.MIN_VALUE) {
+          check(out, "ANSI, k = " + k + ": and at " + (w[0] - 1) + " it overflows", "unsat",
+              List.of(x, "(assert (= x " + lit(w[0] - 1) + "))", "(assert (jlong.in " + spec
+                  + "))"));
+        }
+      }
+    }
+    long[] pins = {15, -15, 25, -25, 35, 1234567895, -1234567895, 4999999999999999999L,
+        5000000000000000000L, -5000000000000000000L, Long.MAX_VALUE, Long.MIN_VALUE};
+    for (RoundingMode mode : ROUND_MODES) {
+      for (int k : new int[] {1, 3, 18, 19}) {
+        var v = new StringBuilder();
+        for (long p : pins) {
+          long want = BigDecimal.valueOf(p).setScale(-k, mode).longValue();
+          v.append("\n  (= (jlong.wrap (").append(roundSpec(mode)).append(' ').append(lit(p))
+              .append(' ').append(BigInteger.TEN.pow(k)).append(")) ").append(lit(want))
+              .append(')');
+        }
+        check(out, "the specification of " + roundName(mode) + " at k = " + k + " is "
+            + "BigDecimal's at sample values", "unsat",
+            List.of("(assert (not (and" + v + ")))"));
+      }
+    }
+    return out.toString();
+  }
+
+  /** The pre-shift over {@code x} as declared constants s, a and t, shifting with {@code op}. */
+  private static String preShift(String op, int k) {
+    return "(declare-const s Int) (declare-const a Int) (declare-const t Int)\n"
+        + "(assert (= s (jlong.shr x 63)))\n"
+        + "(assert (= a (jlong.sub (xor.sign x s) s)))\n"
+        + "(assert (= t (" + op + " a " + k + ")))";
   }
 
   // -----------------------------------------------------------------------------------------

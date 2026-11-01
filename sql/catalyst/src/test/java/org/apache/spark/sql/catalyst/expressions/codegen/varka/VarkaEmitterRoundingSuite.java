@@ -16,14 +16,20 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongToIntFunction;
@@ -49,6 +55,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterFixtures.Output;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.internal.SQLConf$;
+import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
 
 /**
@@ -58,6 +65,12 @@ import org.apache.spark.sql.types.DataTypes;
  * 3.5), behind {@code -Dvarka.sweep=true}; a strided slice of the ints, the windows' ends and the
  * extremes among them, on every build. Under ANSI a chunk the kernel answers holds no int Spark
  * raises on, and a chunk holding one is declined.
+ *
+ * <p>A {@code BIGINT} at each scale from -1 to -20, through the pre-shift's window
+ * ({@code VarkaRoundingCompiler.preShiftForm}): the longs near the window's edge, near
+ * {@code 2^52}, {@code 2^55}, {@code 5 * 10^18} and the extremes, the ties beside each, and a
+ * seeded draw over every bit length, answered exactly where the long lies inside the window and
+ * Spark answers, and declined everywhere else, so the window is asserted, not only the answers.
  */
 @VarkaSuite(ownJvm = true)
 public final class VarkaEmitterRoundingSuite {
@@ -67,6 +80,8 @@ public final class VarkaEmitterRoundingSuite {
   private static final List<String> FUNCTIONS = List.of("round", "bround", "truncate");
   private static final List<Attribute> COLS =
       List.of(VarkaSqlResolve.column("i", DataTypes.IntegerType));
+  private static final List<Attribute> LONG_COLS =
+      List.of(VarkaSqlResolve.column("l", DataTypes.LongType));
 
   /** The ints every slice starts with: the extremes and the ends of ANSI's windows at -1. */
   private static final int[] EDGES = {Integer.MIN_VALUE, Integer.MAX_VALUE, 0, -1, 1, 5, -5,
@@ -83,7 +98,11 @@ public final class VarkaEmitterRoundingSuite {
   }
 
   private static Expression spark(String fn, int scale, boolean ansi) {
-    var child = new BoundReference(0, DataTypes.IntegerType, false);
+    return spark(fn, scale, ansi, DataTypes.IntegerType);
+  }
+
+  private static Expression spark(String fn, int scale, boolean ansi, DataType type) {
+    var child = new BoundReference(0, type, false);
     var s = Literal$.MODULE$.apply(scale);
     return switch (fn) {
       case "round" -> new Round(child, s, ansi);
@@ -94,13 +113,18 @@ public final class VarkaEmitterRoundingSuite {
   }
 
   private static CompiledVarkaProjection compile(String sql, boolean ansi) {
+    return compile(sql, ansi, COLS);
+  }
+
+  private static CompiledVarkaProjection compile(String sql, boolean ansi,
+      List<Attribute> columns) {
     SQLConf conf = SQLConf.get().clone();
     conf.setConfString(SQLConf.ANSI_ENABLED().key(), Boolean.toString(ansi));
     Expression e = SQLConf$.MODULE$.withExistingConf(conf,
-        () -> VarkaSqlResolve.parse(sql, CollectionConverters.asScala(COLS).toSeq()));
+        () -> VarkaSqlResolve.parse(sql, CollectionConverters.asScala(columns).toSeq()));
     scala.collection.immutable.Seq<NamedExpression> entry =
         CollectionConverters.asScala(List.of(VarkaSqlResolve.named(e, "c"))).toSeq();
-    var cols = CollectionConverters.asScala(COLS).toSeq();
+    var cols = CollectionConverters.asScala(columns).toSeq();
     Optional<CompiledVarkaProjection> plan =
         VarkaExpressionCompiler.compile(entry, cols, VarkaMatrixRuns.BASE);
     if (plan.isEmpty()) {
@@ -211,5 +235,154 @@ public final class VarkaEmitterRoundingSuite {
   void everyInt() {
     assumeTrue(sweepsEnabled(), "set -Dvarka.sweep=true to sweep the emitted kernels");
     sweepAll(1L << 32, r -> (int) r);
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // BIGINT: the pre-shift's window.
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * Whether the pre-shift at scale {@code -k} admits {@code v}, restated from the plan rather
+   * than read from the compiler: {@code |v| < 2^(52 + k)} up to {@code k = 10}, every long but
+   * {@code Long.MIN_VALUE} at {@code k = 11}, and every long from {@code k = 12} (where the
+   * scales past 18 have no division at all).
+   */
+  private static boolean inWindow(long v, int k) {
+    if (k >= 12) {
+      return true;
+    }
+    if (k == 11) {
+      return v != Long.MIN_VALUE;
+    }
+    return v != Long.MIN_VALUE && Math.abs(v) < 1L << (52 + k);
+  }
+
+  /** The longs that probe scale {@code -k}: the window's edges and the named points, and ties. */
+  private static List<Long> longCells(int k) {
+    var points = new LinkedHashSet<Long>();
+    BigInteger d = BigInteger.TEN.pow(k);
+    long edge = k <= 10 ? 1L << (52 + k) : Long.MAX_VALUE;
+    for (long c : new long[] {0, 1, edge - 1, edge, 1L << 52, 1L << 55,
+        5_000_000_000_000_000_000L, Long.MAX_VALUE}) {
+      for (long off = -2; off <= 2; off++) {
+        long v = c + off;
+        if ((off > 0 && v < c) || (off < 0 && v > c)) {
+          continue;
+        }
+        points.add(v);
+        points.add(-v);
+        // The tie nearest v, and its neighbours: the multiple of 10^k at or below |v| plus half.
+        if (k <= 18) {
+          BigInteger m = BigInteger.valueOf(v).abs().divide(d).multiply(d)
+              .add(d.shiftRight(1));
+          for (int t = -1; t <= 1; t++) {
+            BigInteger tie = m.add(BigInteger.valueOf(t));
+            if (tie.bitLength() < 64) {
+              points.add(tie.longValue());
+              points.add(-tie.longValue());
+            }
+          }
+        }
+      }
+    }
+    points.add(Long.MIN_VALUE);
+    points.add(Long.MIN_VALUE + 1);
+    return List.copyOf(points);
+  }
+
+  /** One long chunk through {@code kernel}: the status, and the answers into {@code got}. */
+  private static int runLong(VarkaFusedKernel kernel, int[] ints, long[] longs, long[] in,
+      long[] got) {
+    int n = in.length;
+    try (Arena arena = Arena.ofConfined()) {
+      MemorySegment data = VarkaEmitterFixtures.alloc(arena, n * 8L);
+      for (int i = 0; i < n; i++) {
+        data.set(ValueLayout.JAVA_LONG, i * 8L, in[i]);
+      }
+      Output out = VarkaEmitterFixtures.makeLongOutput(arena, n);
+      int status = kernel.run(new long[] {data.address()}, new long[] {0L}, new int[] {0},
+          new long[] {out.data().address()}, new long[] {out.validity().address()}, ints, longs,
+          n, VarkaEmitterTestSupport.scratch(kernel, n));
+      for (int i = 0; i < n; i++) {
+        got[i] = out.data().get(ValueLayout.JAVA_LONG, i * 8L);
+      }
+      return status;
+    }
+  }
+
+  /**
+   * {@code fn(l, -k)} in one mode: every cell inside the window that Spark answers, with a
+   * seeded draw inside the window beside them, in one chunk the kernel must answer exactly; and
+   * every other cell in a chunk of its own beside two answerable longs, which the kernel must
+   * decline.
+   */
+  private static void checkLong(String fn, int k, boolean ansi, Random rnd) {
+    String sql = fn + "(l, " + (-k) + ")";
+    String ctx = sql + (ansi ? " under ANSI" : " under LEGACY");
+    CompiledVarkaProjection plan = compile(sql, ansi, LONG_COLS);
+    Expression expr = spark(fn, -k, ansi, DataTypes.LongType);
+    var loaded = VarkaEmitterFixtures.load(VarkaEmitterFixtures.emit(plan.outputs(),
+        plan.inputOrdinals().size(), plan.numLiterals(), VarkaMatrixRuns.BASE));
+    int[] ints = plan.literals().stream().mapToInt(Integer::intValue).toArray();
+    long[] longs = plan.longLiterals().stream().mapToLong(Long::longValue).toArray();
+    var row = new GenericInternalRow(new Object[1]);
+    try {
+      var answered = new ArrayList<Long>();
+      var declined = new ArrayList<Long>();
+      for (long v : longCells(k)) {
+        boolean raises = false;
+        row.update(0, v);
+        try {
+          expr.eval(row);
+        } catch (ArithmeticException e) {
+          raises = true;
+        }
+        (inWindow(v, k) && !raises ? answered : declined).add(v);
+      }
+      while (answered.size() < 1024) {
+        long v = rnd.nextLong() >> rnd.nextInt(64);
+        row.update(0, v);
+        try {
+          expr.eval(row);
+          if (inWindow(v, k)) {
+            answered.add(v);
+          }
+        } catch (ArithmeticException e) {
+          // A long Spark raises on is a declined cell, which the named ones cover.
+        }
+      }
+      long[] in = answered.stream().mapToLong(Long::longValue).toArray();
+      long[] got = new long[in.length];
+      int status = runLong(loaded.kernel(), ints, longs, in, got);
+      assertEquals(0, status, ctx + ": a chunk inside the window was declined");
+      for (int i = 0; i < in.length; i++) {
+        row.update(0, in[i]);
+        long want = (Long) expr.eval(row);
+        if (got[i] != want) {
+          fail(ctx + ": over " + in[i] + " the kernel gave " + got[i] + " and Spark " + want);
+        }
+      }
+      for (long v : declined) {
+        long[] one = {0L, v, 1L};
+        int st = runLong(loaded.kernel(), ints, longs, one, new long[3]);
+        assertNotEquals(0, st, ctx + ": a chunk holding " + v + ", outside the window or "
+            + "raising, was answered");
+      }
+    } finally {
+      loaded.loader().release();
+    }
+  }
+
+  @Test
+  @DisplayName("round, bround and truncate of a bigint at scales -1 to -20 answer exactly inside "
+      + "the pre-shift's window and decline past it, in LEGACY and ANSI")
+  void bigintWindow() {
+    var rnd = new Random(344L);
+    for (String fn : FUNCTIONS) {
+      for (int k = 1; k <= 20; k++) {
+        checkLong(fn, k, false, rnd);
+        checkLong(fn, k, true, rnd);
+      }
+    }
   }
 }
