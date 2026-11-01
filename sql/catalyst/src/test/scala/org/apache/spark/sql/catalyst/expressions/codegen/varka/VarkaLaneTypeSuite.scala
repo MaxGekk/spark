@@ -119,7 +119,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // of VARKA-347 2.3 is built, and the decimal output, which widens a long value into a decimal
     // slot and refuses an int child (VARKA-157).
     assert(everyIntNode.map(_.getClass).toSet + classOf[WidenLane] + classOf[MathUnary] +
-      classOf[DecimalColumn] + classOf[WidenDecimal] === concreteNodeTypes(classOf[VarkaVectorIR]))
+      classOf[DecimalColumn] + classOf[DecimalWord] + classOf[WidenDecimal] ===
+      concreteNodeTypes(classOf[VarkaVectorIR]))
     val doubleCol = new ColumnRef(0, LaneType.DOUBLE)
     assert(new MathUnary(MathFn.SQRT, doubleCol).laneType() === LaneType.DOUBLE)
     everyIntNode.foreach { node =>
@@ -403,6 +404,10 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
         case "ColumnRef" => c
         // Refused off the long lane by its constructor (VARKA-347).
         case "DecimalColumn" => new DecimalColumn(0, lane, 9)
+        // A long-lane leaf by its record (VARKA-359), so refused at every other lane here.
+        case "DecimalWord" =>
+          require(lane == LaneType.LONG, "a decimal word is on the long lane")
+          new DecimalWord(0, Word.LOW, 38)
         case "LiteralSlot" => l
         case "IntArith" => new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)
         case "IntNeg" => new IntNeg(Overflow.WRAP, c)
@@ -485,7 +490,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
     val atLong = buildable.filter(_._1 == LaneType.LONG).map(_._2).toSet
     val atInt = buildable.filter(_._1 == LaneType.INT).map(_._2).toSet
-    assert(atInt + "MathUnary" === types.map(_.getSimpleName).toSet - "DecimalColumn",
+    assert(atInt + "MathUnary" === types.map(_.getSimpleName).toSet - "DecimalColumn" -
+      "DecimalWord",
       "every integral node type but the decimal column is emittable at INT")
     val sqrt = new MathUnary(MathFn.SQRT, new ColumnRef(0, LaneType.DOUBLE))
     val sqrtBytes = VarkaLoopEmitter.emit("VarkaReachMathUnaryDOUBLE",
@@ -497,7 +503,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
       "Compare", "NullSafeEqual", "And", "Or", "Not", "IsNotNull", "IfElse", "ConstDivide",
       "BoolColumn", "CondConst", "BoolCompare", "CondIf", "BoolNullSafeEq", "CondValue",
       "BoolOutput", "GuardedRange", "NarrowLane", "WidenLane", "BitOp", "BitCount",
-      "DecimalColumn", "WidenDecimal"),
+      "DecimalColumn", "DecimalWord", "WidenDecimal"),
       "the long lane serves the lane-generic subset, VARKA-88's division, VARKA-102's guard, " +
         "the two conversions, which build over the other lane's child whatever the row, " +
         "VARKA-335's bitwise operations, VARKA-336's null-safe equality, VARKA-460's " +

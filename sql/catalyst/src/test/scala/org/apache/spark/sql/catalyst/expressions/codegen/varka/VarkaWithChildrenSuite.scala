@@ -72,7 +72,7 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     // is rebuilt directly below.
     val undrawn = permitted -- seen - "NullSafeEqual" - "BoolColumn" - "CondConst" -
       "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" - "BoolOutput" - "DecimalColumn" -
-      "MathUnary"
+      "DecimalWord" - "MathUnary"
     assert(undrawn.isEmpty, s"the grammars never drew: ${undrawn.toSeq.sorted.mkString(", ")}")
   }
 

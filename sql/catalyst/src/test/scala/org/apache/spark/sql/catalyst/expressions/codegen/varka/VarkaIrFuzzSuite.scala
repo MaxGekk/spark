@@ -1021,7 +1021,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // of the same refit. `VarkaEmitterFloatingArithSuite` and the coverage rows cover it.
     val missing = permitted -- seen - "NarrowLane" - "WidenLane" - "NullSafeEqual" -
       "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
-      "BoolOutput" - "DecimalColumn" - "WidenDecimal" - "MathUnary"
+      "BoolOutput" - "DecimalColumn" - "DecimalWord" - "WidenDecimal" - "MathUnary"
     assert(missing.isEmpty,
       s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +
         "state here why the node type is deliberately out of the fuzzer's reach")

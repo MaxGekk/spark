@@ -27,14 +27,21 @@ import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Cast;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.Literal;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.DecimalPairLowering;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.DecimalWords;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOpKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalWord;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NullSafeEqual;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Word;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenDecimal;
 import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.sql.types.DecimalType;
@@ -54,13 +61,17 @@ import org.apache.spark.sql.types.DecimalType;
  * larger precision, which changes no unscaled value and cannot fail, so it is its child here, as
  * {@code TIME}'s widening precision cast is in {@code VarkaTimeCompiler}.
  *
+ * <p>A comparison whose common type is wider than 18 digits compares 128-bit lane pairs
+ * ({@link Pair}, VARKA-359): a column of precision 19 to 38 is its two {@link DecimalWord}
+ * leaves, a column of 18 digits or fewer its long sign-extended, and a literal its two words in
+ * the long table; {@link DecimalPairLowering} composes the comparison over the words.
+ *
  * <p>What stays declined, each naming its row: operands of two scales, whose comparison needs a
- * rescale (row 348, and above 18 digits rows 360 and 363); a comparison whose common type is
- * wider than 18 digits, whose unscaled values are a 128-bit lane pair ({@link Pair}) whose word
- * leaf is row 359's; and every other decimal operand, a cast that changes the
- * scale or an arithmetic result (rows 348 to 350). A decimal in a value position - a choice, an
- * arithmetic operand, an output - is declined by {@code VarkaTimeCompiler}'s decimal arm, and a
- * decimal-valued output root, once a lowering builds one, is admitted by {@link #outputRoot}.
+ * rescale (row 348, and above 18 digits rows 360 and 363); and every other decimal operand, a
+ * cast that changes the scale or an arithmetic result (rows 348 to 350). A decimal in a value
+ * position - a choice, an arithmetic operand, an output - is declined by
+ * {@code VarkaTimeCompiler}'s decimal arm, and a decimal-valued output root, once a lowering
+ * builds one, is admitted by {@link #outputRoot}.
  */
 final class VarkaDecimalCompiler {
 
@@ -81,7 +92,7 @@ final class VarkaDecimalCompiler {
    * the reason noted. Type coercion gives both operands one type; the check is kept so that a
    * hand-built tree of two scales declines rather than comparing unscaled values of two scales.
    */
-  static Optional<List<VarkaVectorIR>> operands(Expression whole, Expression left,
+  private static Optional<List<VarkaVectorIR>> operands(Expression whole, Expression left,
       Expression right, VarkaSlotTable inputs, DeclineSink sink) {
     DecimalType lt = (DecimalType) left.dataType();
     boolean wide = lt.precision() > DecimalColumn.MAX_LONG_PRECISION
@@ -94,9 +105,9 @@ final class VarkaDecimalCompiler {
           : "a comparison of decimals of two scales, which needs a rescale, is row 348's", whole);
     }
     if (wide) {
-      return sink.decline("a comparison of decimals wider than "
-          + DecimalColumn.MAX_LONG_PRECISION + " digits reads the 128-bit lane pair, whose word "
-          + "leaf is row 359's and not built yet", whole);
+      // Unreachable: a comparison of one scale above 18 digits is wideType's, compiled as pairs.
+      throw VarkaErrors.illegalState("a comparison wider than "
+          + DecimalColumn.MAX_LONG_PRECISION + " digits is compiled over pairs: " + whole);
     }
     Optional<VarkaVectorIR> l = operand(left, lt.scale(), inputs, sink);
     if (l.isEmpty()) {
@@ -107,6 +118,102 @@ final class VarkaDecimalCompiler {
       return Optional.empty();
     }
     return Optional.of(List.of(l.get(), r.get()));
+  }
+
+  /**
+   * {@code left op right} over two decimals: the unscaled longs' compare up to 18 digits, the
+   * pairs' composed compare above ({@link DecimalPairLowering#compare}); or empty with the
+   * reason noted.
+   */
+  static Optional<Cond> compare(CompareOp op, Expression whole, Expression left,
+      Expression right, VarkaSlotTable inputs, DeclineSink sink) {
+    Optional<DecimalType> wide = wideType(left, right);
+    if (wide.isEmpty()) {
+      return operands(whole, left, right, inputs, sink)
+          .map(both -> new Compare(op, both.get(0), both.get(1)));
+    }
+    return pairs(whole, left, right, wide.get(), inputs, sink)
+        .map(p -> DecimalPairLowering.compare(op, p.get(0).lo(), p.get(0).hi(), p.get(1).lo(),
+            p.get(1).hi()));
+  }
+
+  /** {@code left <=> right} over two decimals, as {@link #compare} takes them. */
+  static Optional<Cond> nullSafeEqual(Expression whole, Expression left, Expression right,
+      VarkaSlotTable inputs, DeclineSink sink) {
+    Optional<DecimalType> wide = wideType(left, right);
+    if (wide.isEmpty()) {
+      return operands(whole, left, right, inputs, sink)
+          .map(both -> new NullSafeEqual(both.get(0), both.get(1)));
+    }
+    return pairs(whole, left, right, wide.get(), inputs, sink)
+        .map(p -> DecimalPairLowering.nullSafeEqual(p.get(0).lo(), p.get(0).hi(),
+            p.get(1).lo(), p.get(1).hi()));
+  }
+
+  /**
+   * The common type of a comparison whose operands are two decimals of one scale, one of them
+   * wider than 18 digits: the wider of the two, which type coercion has already cast both to.
+   * Empty for any other comparison, which {@link #operands} takes or declines.
+   */
+  private static Optional<DecimalType> wideType(Expression left, Expression right) {
+    if (left.dataType() instanceof DecimalType lt && right.dataType() instanceof DecimalType rt
+        && lt.scale() == rt.scale()
+        && Math.max(lt.precision(), rt.precision()) > DecimalColumn.MAX_LONG_PRECISION) {
+      return Optional.of(lt.precision() >= rt.precision() ? lt : rt);
+    }
+    return Optional.empty();
+  }
+
+  /** Both operands of a wide comparison as pairs of {@code type}, or empty with the reason. */
+  private static Optional<List<Pair>> pairs(Expression whole, Expression left, Expression right,
+      DecimalType type, VarkaSlotTable inputs, DeclineSink sink) {
+    Optional<Pair> l = pairOperand(left, type, inputs, sink);
+    if (l.isEmpty()) {
+      return Optional.empty();
+    }
+    Optional<Pair> r = pairOperand(right, type, inputs, sink);
+    if (r.isEmpty()) {
+      return Optional.empty();
+    }
+    return Optional.of(List.of(l.get(), r.get()));
+  }
+
+  /**
+   * One operand of a wide comparison as a pair of {@code type}: a column of precision 19 to 38
+   * as its two word leaves, a column of 18 digits or fewer as its long sign-extended
+   * ({@link #widened}), each through any widening casts, which change no unscaled value; or a
+   * literal's two words ({@link #literalPair}).
+   */
+  private static Optional<Pair> pairOperand(Expression e, DecimalType type,
+      VarkaSlotTable inputs, DeclineSink sink) {
+    Expression stripped = stripWidening(e);
+    if (stripped instanceof BoundReference br) {
+      if (VarkaTypes.read(br.dataType()).isEmpty()) {
+        return sink.decline(VarkaTypes.declineReason(br.dataType())
+            .orElse("a decimal column on no lane"), e);
+      }
+      int precision = ((DecimalType) br.dataType()).precision();
+      if (precision <= DecimalColumn.MAX_LONG_PRECISION) {
+        return Optional.of(widened(column(br, inputs), type, sink));
+      }
+      int ordinal = inputs.intern(br.ordinal());
+      return Optional.of(new Pair(new DecimalWord(ordinal, Word.LOW, precision),
+          new DecimalWord(ordinal, Word.HIGH, precision), type));
+    }
+    if (isLiteralTree(e)) {
+      Object value;
+      try {
+        value = e.eval(null);
+      } catch (RuntimeException failed) {
+        return sink.decline("a decimal literal whose cast fails", e);
+      }
+      if (!(value instanceof Decimal d)) {
+        return sink.decline("a null decimal literal", e);
+      }
+      return literalPair(e, d, type, sink);
+    }
+    return sink.decline("a decimal operand that is not a column or a literal: its operators "
+        + "are rows 348 to 350's", e);
   }
 
   /**
@@ -147,6 +254,11 @@ final class VarkaDecimalCompiler {
       if (VarkaTypes.read(br.dataType()).isEmpty()) {
         return sink.decline(VarkaTypes.declineReason(br.dataType())
             .orElse("a decimal column on no lane"), whole);
+      }
+      int precision = ((DecimalType) br.dataType()).precision();
+      if (precision > DecimalColumn.MAX_LONG_PRECISION) {
+        // Either word's validity is the column's; the low one's leaf loads and checks the slots.
+        return Optional.of(new DecimalWord(inputs.intern(br.ordinal()), Word.LOW, precision));
       }
       return Optional.of(column(br, inputs));
     }
@@ -238,7 +350,6 @@ final class VarkaDecimalCompiler {
 
   // -----------------------------------------------------------------------------------------
   // The 128-bit lane pair (VARKA-359): its compile-time value and the operands built into it.
-  // Nothing emits a pair yet, so no compile reaches these: the comparisons above decline first.
   // -----------------------------------------------------------------------------------------
 
   /**

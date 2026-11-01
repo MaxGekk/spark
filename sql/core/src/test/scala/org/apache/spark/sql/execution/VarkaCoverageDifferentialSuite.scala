@@ -576,7 +576,11 @@ private object VarkaCoverageDifferentialSuite {
    *
    * The floating columns are derived too (VARKA-341), `floatingColumns` picked by `rid`, null
    * where `d`, `d2`, `i` and `l2` are. The DECIMAL columns are derived from the bigints:
-   * `d9` and `d18` from `l`, `d9b` and `d18b` from `l2`.
+   * `d9` and `d18` from `l`, `d9b` and `d18b` from `l2`; and the 128-bit ones (VARKA-359) from
+   * both, so that both words carry bits and both signs: `d38` is `l` shifted seventeen digits
+   * up over `l2`'s last seventeen, `d38b` the same with the two swapped, `d19` `l`'s last
+   * seventeen digits over `l2`'s last two as hundredths, and `d3810` `l` shifted eight digits up
+   * over `l2`'s last eight, at scale 10.
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
@@ -590,6 +594,11 @@ private object VarkaCoverageDifferentialSuite {
     def decimal(long: String, precision: Int): String =
       s"CAST(CAST($long % ${BigInt(10).pow(precision)} AS DECIMAL(${precision + 1}, 0)) * 0.01 " +
         s"AS DECIMAL($precision, 2))"
+    // `high` shifted `digits` digits up over `low`'s last `digits`, an integer of at most
+    // 19 + digits digits, at DECIMAL(38, scale); null where either bigint is.
+    def wide(high: String, low: String, digits: Int, scale: Int): String =
+      s"CAST(CAST($high AS DECIMAL(38, 0)) * ${BigInt(10).pow(digits)} + " +
+        s"CAST($low % ${BigInt(10).pow(digits)} AS DECIMAL(38, 0)) AS DECIMAL(38, $scale))"
     s"""SELECT rid, d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
@@ -604,7 +613,12 @@ private object VarkaCoverageDifferentialSuite {
        |       ${decimal("l", 9)} AS d9,
        |       ${decimal("l2", 9)} AS d9b,
        |       ${decimal("l", 18)} AS d18,
-       |       ${decimal("l2", 18)} AS d18b
+       |       ${decimal("l2", 18)} AS d18b,
+       |       CAST(CAST(l % ${BigInt(10).pow(17)} AS DECIMAL(19, 2)) +
+       |         CAST(l2 % 100 AS DECIMAL(19, 2)) * 0.01 AS DECIMAL(19, 2)) AS d19,
+       |       ${wide("l", "l2", 17, 2)} AS d38,
+       |       ${wide("l2", "l", 17, 2)} AS d38b,
+       |       ${wide("l", "l2", 8, 10)} AS d3810
        |FROM VALUES ${withIds.mkString(",\n  ")}
        |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2, y1, y2, s1, s2)$where""".stripMargin
   }

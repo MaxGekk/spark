@@ -2819,8 +2819,15 @@ final class VarkaProofFiles {
    * for each precision of the pair, the load's check over the constant pairs of
    * {@link DecimalWords#bound}, two {@code gt128} compares, holds exactly where
    * {@code |v| > 10^p - 1}, and with a bound one off it does not. Value semantics only: the
-   * words as integers, so it holds whatever layout carries them; the carry layer, the words as
-   * Java's wrapping longs, joins it with the emitted forms.
+   * words as integers, so it holds whatever layout carries them.
+   *
+   * <p>The carry layer then states the forms as emitted ({@code DecimalPairLowering} and
+   * {@code VarkaVectorWalk}'s pair load): each word a Java long in {@code [-2^63, 2^63)}, the low
+   * one read unsigned as the long {@code mod 2^64}, which is what {@code VectorOperators.ULT} and
+   * its siblings compare; the orders with their strict compare on the high words and the
+   * unsigned one on the low words, unswapped; the sign extension {@code (x, x >> 63)} of a 64-bit
+   * operand as the floor division by {@code 2^63}; and the load's check with its constants as
+   * the code's long literals. Each is equal to the comparison of the values.
    */
   static String decimal128() {
     var out = new StringBuilder(LICENSE);
@@ -2838,6 +2845,11 @@ final class VarkaProofFiles {
         ; slot where gt128(u, B) | gt128(-B, u), gt128(u, c) = GT(u.hi, c.hi) | (EQ(u.hi, c.hi) &
         ; UGT(u.lo, c.lo)), with B = 10^p - 1 as its constant pair. Each is proven equal to the
         ; integer statement; a bound one off is refuted at every precision.
+        ;
+        ; The carry layer states the same forms as emitted: each word a Java long, the low word
+        ; read unsigned as the long mod 2^64 (j.u), x > y and x >= y as GT and UGT, GE and UGE
+        ; rather than swapped, the sign extension (x, x >> 63) of a 64-bit operand as the floor
+        ; division by 2^63, and the check's constants as the code's long literals.
         """);
     out.append(RENDERED);
     String two63 = BigInteger.ONE.shiftLeft(63).toString();
@@ -2912,7 +2924,59 @@ final class VarkaProofFiles {
         check(out, what, off == 0 ? "unsat" : "sat", body);
       }
     }
+    carryLayer(out, two63, two64);
     return out.toString();
+  }
+
+  /** {@code decimal128.smt2}'s carry layer: the forms as emitted over Java's longs. */
+  private static void carryLayer(StringBuilder out, String two63, String two64) {
+    out.append("""
+
+        (define-fun j.long ((x Int)) Bool (and (<= (- %1$s) x) (< x %1$s)))
+        (define-fun j.u ((x Int)) Int (mod x %2$s))
+        (define-fun j.val ((h Int) (l Int)) Int (+ (* %2$s h) (j.u l)))
+        """.formatted(two63, two64));
+    List<String> words = List.of("(declare-const xh Int)", "(declare-const xl Int)",
+        "(declare-const yh Int)", "(declare-const yl Int)",
+        "(assert (and (j.long xh) (j.long xl) (j.long yh) (j.long yl)))");
+    String vx = "(j.val xh xl)";
+    String vy = "(j.val yh yl)";
+    String[][] forms = {
+        {"<", "<", "<"}, {"<=", "<", "<="}, {">", ">", ">"}, {">=", ">", ">="},
+    };
+    for (String[] f : forms) {
+      var body = new ArrayList<>(words);
+      String emitted = "(or (" + f[1] + " xh yh) (and (= xh yh) (" + f[2]
+          + " (j.u xl) (j.u yl))))";
+      body.add("(assert (not (= " + emitted + " (" + f[0] + " " + vx + " " + vy + "))))");
+      check(out, "carry: x " + f[0] + " y as emitted over the longs is the comparison of the "
+          + "values", "unsat", body);
+    }
+    var eq = new ArrayList<>(words);
+    eq.add("(assert (not (= (and (= xh yh) (= xl yl)) (= " + vx + " " + vy + "))))");
+    check(out, "carry: x = y as emitted over the longs is the equality of the values", "unsat",
+        eq);
+    var widen = new ArrayList<String>();
+    widen.add("(declare-const x Int)");
+    widen.add("(assert (j.long x))");
+    widen.add("(assert (not (= (j.val (div x " + two63 + ") x) x)))");
+    check(out, "carry: a long sign-extended, (x, x >> 63), holds the long's value", "unsat",
+        widen);
+    List<String> u = List.of("(declare-const uh Int)", "(declare-const ul Int)",
+        "(assert (and (j.long uh) (j.long ul)))");
+    for (int p = DecimalWords.MAX_LONG_PRECISION + 1; p <= DecimalWords.MAX_PRECISION; p++) {
+      DecimalWords b = DecimalWords.bound(p);
+      DecimalWords n = b.negate();
+      String decline = "(or (> uh " + lit(b.hi()) + ") (and (= uh " + lit(b.hi()) + ") (> (j.u ul) "
+          + "(j.u " + lit(b.lo()) + "))) (< uh " + lit(n.hi()) + ") (and (= uh " + lit(n.hi())
+          + ") (< (j.u ul) (j.u " + lit(n.lo()) + "))))";
+      String outside = "(or (> (j.val uh ul) " + lit(b.value()) + ") (< (j.val uh ul) "
+          + lit(b.value().negate()) + "))";
+      var body = new ArrayList<>(u);
+      body.add("(assert (not (= " + decline + " " + outside + ")))");
+      check(out, "carry: precision " + p + ": the check as emitted over the code's long "
+          + "constants declines exactly where |v| > 10^" + p + " - 1", "unsat", body);
+    }
   }
 
   /** A long as a 64-bit SMT-LIB bit-vector literal. */

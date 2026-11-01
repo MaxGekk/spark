@@ -1292,11 +1292,11 @@ final class VarkaConditionCompiler {
           .flatMap(both -> meetAll(cmp, sink, both))
           .map(both -> new VarkaVectorIR.BoolCompare(op, both.get(0), both.get(1)));
     }
-    // Two decimals of one scale compare as their unscaled longs (VARKA-347), read by the
-    // decimal leaf rather than by compileNode, which declines a decimal in a value position.
+    // Two decimals of one scale compare as their unscaled longs (VARKA-347), or above 18 digits
+    // as their 128-bit pairs' words (VARKA-359), read by the decimal leaves rather than by
+    // compileNode, which declines a decimal in a value position.
     if (VarkaDecimalCompiler.isDecimal(cmp.left())) {
-      return VarkaDecimalCompiler.operands(cmp, cmp.left(), cmp.right(), inputs, sink)
-          .map(both -> new Compare(op, both.get(0), both.get(1)));
+      return VarkaDecimalCompiler.compare(op, cmp, cmp.left(), cmp.right(), inputs, sink);
     }
     Optional<VarkaVectorIR> left = operand(cmp.left(), inputs, literals, sink);
     if (left.isEmpty()) {
@@ -1352,10 +1352,9 @@ final class VarkaConditionCompiler {
       Cond known = expected ? p.get() : new VarkaVectorIR.Not(p.get());
       return Optional.of(new VarkaVectorIR.And(known, new VarkaVectorIR.IsNotNull(known)));
     }
-    // Two decimals of one scale, as compare takes them (VARKA-347).
+    // Two decimals of one scale, as compare takes them (VARKA-347, VARKA-359).
     if (VarkaDecimalCompiler.isDecimal(n.left())) {
-      return VarkaDecimalCompiler.operands(n, n.left(), n.right(), inputs, sink)
-          .map(both -> new VarkaVectorIR.NullSafeEqual(both.get(0), both.get(1)));
+      return VarkaDecimalCompiler.nullSafeEqual(n, n.left(), n.right(), inputs, sink);
     }
     Optional<VarkaVectorIR> left = operand(n.left(), inputs, literals, sink);
     if (left.isEmpty()) {

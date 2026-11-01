@@ -128,9 +128,15 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val d9b = AttributeReference("d9b", DecimalType(9, 2))()
   private val d18 = AttributeReference("d18", DecimalType(18, 2))()
   private val d18b = AttributeReference("d18b", DecimalType(18, 2))()
+  // DECIMAL columns of 19 to 38 digits (VARKA-359), read as their slots' two words: one at the
+  // pair's narrowest precision, two at its widest of scale 2, and the baseline's DECIMAL(38, 10).
+  private val d19 = AttributeReference("d19", DecimalType(19, 2))()
+  private val d38 = AttributeReference("d38", DecimalType(38, 2))()
+  private val d38b = AttributeReference("d38b", DecimalType(38, 2))()
+  private val d3810 = AttributeReference("d3810", DecimalType(38, 10))()
 
   private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2,
-    y1, y2, s1, s2, ntz, ntz2, x, x2, f, f2, d9, d9b, d18, d18b)
+    y1, y2, s1, s2, ntz, ntz2, x, x2, f, f2, d9, d9b, d18, d18b, d19, d38, d38b, d3810)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -850,6 +856,39 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("d18 IS NULL"),
       Row("d18 IS NOT NULL"))),
 
+    // DECIMAL of precision 19 to 38 (VARKA-359): a value is its slot's two words, the low read
+    // unsigned and the high signed, and a comparison is composed over them - the high words'
+    // compare, and where they are equal the low words' unsigned one. The load checks every
+    // valid slot against 10^p - 1 as Spark's column reader does and declines a batch holding
+    // one outside, where Spark raises; no value of the column's type is outside, so the rows
+    // name no domain.
+    Family("DECIMAL lane pair", predicates = true, Seq(
+      Row("d38 < d38b", "LT on the high words, or EQ on them and ULT on the low words"),
+      Row("d38 <= d38b"),
+      Row("d38 > d38b"),
+      Row("d38 >= d38b"),
+      Row("d38 = d38b", "EQ on both words"),
+      Row("d38 <> d38b", "the NOT of the equality"),
+      Row("d38 <=> d38b", "null-safe equality on each word, joined by AND"),
+      Row("d38 > 12345678901234567890123.45", "a literal wider than a long: its two words take "
+        + "two slots in the long table"),
+      Row("d18b < d38", "type coercion casts d18b to DECIMAL(38, 2), which keeps every unscaled "
+        + "value: its long and the long's sign extension"),
+      Row("d19 >= 12345678901234567.89", "precision 19, whose largest value needs the low "
+        + "word's sign bit"),
+      Row("d3810 > 0"),
+      Row("d38 IS NULL", "a validity read; the slots are checked too, since Spark's null test "
+        + "reads a valid row's value and raises on a slot outside the precision"),
+      Row("d38 IS NOT NULL"),
+      Row("d3810 IS NULL"),
+      Row("d19 IS NOT NULL"))),
+
+    // The same comparisons as values (VARKA-27's boolean output), for a projection.
+    Family("DECIMAL lane pair as values", predicates = false, Seq(
+      Row("d19 < d38", "the comparison written as a BOOLEAN column; type coercion casts d19 to "
+        + "DECIMAL(38, 2), which keeps both its words"),
+      Row("d38b <=> d38"))),
+
     Family("Time arithmetic", predicates = false, Seq(
       Row("t - t2", "a day-time interval, the nanosecond difference divided by a thousand"),
       Row("time_diff('HOUR', t, t2)",
@@ -1379,7 +1418,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "Boolean columns" -> Exhausted("VarkaEmitterBoolSuite",
       "boolean comparisons, null-safe equality, choice and constants over every leaf state"),
     // The value picks over a date or a long column are not swept: only the condition is.
-    "Boolean columns choosing values" -> Differential)
+    "Boolean columns choosing values" -> Differential,
+    // The orders, the equality and the null-safe equality are each proven equal to the
+    // comparison of the values, over the words and as emitted; the null tests read validity.
+    "DECIMAL lane pair" -> Proved("decimal128.smt2"),
+    "DECIMAL lane pair as values" -> Proved("decimal128.smt2"))
 
   // VarkaEmitterNarrowSuite's byte square sweeps every TINYINT pair through the comparisons and
   // the picks, but over values only, with no null row, and its IN is a range set where the rows
@@ -1394,6 +1437,12 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   /** The rows that differ from their family's entry, by their SQL. */
   private val rowVerified: Map[String, Verified] = Map(
+    // A null test over a 128-bit decimal reads the column's validity word, which no proof
+    // states; the differential checks it, and the slot check under it.
+    "d38 IS NULL" -> Differential,
+    "d38 IS NOT NULL" -> Differential,
+    "d3810 IS NULL" -> Differential,
+    "d19 IS NOT NULL" -> Differential,
     "date_add(d, 3)" -> Refined("date_add(d, i)"),
     "date_add(d, i)" -> Refined("date_add(d, i)"),
     // `date_sub` lowers to its own node (SubDays), which no refinement states.

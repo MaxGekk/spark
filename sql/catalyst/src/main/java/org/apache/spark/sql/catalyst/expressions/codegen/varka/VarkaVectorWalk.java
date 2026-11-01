@@ -24,6 +24,7 @@ import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Set;
 
@@ -51,6 +52,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalWord;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -205,6 +207,7 @@ final class VarkaVectorWalk {
         }
       }
       case DecimalColumn c -> emitDecimalLoad(cb, c, dense, analysis, s);
+      case DecimalWord w -> emitDecimalWord(cb, w, dense, analysis, s);
       case LiteralSlot l -> {
         line(cb, analysis, node);
         int[] broadcast = s.broadcastSlots(lane);
@@ -614,6 +617,91 @@ final class VarkaVectorWalk {
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     emitGuardCollect(cb, c, dense ? null : s.wordRef.get(c), dense, analysis, s);
+  }
+
+  /**
+   * A {@link DecimalWord}: the group's low or high words of a 128-bit decimal column, left on the
+   * operand stack, the column's slots loaded and checked once a body.
+   *
+   * <p>The first visit of either word in a body loads the group's two vectors of slots as
+   * {@link #emitDecimalLoad} does, takes both rearranges - the even lanes are the low words, the
+   * odd ones the high words - parks both words, and checks them; every later visit, of either
+   * word, reads its parked local. So a column costs one load and one check a lane group however
+   * many of its words' nodes the body holds, and a body the budget splits off loads its own
+   * ({@link Slots#pairLoaded}).
+   *
+   * <p>The check condemns a valid lane whose value {@code v = hi * 2^64 + lo} lies outside
+   * {@code [-B, B]}, {@code B = 10^p - 1}, with the bound's words {@code (bhi, blo)} and its
+   * negation's {@code (nhi, nlo)}: {@code v > B} is
+   * {@code hi > bhi | (hi == bhi & lo >u blo)} and {@code v < -B} is
+   * {@code hi < nhi | (hi == nhi & lo <u nlo)}, the words ordering as the value does when the
+   * high words compare signed and the low ones unsigned ({@code decimal128.smt2}). Eleven lane
+   * calls, ORed into one mask that {@link #emitGuardCollect} qualifies by the column's validity
+   * word in a masked body, so a null slot never declines.
+   */
+  private static void emitDecimalWord(CodeBuilder cb, DecimalWord w, boolean dense,
+      Analysis analysis, Slots s) {
+    Lane lane = Lane.LONG;
+    DecimalWord key = w.low();
+    int[] tmp = s.decimalTmp.get(key);
+    if (analysis.laneOf(w) != lane || analysis.lane != lane) {
+      throw VarkaErrors.illegalState("a decimal word read in a " + analysis.lane
+          + " emission: " + VarkaVectorIR.canonical(w));
+    }
+    if (tmp == null || tmp.length != 4 || s.decimalShuffle == null) {
+      // Refused by name: without its locals the check would be dropped silently.
+      throw VarkaErrors.illegalState("a decimal word with no locals planned: "
+          + VarkaVectorIR.canonical(w));
+    }
+    line(cb, analysis, w);
+    int lo = tmp[2];
+    int hi = tmp[3];
+    if (s.pairLoaded.add(key)) {
+      for (int half = 0; half < 2; half++) {
+        cb.aload(s.species);
+        emitDecimalSlotHalf(cb, s, s.srcSeg(w.ordinal()), half);
+        cb.invokestatic(lane.vector, "fromMemorySegment",
+            s.epilogue ? lane.fromMemorySegmentMasked : lane.fromMemorySegmentDense);
+        cb.astore(tmp[half]);
+      }
+      // The planted fault parks the other word from the visited word's own rearrange.
+      boolean wrongSibling =
+          VarkaDecimalFault.planted() == VarkaDecimalFault.SIBLING_FROM_WRONG_REARRANGE;
+      int visited = w.word() == VarkaVectorIR.Word.LOW ? 0 : 1;
+      emitRearrange(cb, tmp, s.decimalShuffle[wrongSibling ? visited : 0]);
+      cb.astore(lo);
+      emitRearrange(cb, tmp, s.decimalShuffle[wrongSibling ? visited : 1]);
+      cb.astore(hi);
+      DecimalWords bound = w.bound();
+      if (VarkaDecimalFault.planted() == VarkaDecimalFault.BOUND_AT_POWER) {
+        // The planted fault: the bound at 10^p, one past the precision's largest value.
+        bound = DecimalWords.of(bound.value().add(BigInteger.ONE));
+      }
+      DecimalWords negated = bound.negate();
+      // v > B
+      emitWordCompare(cb, hi, "GT", bound.hi());
+      emitWordCompare(cb, hi, "EQ", bound.hi());
+      emitWordCompare(cb, lo, "UGT", bound.lo());
+      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      // | v < -B
+      emitWordCompare(cb, hi, "LT", negated.hi());
+      emitWordCompare(cb, hi, "EQ", negated.hi());
+      emitWordCompare(cb, lo, "ULT", negated.lo());
+      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      emitGuardCollect(cb, w, dense ? null : s.wordRef.get(w), dense, analysis, s);
+    }
+    cb.aload(w.word() == VarkaVectorIR.Word.LOW ? lo : hi);
+  }
+
+  /** {@code v.compare(op, c)} over the long vector parked in {@code local}: a mask. */
+  private static void emitWordCompare(CodeBuilder cb, int local, String op, long c) {
+    cb.aload(local);
+    cb.getstatic(VECTOR_OPERATORS, op, VO_COMPARISON);
+    cb.loadConstant(c);
+    cb.invokevirtual(Lane.LONG.vector, "compare", Lane.LONG.compareVI);
   }
 
   /**
@@ -2130,11 +2218,11 @@ final class VarkaVectorWalk {
         cb.lstore(s.kf.get(node));
       }
       case IsNotNull n -> {
-        if (n.child() instanceof DecimalColumn c) {
+        if (n.child() instanceof DecimalColumn || n.child() instanceof DecimalWord) {
           // The decimal leaf's load and slot check, its value dropped: Spark's IS NULL reads a
           // valid row's value and raises on a slot outside the precision (VARKA-347), so the test
           // checks the slots in both bodies, the dense one included, where every row is valid.
-          emitValue(cb, c, dense, analysis, s, computed);
+          emitValue(cb, n.child(), dense, analysis, s, computed);
           cb.pop();
         }
         line(cb, analysis, node);
