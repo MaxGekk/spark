@@ -132,7 +132,7 @@ final class VarkaDecimalCompiler {
       return operands(whole, left, right, inputs, sink)
           .map(both -> new Compare(op, both.get(0), both.get(1)));
     }
-    return pairs(whole, left, right, wide.get(), inputs, sink)
+    return pairs(left, right, wide.get(), inputs, sink)
         .map(p -> DecimalPairLowering.compare(op, p.get(0).lo(), p.get(0).hi(), p.get(1).lo(),
             p.get(1).hi()));
   }
@@ -145,7 +145,7 @@ final class VarkaDecimalCompiler {
       return operands(whole, left, right, inputs, sink)
           .map(both -> new NullSafeEqual(both.get(0), both.get(1)));
     }
-    return pairs(whole, left, right, wide.get(), inputs, sink)
+    return pairs(left, right, wide.get(), inputs, sink)
         .map(p -> DecimalPairLowering.nullSafeEqual(p.get(0).lo(), p.get(0).hi(),
             p.get(1).lo(), p.get(1).hi()));
   }
@@ -165,8 +165,8 @@ final class VarkaDecimalCompiler {
   }
 
   /** Both operands of a wide comparison as pairs of {@code type}, or empty with the reason. */
-  private static Optional<List<Pair>> pairs(Expression whole, Expression left, Expression right,
-      DecimalType type, VarkaSlotTable inputs, DeclineSink sink) {
+  private static Optional<List<Pair>> pairs(Expression left, Expression right, DecimalType type,
+      VarkaSlotTable inputs, DeclineSink sink) {
     Optional<Pair> l = pairOperand(left, type, inputs, sink);
     if (l.isEmpty()) {
       return Optional.empty();

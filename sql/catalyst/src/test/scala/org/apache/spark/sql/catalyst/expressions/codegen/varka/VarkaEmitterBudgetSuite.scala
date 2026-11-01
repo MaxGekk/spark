@@ -379,6 +379,9 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       (new NarrowLane(new IntNeg(Overflow.WRAP, lc)), 1, 0, VarkaMatrix.base),
       (new WidenLane(new IntNeg(Overflow.WRAP, c)), 1, 0, VarkaMatrix.base),
       (new DecimalColumn(0, LaneType.LONG, 9), 1, 0, VarkaMatrix.base),
+      // A 128-bit column's two words, which share one load and check a body (VARKA-359).
+      (new IntArith(IntOp.ADD, Overflow.WRAP, new DecimalWord(0, Word.LOW, 38),
+        new DecimalWord(0, Word.HIGH, 38)), 1, 0, VarkaMatrix.base),
       (new WidenDecimal(new IntNeg(Overflow.WRAP, lc)), 1, 0, VarkaMatrix.base))
     // The calendar nodes whose own tail reads no month, so their prefix elides the month step.
     def elidesMonthStep(n: VarkaVectorIR): Boolean =

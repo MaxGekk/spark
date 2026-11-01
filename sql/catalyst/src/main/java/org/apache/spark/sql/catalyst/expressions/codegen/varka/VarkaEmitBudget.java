@@ -612,9 +612,10 @@ final class VarkaEmitBudget {
       // is a mask call, not a lane call.
       case DecimalColumn _ -> 7;
       // A 128-bit column's two words share one load a body: the second of its two loads, the
-      // two shuffles and the six compares of the digit check, nine lane calls, paid half by
-      // each word, rounded up, so that a body holding either word pays for the load.
-      case VarkaVectorIR.DecimalWord _ -> 5;
+      // two shuffles and the six compares of the digit check, nine lane calls, split between
+      // the words, so that a body holding both pays exactly what it emits and one holding a
+      // single word pays about half its load.
+      case VarkaVectorIR.DecimalWord w -> w.word() == VarkaVectorIR.Word.LOW ? 5 : 4;
       // The decimal store: the sign shift, the two interleaves and the second of its two stores;
       // the first store is the one every value root pays.
       case WidenDecimal _ -> 4;

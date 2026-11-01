@@ -902,7 +902,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         + "value: its long and the long's sign extension"),
       Row("d19 >= 12345678901234567.89", "precision 19, whose largest value needs the low "
         + "word's sign bit"),
-      Row("d3810 > 0"),
+      Row("d3810 > 1.5", "the baseline's type, the literal at its scale of ten"),
       Row("d38 IS NULL", "a validity read; the slots are checked too, since Spark's null test "
         + "reads a valid row's value and raises on a slot outside the precision"),
       Row("d38 IS NOT NULL"),

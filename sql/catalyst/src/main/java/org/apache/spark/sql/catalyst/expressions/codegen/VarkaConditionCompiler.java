@@ -811,7 +811,7 @@ final class VarkaConditionCompiler {
     return switch (info.admission()) {
       case VarkaTypes.Admission.OnLane onLane ->
           () -> compileIn(value, info, whole, inputs, literals, sink);
-      case VarkaTypes.Admission.UpToPrecision upTo -> null;
+      case VarkaTypes.Admission.ByPrecision byPrecision -> null;
       case VarkaTypes.Admission.AsCondition condition -> null;
       case VarkaTypes.Admission.Owed owed -> null;
       case VarkaTypes.Admission.Declined declined -> null;

@@ -584,18 +584,18 @@
       "long.dec_zip_rearrange_lanewise" : {
         "verdict" : "F",
         "bytes_per_row" : 392.7,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "compare", "blend", "convert", "load", "rearrangeOp", "store" ],
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "compare", "blend", "convert", "load", "rearrangeOp", "store" ],
         "failed" : [ "compare", "blend", "convert", "rearrangeOp" ]
       },
       "long.dec_zip_selectFrom2_lanewise" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "load", "selectFromTwoVectorOp", "store" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "load", "selectFromTwoVectorOp", "store" ]
       },
       "long.dec_zip_tail" : {
         "verdict" : "F",
         "bytes_per_row" : 392.91,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "compare", "blend", "convert", "indexPartiallyInUpperRange", "loadMasked", "rearrangeOp", "test", "store", "storeMasked" ],
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "compare", "blend", "convert", "indexPartiallyInUpperRange", "loadMasked", "rearrangeOp", "test", "store", "storeMasked" ],
         "failed" : [ "compare", "blend", "fromBitsCoerced", "indexPartiallyInUpperRange", "binaryOp", "loadMasked", "convert", "rearrangeOp", "test", "storeMasked" ]
       },
       "long.NE" : {
@@ -1267,17 +1267,17 @@
       "long.dec_zip_rearrange_lanewise" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "compare", "blend", "convert", "load", "rearrangeOp", "store" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "compare", "blend", "convert", "load", "rearrangeOp", "store" ]
       },
       "long.dec_zip_selectFrom2_lanewise" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "load", "selectFromTwoVectorOp", "store" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "load", "selectFromTwoVectorOp", "store" ]
       },
       "long.dec_zip_tail" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "compare", "blend", "convert", "indexPartiallyInUpperRange", "loadMasked", "rearrangeOp", "test", "store", "storeMasked" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "compare", "blend", "convert", "indexPartiallyInUpperRange", "loadMasked", "rearrangeOp", "test", "store", "storeMasked" ]
       },
       "long.NE" : {
         "verdict" : "I",
@@ -1943,17 +1943,17 @@
       "long.dec_zip_rearrange_lanewise" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "compare", "blend", "convert", "load", "rearrangeOp", "store" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "compare", "blend", "convert", "load", "rearrangeOp", "store" ]
       },
       "long.dec_zip_selectFrom2_lanewise" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "load", "selectFromTwoVectorOp", "store" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "load", "selectFromTwoVectorOp", "store" ]
       },
       "long.dec_zip_tail" : {
         "verdict" : "I",
         "bytes_per_row" : 0.16,
-        "intrinsics" : [ "fromBitsCoerced", "indexVector", "broadcastInt", "binaryOp", "compare", "blend", "convert", "indexPartiallyInUpperRange", "loadMasked", "rearrangeOp", "test", "store", "storeMasked" ]
+        "intrinsics" : [ "fromBitsCoerced", "indexVector", "binaryOp", "broadcastInt", "compare", "blend", "convert", "indexPartiallyInUpperRange", "loadMasked", "rearrangeOp", "test", "store", "storeMasked" ]
       },
       "long.NE" : {
         "verdict" : "I",
