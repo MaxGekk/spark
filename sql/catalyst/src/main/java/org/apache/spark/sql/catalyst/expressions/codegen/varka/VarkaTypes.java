@@ -498,6 +498,44 @@ public final class VarkaTypes {
     });
   }
 
+  /**
+   * Why a kernel cannot store an output of {@code type}, or empty where the decimal store writes
+   * it: the plan-time admission of a {@code WidenDecimal} root against its output's type,
+   * which the compiler asks where it wraps a decimal-valued root
+   * ({@code VarkaDecimalCompiler.outputRoot}), so a shape the store would write wrongly never
+   * fuses. The store writes a long and its sign extension into each slot, so it takes the
+   * precisions of the one-word band, and refuses a negative scale, declined everywhere, in a
+   * column's words, and a wider precision in the store's own, since the value does not fit the
+   * long a slot's low word holds and the two-word store is the row the next band names (359).
+   * Whether a band's reader is built does not matter here: the store needs no operator over a
+   * decimal column. The evaluator's allocator asks it again, as an assertion that no such output
+   * got through.
+   */
+  public static Optional<String> decimalOutputDeclineReason(DecimalType type) {
+    if (!(info(VarkaTypeId.DECIMAL).admission() instanceof Admission.ByPrecision by)) {
+      throw VarkaErrors.illegalState("DECIMAL's admission is not by precision");
+    }
+    String noun = "a " + type.simpleString() + " output";
+    if (type.scale() < 0) {
+      return Optional.of(noun + ": a negative scale is declined everywhere (the milestone plan's "
+          + "2.8)");
+    }
+    if (by.band(type).filter(b -> b.words() == 1).isPresent()) {
+      return Optional.empty();
+    }
+    int oneWord = 0;
+    String wider = "";
+    for (Admission.Band b : by.bands()) {
+      if (b.words() == 1) {
+        oneWord = b.maxPrecision();
+      } else if (wider.isEmpty()) {
+        wider = b.row();
+      }
+    }
+    return Optional.of(noun + ": precision above " + oneWord + " does not fit the long a slot's "
+        + "low word holds, and its two-word store is row " + wider + "'s");
+  }
+
   private static final Map<VarkaTypeId, Info> TABLE = table();
 
   private static Map<VarkaTypeId, Info> table() {

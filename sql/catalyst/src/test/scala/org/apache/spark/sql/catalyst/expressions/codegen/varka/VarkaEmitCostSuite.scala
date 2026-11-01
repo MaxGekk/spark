@@ -84,8 +84,8 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // (`VarkaEmitCostFit.PRICED_LANES`, VARKA-342 5.1). The unsigned compares (VARKA-359) are
     // features of a priced node, listed by their own prefix.
     val awaitingRefit = Set("NullSafeEqual", "BoolColumn", "CondConst", "BoolCompare", "CondIf",
-      "BoolNullSafeEq", "CondValue", "BoolOutput", "DecimalColumn", "MathUnary", "Compare/ULT",
-      "Compare/ULE", "Compare/UGT", "Compare/UGE")
+      "BoolNullSafeEq", "CondValue", "BoolOutput", "DecimalColumn", "WidenDecimal", "MathUnary",
+      "Compare/ULT", "Compare/ULE", "Compare/UGT", "Compare/UGE")
     assert(awaitingRefit.forall(t => !expected.exists(f => f == t || f.startsWith(t + "/"))),
       s"${awaitingRefit.toSeq.sorted} is priced: take it off the list of nodes awaiting a refit")
     val unnamed = irTypes().filterNot(awaitingRefit.contains)
