@@ -484,6 +484,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `i <= 7` | `predicate` |  |  | vector |
 | `i >= 7` | `predicate` |  |  | vector |
 | `i IS NULL` | `predicate` |  |  | vector |
+| `i IN (3, 1, 12)` | `predicate` |  | an int IN, the same equality chain as a date's | vector |
+| `i IN (11 to 16 int literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 | `ym = INTERVAL '1-2' YEAR TO MONTH` | `predicate` |  |  | vector |
 | `ym < INTERVAL '1-2' YEAR TO MONTH` | `predicate` |  |  | vector |
 | `ym <= INTERVAL '1-2' YEAR TO MONTH` | `predicate` |  |  | vector |
@@ -526,6 +528,12 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `equal_null(l, l2)` | `predicate` |  |  | per-lane: compare to mask, mask cast |
 | `t <=> t2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
 | `dt <=> dt2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `l IN (5000000000, 42, 0)` | `predicate` |  | the long lane's equality chain, each literal a slot in its own table; an int literal arrives under coercion's cast to BIGINT, which the arm reads as the constant it is | per-lane: compare to mask, mask logic, mask cast |
+| `l IN (11 to 16 bigint literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask logic, mask cast |
+| `t IN (TIME'12:00:00.000000', TIME'06:00:00.000000')` | `predicate` |  | literals of the column's precision, so no cast reaches the column | per-lane: compare to mask, mask logic, mask cast |
+| `t IN (11 to 16 TIME literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask logic, mask cast |
+| `dt IN (INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '1 00:00:00' DAY TO SECOND)` | `predicate` |  |  | per-lane: compare to mask, mask logic, mask cast |
+| `dt IN (11 to 16 day-time literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask logic, mask cast |
 
 #### Boolean columns
 
@@ -806,35 +814,6 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `-f` | `floatingArithmetic` |  |  | vector |
 | `abs(f)` | `floatingArithmetic` |  |  | vector |
 
-#### Rounding
-
-| Expression | Switches | Domain | Notes | 128-bit lanes |
-|---|---|---|---|---|
-| `floor(l)` | `rounding` |  | the identity over a bigint, in every mode | vector |
-| `ceil(l)` | `rounding` |  |  | vector |
-| `ceiling(l)` | `rounding` |  | ceil by another name | vector |
-| `floor(i)` | `rounding` |  | FLOOR(CAST(i AS DOUBLE)): the int widened to a bigint, exact in every mode, with no conversion to a double | per-lane: mask broadcast, mask test |
-| `ceil(i)` | `rounding` |  |  | per-lane: mask broadcast, mask test |
-| `round(i, 0)` | `rounding` |  | a scale of 0 or more is the identity | vector |
-| `round(i, -1)` | `rounding` | `i BETWEEN -2147483644 AND 2147483644` | HALF_UP to a multiple of ten; under ANSI a value whose rounding leaves the int raises, so its batch declines | vector |
-| `round(i, -2)` | `rounding` |  | no int overflows at this scale, so ANSI has no guard | vector |
-| `bround(i, -1)` | `rounding` | `i BETWEEN -2147483645 AND 2147483645` | HALF_EVEN: a tie goes to the even multiple | vector |
-| `bround(i, -2)` | `rounding` |  |  | vector |
-| `truncate(i, -2)` | `rounding` |  | DOWN never overflows | vector |
-| `round(i, -10)` | `rounding` |  | every int rounds to 0 | vector |
-| `round(y1, -1)` | `rounding` | `y1 BETWEEN -124 AND 124` | computed at the int lane and wrapped to the byte | vector |
-| `bround(s1, -2)` | `rounding` | `s1 BETWEEN -32749 AND 32749` | computed at the int lane and wrapped to the short | vector |
-| `truncate(y1, -1)` | `rounding` |  |  | vector |
-| `bround(y1, -1)` | `rounding` | `y1 BETWEEN -125 AND 125` |  | vector |
-| `round(s1, -1)` | `rounding` | `s1 BETWEEN -32764 AND 32764` |  | vector |
-| `truncate(s1, -2)` | `rounding` |  |  | vector |
-| `round(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` | the long division is exact under 2^52, so a batch with a lane past it declines | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
-| `bround(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` |  | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
-| `truncate(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` |  | per-lane: compare to mask, mask logic, mask broadcast, mask test |
-| `round(l, -19)` | `rounding` | `l BETWEEN -4999999999999999999 AND 4999999999999999999` | 10^19 is past the long, so the quotient is 0 and the answer the sign of the rounding times 10^19 wrapped | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
-| `bround(l, -19)` | `rounding` | `l BETWEEN -5000000000000000000 AND 5000000000000000000` |  | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
-| `round(l, -20)` | `rounding` |  | every bigint rounds to 0 | vector |
-
 #### DECIMAL columns
 
 | Predicate | Switches | Domain | Notes | 128-bit lanes |
@@ -892,18 +871,18 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 55 | 0 | 2 | 0 | 2 | 51 |
+| `bigint` | 48 | 0 | 2 | 0 | 2 | 44 |
 | `bool` | 23 | 0 | 0 | 13 | 0 | 10 |
-| `byte` | 29 | 0 | 0 | 0 | 8 | 21 |
+| `byte` | 26 | 0 | 0 | 0 | 8 | 18 |
 | `date` | 87 | 17 | 0 | 1 | 0 | 69 |
 | `dec` | 17 | 0 | 0 | 0 | 0 | 17 |
-| `double` | 39 | 0 | 0 | 0 | 0 | 39 |
-| `dt` | 18 | 2 | 0 | 0 | 0 | 16 |
+| `double` | 37 | 0 | 0 | 0 | 0 | 37 |
+| `dt` | 20 | 2 | 0 | 0 | 0 | 18 |
 | `float` | 29 | 0 | 0 | 0 | 0 | 29 |
-| `int` | 93 | 14 | 2 | 0 | 1 | 76 |
+| `int` | 75 | 14 | 2 | 0 | 1 | 58 |
 | `ntz` | 24 | 0 | 1 | 0 | 0 | 23 |
-| `short` | 28 | 0 | 0 | 0 | 8 | 20 |
-| `time` | 32 | 6 | 0 | 0 | 2 | 24 |
+| `short` | 25 | 0 | 0 | 0 | 8 | 17 |
+| `time` | 34 | 6 | 0 | 0 | 2 | 26 |
 | `ym` | 30 | 7 | 2 | 0 | 2 | 19 |
 <!-- END generated verification counts -->
 
@@ -1774,7 +1753,6 @@ coverage table, and regenerated by the same command:
 | `spark.sql.codegen.varka.family.condition.enabled` | `true` | The condition family: the conditionals IF, CASE WHEN and coalesce (the comparisons in their conditions are the predicate family's). |
 | `spark.sql.codegen.varka.family.intArithmetic.enabled` | `true` | The int arithmetic family: +, -, * and unary minus over int, tinyint and smallint operands and abs over the narrow two, checked under ANSI, greatest and least, the casts between int and bigint, and a tinyint or smallint widened to int. |
 | `spark.sql.codegen.varka.family.floatingArithmetic.enabled` | `true` | The floating arithmetic family: +, -, *, unary minus and abs over double and float operands, and /, try_divide, sqrt, signum, degrees and radians over double ones, a zero divisor null under LEGACY and TRY and raised by the row engine under ANSI. |
-| `spark.sql.codegen.varka.family.rounding.enabled` | `true` | The rounding family: floor, ceil and ceiling over bigint and int operands, and round, bround and truncate over tinyint, smallint, int and bigint at a constant scale, a value ANSI raises on declining its batch to the row engine. |
 <!-- END generated family switches -->
 
 The rule is registered on every `SparkSession` but does nothing while the
