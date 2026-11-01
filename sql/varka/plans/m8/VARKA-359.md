@@ -579,6 +579,94 @@ coverage rows and the generated files after them); and 11.7's planted faults and
 need the word leaf. 11.7's predictions 1 to 7 stand as registered; none is scorable until a pair
 emits, and none was measured.
 
+### 10.3 359a, P's reading half (1 November 2026)
+
+*Branch `varka-359a-pair`, continued from `cd33918c408`, master merged again after #1259 (row
+497's one `IN` arm) and #1269. Local commits only; one agent session of about four and a half
+hours.* Built, in 11.6's order:
+
+7. **The word leaf and its shared load.** `VarkaVectorIR.DecimalWord(ordinal, Word, precision)`,
+   precision 19 to 38 on the long lane, rendering `decw:<n>:lo:p<p>` or `:hi:`, parsed back by
+   `VarkaCanonicalIr`. `Slots.decimalTmp` holds four locals per column under its low word's key
+   (the two vectors of slots, then the low and the high words), planned only where a body holds
+   a word, and `Slots.pairLoaded`, cleared with `emittedUnshared` at each body, says whether the
+   body has loaded the column: the first visit of either word loads, takes both rearranges, parks
+   both words and checks; every later visit reads its word's local (`VarkaVectorWalk`'s
+   `emitDecimalWord`). Both words carry `Refusal.DECIMAL_SLOT`, whichever is visited first
+   collecting it; neither takes a `guardTmp`. `Analysis` registers the column at sixteen bytes a
+   row (`decimalInputs`), and a null test over a word visits its leaf for the check, as 347's
+   does. The budget weighs the low word 5 and the high word 4 (nine lane calls a body) and the cost
+   model's feature `DecimalWord/<word>` joins row 352's awaiting-refit list.
+8. **The check**: `v > B` as `GT(hi, bhi) | (EQ(hi, bhi) & UGT(lo, blo))` and `v < -B` as
+   `LT(hi, nhi) | (EQ(hi, nhi) & ULT(lo, nlo))`, ORed, eleven lane calls, under
+   `emitGuardCollect` and never qualified by an arm (`Analysis.armChainsOf`).
+9. **The lowerings** (`DecimalPairLowering`): `=`, `<`, `<=`, `>`, `>=` with the strict compare on
+   the high words and the unsigned one on the low words (not swapped), `<>` as Spark's
+   `NOT(x = y)` over it, `<=>` as `NullSafeEqual` on each word joined by `AND`;
+   `VarkaDecimalCompiler.compare` and `nullSafeEqual` take a comparison of one scale whose wider
+   type is above 18 digits through `pairs`: a 38-digit column's two words, an 18-digit column's
+   long sign-extended (`widened`), a literal's two long-table slots (`literalPair`). The null
+   tests read a 128-bit column through its low word. The registry's 38-digit band is read.
+10. **The carry layer** of `decimal128.smt2`: the four orders and the equality as emitted over
+    Java longs (the low word read unsigned as the long `mod 2^64`), the sign extension as the
+    floor division by `2^63`, and at each precision 19 to 38 the check over the code's long
+    constants, 26 checks.
+11. **Coverage rows**: the family "DECIMAL lane pair" (fifteen filters: the six comparisons,
+    `<>`, `<=>`, a literal wider than a long, `d18b < d38` across the boundary, `d19` against a
+    literal, `d3810 > 1.5`, four null tests) and "DECIMAL lane pair as values" (`d19 < d38`,
+    `d38b <=> d38` as `BOOLEAN` outputs), over `d19`, `d38`, `d38b` and `d3810`, derived in the
+    differential's fixture from `l` and `l2` so both words carry bits and both signs. The
+    comparisons name `decimal128.smt2` for row 490, the null tests the differential.
+
+**Tests.** `VarkaDecimalPairSuite` (`ownJvm`, at 2, 4 and 8 long lanes and the preferred species,
+both bodies): the slot table over precisions 19, 20, 30 and 38 and lengths 1, 3, 37 and 64,
+`10^p - 1`, `-(10^p - 1)`, `2^63` and `-2^63 - 1` passing, `10^p`, `-10^p`, `2^127 - 1` and
+`-2^127` declining at the first, middle and last row, valid and under a null, the oracle Spark's
+`ArrowColumnVector.getDecimal`; a body reading both words loads and rearranges once; the word
+edges of every comparison, `<>` and `<=>` against `BigInteger`, three-valued, over the words'
+sign bits, zero low words and both high signs with every null pattern, and `d18 < d38` widened;
+the null test still checking the slots; and the three planted faults of 11.7 (`VarkaDecimalFault`:
+the low words compared signed, the bound at `10^p`, the sibling parked from the visited word's
+rearrange), each caught.
+
+**Departures.** The lowering of `>` and `>=` is direct (`GT`/`UGT`, `GE`/`UGE`), not the swapped
+`<`: the same lane calls, and the carry layer proves the form emitted. The pair's locals are four
+of its own, not `guardTmp`, because the check reads both words and a body may hold only one of
+them. The coverage rows' "as values" family uses `d19 < d38` and `d38b <=> d38` rather than
+repeating the filters' SQL, so each row's SQL is unique in the table. The fault planting is one
+enum beside `VarkaFloatingFault`, read at emit time.
+
+**Not built** (owed by 359a): 11.5 item 5, `VarkaTypeConformance`'s sixteen-byte path and
+`VarkaDecimalConformanceSuite`. Its harness reads every column as one long a row through
+`VarkaKernelChecks.runLoadedLong`, `VarkaReference` and `VarkaSparkOracle`, and a pair column
+has two words a row; teaching all three is larger than the session's remainder, so the
+registry's `Owed("Decimal", "348")` stands. The two-lane x86 decline of a pair filter is
+exercised only through `VarkaTwoLaneConditionSuite`'s existing rule, with no pair case of its
+own yet.
+
+**Generated files.** `coverage.json`, `docs/sql-varka.md`, `emitted_bytes.json` (seventeen new
+shapes; no existing shape's methods move), `width_audit.json` (the new rows at every width; at
+128 bits the master merge's file is restated with row 503's two-lane declines, which master does
+not have yet), `operator_census.json`, `types.tsv` (the 38-digit band read, so the decimal's
+`row` is `-`) and the census (`isnull` and `isnotnull` fused over `dec`, so `done`; the
+`dev/varka_new_lane.py` entry owing the census to this row removed). `decimal128.smt2` has 93
+checks, 67 of the ring layer and 26 of the carry layer; Z3 0.03 s and cvc5 0.09 s on the laptop.
+
+**Predictions** (11.7), scored:
+
+1. *Op counts*: the check is six compares and five mask calls, eleven; `x < y` three compares
+   and two mask calls, five; `x = y` three; `x <> y` four; `x <=> y` three; a null test one.
+   Counted from the emitted lowering, not from `dev/varka_emit.sh`, which this session did not
+   run; the table is owed to the pull request.
+2. *No existing shape's bytes move*: holds for every shape. The `option_arms` digests moved,
+   against the prediction: each digest hashes every coverage shape under its option, so added
+   rows move all of them. Wrong in its second half.
+3. to 5. Not measured (no benchmark run, as briefed); 11.8 point 5's runner dispatch is owed.
+6. *The census moves by `isnull` and `isnotnull`*: holds.
+7. *`width_audit.json`'s 128-bit column*: each of the fifteen pair filters records the two-lane
+   decline, and the two comparisons as values fuse and record C2's `not supported` lines, the
+   Java fallback 11.4 expected there. Holds.
+
 ## 11. 359a, the build plan (1 November 2026)
 
 Written from master at `239995f4fe4` before the laptop's reading of the spike, so that 359a can
