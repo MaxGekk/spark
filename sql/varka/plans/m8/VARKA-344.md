@@ -567,6 +567,38 @@ committed files:
 3. **344a, after 341 only**: `RoundToIntegral` with `RINT`, its lowering, the reference, the
    family; the integral rounding of 2.5 and `floor` and `ceil` over `BIGINT` and `INT` (2.4);
    tests 3.1 to 3.3 and 3.5 to 3.11 for these forms; the SMT spike first, then the file.
+   *1 November 2026, as built in part (branch `varka-344a-rounding`, on the baseline's):* the
+   integral forms, in a new family `rounding` (`VarkaRoundingCompiler`, its switch
+   `spark.sql.codegen.varka.family.rounding.enabled`) after the floating arithmetic in the
+   chain. `floor`, `ceil` and `ceiling` over `BIGINT` are the operand; over `INT`, which arrives
+   as `FLOOR(CAST(i AS DOUBLE))`, the int widened to the long, the cast never compiled (2.4).
+   `floatingDecline` passes `Floor` and `Ceil` by name, and the arm declines a double operand
+   naming 344b, a `TINYINT` or `SMALLINT` one naming 332; `Round`, `BRound` and `Truncate` over
+   a floating operand decline there naming 346. `round`, `bround` and `truncate` over the four
+   integral types at a constant scale: the identity at a scale `>= 0`, and at `-k` the signed
+   remainder of 2.5 over existing nodes only (`ConstDivide`, `IntArith` in `WRAP`, `Compare`,
+   `BitOp(AND)` for the odd test, `IfElse`), a narrow operand widened to the int lane and the
+   answer narrowed back, which is the wrap `byteValue()` and `shortValue()` give. ANSI's tails
+   are computed at compile time by bisection over `BigDecimal.setScale(-k, mode)`, which the
+   monotone rounding allows, and guarded by one `GuardedRange` in `FAIL`; `DOWN` and the scales
+   where nothing overflows have none. Past the type's digits (`k > 2, 4, 9, 18` for `TINYINT`,
+   `SMALLINT`, `INT`, `BIGINT`, and `k >= 20` for `BIGINT`) the answer is the operand times 0,
+   which keeps its validity; `BIGINT` at `k = 19` is 2.5's sign test with `CondValue`, so a null
+   operand stays null; a scale below -100 declines, since `BigDecimal.setScale` itself raises
+   near `Integer.MIN_VALUE`, which the kernel would not reproduce; a null scale declines.
+   **Departure: `BIGINT` at `1 <= k <= 18` takes the direct form**, `ConstDivide(x, 10^k)` under
+   a guard of `|x| < 2^52` intersected with ANSI's tails, so a batch with a lane at or past
+   `2^52` declines at every such scale, where 2.5 planned the `|x| >>> k` pre-shift by `5^k` to
+   widen the window to `2^(52 + k)` and cover every long from `k = 12`. The pre-shift needs the
+   magnitude form and its proof file (3.6) and is what remains of the long lane. Tests: 24
+   coverage rows in a family "Rounding", and `VarkaRoundingSuite` (sql/core) over the cells of
+   3.1: every form fused under LEGACY over a table of the ties, the windows' ends, the types'
+   extremes and the `2^52` bound, and the raising forms under ANSI cell by cell, the answer or
+   the error condition the row engine's; `ARITHMETIC_OVERFLOW` under ANSI gains the family in
+   `fuzz/expected_errors.tsv`. **Not built in this part:** `RoundToIntegral` and
+   `rint` (the node, its lowering, the reference, the fuzz grammar, `fp_round.smt2` and the
+   `binary32` twin, 3.2 and 3.3), the 2^32 exhaustion of 3.5 and the long-lane proof file of
+   3.6, and the probe of 3.7; the integral forms add no node, so no proof file is owed by them.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
    disposal.

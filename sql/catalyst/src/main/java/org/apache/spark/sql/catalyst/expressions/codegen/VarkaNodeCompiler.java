@@ -35,8 +35,10 @@ import org.apache.spark.sql.catalyst.expressions.BitwiseNot;
 import org.apache.spark.sql.catalyst.expressions.BitwiseOr;
 import org.apache.spark.sql.catalyst.expressions.BitwiseXor;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
+import org.apache.spark.sql.catalyst.expressions.BRound;
 import org.apache.spark.sql.catalyst.expressions.CaseWhen;
 import org.apache.spark.sql.catalyst.expressions.Cast;
+import org.apache.spark.sql.catalyst.expressions.Ceil;
 import org.apache.spark.sql.catalyst.expressions.Coalesce;
 import org.apache.spark.sql.catalyst.expressions.Divide;
 import org.apache.spark.sql.catalyst.expressions.DivideDTInterval;
@@ -45,6 +47,7 @@ import org.apache.spark.sql.catalyst.expressions.EqualNullSafe;
 import org.apache.spark.sql.catalyst.expressions.EqualTo;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.Floor;
 import org.apache.spark.sql.catalyst.expressions.GreaterThan;
 import org.apache.spark.sql.catalyst.expressions.GreaterThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.Greatest;
@@ -64,6 +67,7 @@ import org.apache.spark.sql.catalyst.expressions.MultiplyYMInterval;
 import org.apache.spark.sql.catalyst.expressions.NaNvl;
 import org.apache.spark.sql.catalyst.expressions.Pmod;
 import org.apache.spark.sql.catalyst.expressions.Remainder;
+import org.apache.spark.sql.catalyst.expressions.Round;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.ShiftLeft;
 import org.apache.spark.sql.catalyst.expressions.ShiftRight;
@@ -71,6 +75,7 @@ import org.apache.spark.sql.catalyst.expressions.ShiftRightUnsigned;
 import org.apache.spark.sql.catalyst.expressions.Signum;
 import org.apache.spark.sql.catalyst.expressions.Sqrt;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
+import org.apache.spark.sql.catalyst.expressions.Truncate;
 import org.apache.spark.sql.catalyst.expressions.ToDegrees;
 import org.apache.spark.sql.catalyst.expressions.ToRadians;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
@@ -207,7 +212,8 @@ final class VarkaNodeCompiler {
 
   /**
    * The chain, in order: the date leaves, the four families, then the int arithmetic and the
-   * picks, then the floating arithmetic, which claims only floating-valued nodes. The int
+   * picks, then the floating arithmetic, which claims only floating-valued nodes, and the
+   * rounding functions, which no earlier family claims. The int
    * arithmetic comes after the calendar family so that the {@code Add(WeekDay, 1)} shape keeps
    * its dedicated node, and its guard says so as well.
    */
@@ -218,7 +224,8 @@ final class VarkaNodeCompiler {
       new Family(VarkaFamily.TIME, VarkaTimeCompiler::arm),
       new Family(VarkaFamily.CONDITION, VarkaConditionCompiler::arm),
       new Family(VarkaFamily.INT_ARITHMETIC, VarkaNodeCompiler::arithmeticArm),
-      new Family(VarkaFamily.FLOATING_ARITHMETIC, VarkaFloatingCompiler::arm));
+      new Family(VarkaFamily.FLOATING_ARITHMETIC, VarkaFloatingCompiler::arm),
+      new Family(VarkaFamily.ROUNDING, VarkaRoundingCompiler::arm));
 
   /**
    * The predicate family, which is not a link of the chain: {@code compileNode} never claims a
@@ -359,12 +366,17 @@ final class VarkaNodeCompiler {
         || e instanceof Add || e instanceof Subtract || e instanceof Multiply
         || e instanceof Divide || e instanceof UnaryMinus || e instanceof Abs
         || e instanceof Sqrt || e instanceof ToDegrees || e instanceof ToRadians
-        || (e instanceof Signum s && isFloating(s.child().dataType()))) {
+        || (e instanceof Signum s && isFloating(s.child().dataType()))
+        // The rounding family's floor and ceil (VARKA-344), whose arm declines a double
+        // operand by name until its lowering exists and builds the int operand's widening.
+        || e instanceof Floor || e instanceof Ceil) {
       return Optional.empty();
     }
     String what = switch (e) {
       case Cast _ -> "a cast to or from a floating type (row 343)";
       case Remainder _, Pmod _ -> "a floating remainder (row 346)";
+      case Round _, BRound _, Truncate _ -> "round, bround or truncate over a floating value "
+          + "(row 346)";
       // The interval products and quotients by a floating factor, and signum over an interval,
       // are row 342's step after row 343's conversions. UnaryPositive is RuntimeReplaceable, so
       // it never reaches this switch: it passes above and is asked again as its child.

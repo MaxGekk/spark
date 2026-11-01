@@ -75,7 +75,11 @@ public enum VarkaFamily {
   FLOATING_ARITHMETIC("floating arithmetic", "floatingArithmetic", "+, -, *, unary minus and abs"
       + " over double and float operands, and /, try_divide, sqrt, signum, degrees and radians"
       + " over double ones, a zero divisor null under LEGACY and TRY and raised by the row engine"
-      + " under ANSI");
+      + " under ANSI"),
+  /** {@code VarkaRoundingCompiler}. */
+  ROUNDING("rounding", "rounding", "floor, ceil and ceiling over bigint and int operands, and"
+      + " round, bround and truncate over tinyint, smallint, int and bigint at a constant scale,"
+      + " a value ANSI raises on declining its batch to the row engine");
 
   /** The prefix every family's switch shares. */
   public static final String SWITCH_PREFIX = "spark.sql.codegen.varka.family.";

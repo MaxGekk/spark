@@ -377,6 +377,9 @@ def defined_classes():
 # Classes a fused claim is checked against when the registered class is not the one the
 # compiler sees: a RuntimeReplaceable rewritten before physical planning, or a builder.
 VIA = {
+    "ceil": "Ceil",
+    "ceiling": "Ceil",
+    "floor": "Floor",
     "ifnull": "Coalesce",
     "nvl": "Coalesce",
     "when": "CaseWhen",
@@ -810,6 +813,7 @@ FUSED_MODES = ["legacy", "ansi", "try"]
 CONTEXT_CASTS = {
     ("int", "dt"): "only as date_add's offset: d + CAST(i AS INTERVAL DAY)",
     ("dec", "dec"): "only a comparison's operand widened at one scale: d9 < d18, d9 = 0.42",
+    ("int", "double"): "only as floor's and ceil's operand: floor(i), the int widened to a bigint",
 }
 
 # The pairs that fuse only from a form the coverage table has no column of, so that no row over

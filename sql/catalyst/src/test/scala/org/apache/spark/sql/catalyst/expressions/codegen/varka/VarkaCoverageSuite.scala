@@ -822,6 +822,48 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("f * 2.5F"),
       Row("-f"),
       Row("abs(f)"))),
+    // The rounding functions over integral operands (VARKA-344): floor and ceil of a bigint
+    // are the operand and of an int its widening; round, bround and truncate at a negative
+    // scale are the signed remainder of a truncating division by 10^k, wrapped as Spark's
+    // BigDecimal.intValue() is, ANSI's two overflowing tails declined by a guard; a bigint
+    // operand is guarded to the 2^52 the long division is exact under.
+    Family("Rounding", predicates = false, Seq(
+      Row("floor(l)", "the identity over a bigint, in every mode"),
+      Row("ceil(l)"),
+      Row("ceiling(l)", "ceil by another name"),
+      Row("floor(i)", "FLOOR(CAST(i AS DOUBLE)): the int widened to a bigint, exact in every "
+        + "mode, with no conversion to a double"),
+      Row("ceil(i)"),
+      Row("round(i, 0)", "a scale of 0 or more is the identity"),
+      Row("round(i, -1)", "HALF_UP to a multiple of ten; under ANSI a value whose rounding "
+        + "leaves the int raises, so its batch declines",
+        domain = Some("i BETWEEN -2147483644 AND 2147483644")),
+      Row("round(i, -2)", "no int overflows at this scale, so ANSI has no guard"),
+      Row("bround(i, -1)", "HALF_EVEN: a tie goes to the even multiple",
+        domain = Some("i BETWEEN -2147483645 AND 2147483645")),
+      Row("bround(i, -2)"),
+      Row("truncate(i, -2)", "DOWN never overflows"),
+      Row("round(i, -10)", "every int rounds to 0"),
+      Row("round(y1, -1)", "computed at the int lane and wrapped to the byte",
+        domain = Some("y1 BETWEEN -124 AND 124")),
+      Row("bround(s1, -2)", "computed at the int lane and wrapped to the short",
+        domain = Some("s1 BETWEEN -32749 AND 32749")),
+      Row("truncate(y1, -1)"),
+      Row("bround(y1, -1)", "", domain = Some("y1 BETWEEN -125 AND 125")),
+      Row("round(s1, -1)", "", domain = Some("s1 BETWEEN -32764 AND 32764")),
+      Row("truncate(s1, -2)"),
+      Row("round(l, -3)", "the long division is exact under 2^52, so a batch with a lane past "
+        + "it declines", domain = Some("l BETWEEN -4503599627370495 AND 4503599627370495")),
+      Row("bround(l, -3)", "",
+        domain = Some("l BETWEEN -4503599627370495 AND 4503599627370495")),
+      Row("truncate(l, -3)", "",
+        domain = Some("l BETWEEN -4503599627370495 AND 4503599627370495")),
+      Row("round(l, -19)", "10^19 is past the long, so the quotient is 0 and the answer the "
+        + "sign of the rounding times 10^19 wrapped",
+        domain = Some("l BETWEEN -4999999999999999999 AND 4999999999999999999")),
+      Row("bround(l, -19)", "",
+        domain = Some("l BETWEEN -5000000000000000000 AND 5000000000000000000")),
+      Row("round(l, -20)", "every bigint rounds to 0"))),
 
     // DECIMAL of precision up to 18 (VARKA-347, carrying row 348's equal-scale comparisons and
     // null tests): two values of one scale compare as their unscaled longs. Each kernel checks
