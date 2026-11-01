@@ -632,6 +632,10 @@ committed files:
    the specification pinned to `BigDecimal`. The `5^k` divisors join `long_divide.smt2`
    (`ROUNDING_DIVISORS`), whose division by them it composes with, and `VarkaDivisorProofSuite`
    compiles every scale from -1 to -18 so a scale no coverage row names is still held to it.
+   That costs the linters' proof step: `long_divide.smt2` grows from 983 checks to 2999, cvc5's
+   42 s on the laptop against 8 s, so `dev/varka_prove.sh --lint` takes about 70 s there, past the
+   minute the step was sized for; `integral_round.smt2` runs under cvc5 in it (1 s against Z3's
+   6 s). Whether the 5^k need the magic form's per-binade checks at every dividend to 2^52 is open.
    `VarkaEmitterRoundingSuite` asserts the window, not only the answers: for each function, scale
    -1 to -20 and mode, the longs at the window's edge and beside `2^52`, `2^55`, `5 * 10^18` and
    the extremes, with the ties beside each and a seeded draw, are answered exactly in one chunk

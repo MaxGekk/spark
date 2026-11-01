@@ -53,8 +53,9 @@ CVC5_VERSION=1.4.1
 CVC5_ZIP=cvc5-Linux-x86_64-static.zip
 CVC5_SHA256=2f8efe58fe27ba7bccbb504533f690b9312d69da14192712460e4a19231f02a1
 # The proofs the linters' job runs under cvc5 rather than Z3, to keep the step inside its minute:
-# long_divide.smt2 takes Z3 59 s on the runner and cvc5 a third of that (VARKA-241.md 9.5).
-CVC5_IN_LINT=(long_divide.smt2)
+# long_divide.smt2 takes Z3 59 s on the runner and cvc5 a third of that (VARKA-241.md 9.5), and
+# integral_round.smt2 Z3 6 s on the laptop and cvc5 1 s (VARKA-344).
+CVC5_IN_LINT=(long_divide.smt2 integral_round.smt2)
 limit_ms="${VARKA_PROVE_LIMIT_MS:-10000}"
 run_limit="${VARKA_PROVE_RUN_LIMIT:-300}"
 
