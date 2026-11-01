@@ -726,7 +726,8 @@ final class VarkaVectorTemplateWarmup {
       }
       for (int r = 0; r < THIN_CALLS_PER_ROUND; r++) {
         acc += a.add(b).lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.add(4L).lane(0)
-            + a.sub(4L, m).lane(0) + a.add(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0)
+            + a.sub(4L, m).lane(0) + a.add(b, m).lane(0) + a.add(4L, m).lane(0)
+            + a.min(b).lane(0) + a.max(b).lane(0)
             + a.and(b).lane(0) + a.or(b).lane(0) + a.blend(b, m).lane(0) + a.blend(9L, m).lane(0)
             + LongVector.broadcast(s, 5L).lane(0) + LongVector.zero(s).lane(0)
             + a.and(1L).lane(0) + a.mul(4L).lane(0) + a.or(4L).lane(0)

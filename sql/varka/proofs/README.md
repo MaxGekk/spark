@@ -112,7 +112,8 @@ serves; before, it was assumed, and a cached far day was served wrong.
 3. `dev/varka_prove.sh --solver both` holds, in seconds: the linters' job allows a minute for all of
    them. The runner is about twice the laptop. `--lint` runs a file under Z3 unless the script's
    `CVC5_IN_LINT` names it, which it does for a file one solver proves much faster than the other:
-   `long_divide.smt2` takes Z3 28 s on the laptop and cvc5 8 s (VARKA-241.md 9.5).
+   `long_divide.smt2` took Z3 28 s on the laptop and cvc5 8 s (VARKA-241.md 9.5), and with the
+   rounding's `5^k` divisors Z3 171 s and cvc5 42 s (VARKA-344).
 4. cvc5 is the fragile one (`VARKA-242.md` 2.2 and 9). Where it answers `unknown`, try in order:
    `(set-logic ALL)` in place of `QF_NIA`; one lemma per step over named digits or quotients, so
    each check is linear arithmetic over a few small variables; a residue written as 7 times a
