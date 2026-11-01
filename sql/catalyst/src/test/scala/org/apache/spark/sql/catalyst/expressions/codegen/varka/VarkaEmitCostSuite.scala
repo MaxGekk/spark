@@ -81,9 +81,11 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // unpredictable, so the budget answers it by the weights (VarkaEmitBudget); the entry leaves
     // this list the day the node is priced, and fails here if it is priced while still listed.
     // MathUnary exists at a floating lane only, and the floating lanes are unpriced
-    // (`VarkaEmitCostFit.PRICED_LANES`, VARKA-342 5.1).
+    // (`VarkaEmitCostFit.PRICED_LANES`, VARKA-342 5.1). The unsigned compares (VARKA-359) are
+    // features of a priced node, listed by their own prefix.
     val awaitingRefit = Set("NullSafeEqual", "BoolColumn", "CondConst", "BoolCompare", "CondIf",
-      "BoolNullSafeEq", "CondValue", "BoolOutput", "DecimalColumn", "MathUnary")
+      "BoolNullSafeEq", "CondValue", "BoolOutput", "DecimalColumn", "MathUnary", "Compare/ULT",
+      "Compare/ULE", "Compare/UGT", "Compare/UGE")
     assert(awaitingRefit.forall(t => !expected.exists(f => f == t || f.startsWith(t + "/"))),
       s"${awaitingRefit.toSeq.sorted} is priced: take it off the list of nodes awaiting a refit")
     val unnamed = irTypes().filterNot(awaitingRefit.contains)
