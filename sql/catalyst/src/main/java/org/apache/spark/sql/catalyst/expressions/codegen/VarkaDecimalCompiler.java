@@ -18,15 +18,20 @@
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Cast;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.Literal;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.DecimalWords;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOpKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.types.Decimal;
@@ -48,8 +53,9 @@ import org.apache.spark.sql.types.DecimalType;
  * {@code TIME}'s widening precision cast is in {@code VarkaTimeCompiler}.
  *
  * <p>What stays declined, each naming its row: operands of two scales, whose comparison needs a
- * rescale (row 348); a comparison whose common type is wider than 18 digits, whose unscaled
- * values need not fit a long (row 359); and every other decimal operand, a cast that changes the
+ * rescale (row 348, and above 18 digits rows 360 and 363); a comparison whose common type is
+ * wider than 18 digits, whose unscaled values are a 128-bit lane pair ({@link Pair}) whose word
+ * leaf is row 359's; and every other decimal operand, a cast that changes the
  * scale or an arithmetic result (rows 348 to 350). A decimal in a value position - a choice, an
  * arithmetic operand, an output - is declined by {@code VarkaTimeCompiler}'s decimal arm.
  */
@@ -75,14 +81,19 @@ final class VarkaDecimalCompiler {
   static Optional<List<VarkaVectorIR>> operands(Expression whole, Expression left,
       Expression right, VarkaSlotTable inputs, DeclineSink sink) {
     DecimalType lt = (DecimalType) left.dataType();
+    boolean wide = lt.precision() > DecimalColumn.MAX_LONG_PRECISION
+        || right.dataType() instanceof DecimalType w
+            && w.precision() > DecimalColumn.MAX_LONG_PRECISION;
     if (!(right.dataType() instanceof DecimalType rt) || lt.scale() != rt.scale()) {
-      return sink.decline("a comparison of decimals of two scales, which needs a rescale, is "
-          + "row 348's", whole);
+      return sink.decline(wide
+          ? "a comparison of decimals of two scales above " + DecimalColumn.MAX_LONG_PRECISION
+              + " digits needs row 360's rescale up and row 363's capped rescale down"
+          : "a comparison of decimals of two scales, which needs a rescale, is row 348's", whole);
     }
-    if (lt.precision() > DecimalColumn.MAX_LONG_PRECISION
-        || rt.precision() > DecimalColumn.MAX_LONG_PRECISION) {
+    if (wide) {
       return sink.decline("a comparison of decimals wider than "
-          + DecimalColumn.MAX_LONG_PRECISION + " digits is row 359's", whole);
+          + DecimalColumn.MAX_LONG_PRECISION + " digits reads the 128-bit lane pair, whose word "
+          + "leaf is row 359's and not built yet", whole);
     }
     Optional<VarkaVectorIR> l = operand(left, lt.scale(), inputs, sink);
     if (l.isEmpty()) {
@@ -194,8 +205,60 @@ final class VarkaDecimalCompiler {
     }
     if (unscaled > MAX_UNSCALED || unscaled < -MAX_UNSCALED) {
       return sink.decline("a decimal literal wider than " + DecimalColumn.MAX_LONG_PRECISION
-          + " digits is row 359's", e);
+          + " digits is a 128-bit lane pair, row 359's", e);
     }
     return Optional.of(sink.longSlot(unscaled));
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The 128-bit lane pair (VARKA-359): its compile-time value and the operands built into it.
+  // Nothing emits a pair yet, so no compile reaches these: the comparisons above decline first.
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * A decimal of precision 19 to 38 as its two words, both long-lane nodes: {@code lo} the
+   * unscaled value's low 64 bits, read unsigned by the pair's comparisons, and {@code hi} its
+   * high 64 bits, signed. A compile-time value, never an IR node (`m8/VARKA-359.md` 2.2): every
+   * operator over a pair is composed from long-lane nodes over the two words.
+   */
+  record Pair(VarkaVectorIR lo, VarkaVectorIR hi, DecimalType type) {
+    Pair {
+      Objects.requireNonNull(type, "type");
+      if (lo.laneType() != LaneType.LONG || hi.laneType() != LaneType.LONG) {
+        throw new IllegalArgumentException("a decimal pair's words are on the long lane, not "
+            + lo.laneType() + " and " + hi.laneType());
+      }
+    }
+  }
+
+  /**
+   * A 64-bit decimal operand {@code x}, an unscaled long, as a pair of the wider type {@code to}
+   * at the same scale: its low word is {@code x} and its high word {@code x >> 63}, the sign
+   * extension. Type coercion casts {@code d18 < d38} to the wider type at one scale, which
+   * changes no unscaled value, so the extension is the whole of the cast.
+   */
+  static Pair widened(VarkaVectorIR x, DecimalType to, DeclineSink sink) {
+    return new Pair(x, new BitOp(BitOpKind.SHR, x, sink.longSlot(Long.SIZE - 1)), to);
+  }
+
+  /**
+   * A literal's unscaled value at {@code type}'s scale as a pair: two slots of the long table,
+   * its low and high words ({@link DecimalWords}). Empty, with the reason noted, for a value
+   * with no exact unscaled integer at the scale or one with more digits than the type has.
+   */
+  static Optional<Pair> literalPair(Expression e, Decimal value, DecimalType type,
+      DeclineSink sink) {
+    BigInteger unscaled;
+    try {
+      unscaled = value.toJavaBigDecimal().setScale(type.scale()).unscaledValue();
+    } catch (ArithmeticException notExact) {
+      return sink.decline("a decimal literal with no exact unscaled value at the scale", e);
+    }
+    if (unscaled.abs().compareTo(BigInteger.TEN.pow(type.precision())) >= 0) {
+      return sink.decline("a decimal literal with more than " + type.precision() + " digits",
+          e);
+    }
+    DecimalWords words = DecimalWords.of(unscaled);
+    return Optional.of(new Pair(sink.longSlot(words.lo()), sink.longSlot(words.hi()), type));
   }
 }

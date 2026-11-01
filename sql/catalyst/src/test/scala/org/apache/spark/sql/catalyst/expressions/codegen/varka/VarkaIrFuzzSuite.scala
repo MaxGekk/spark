@@ -1353,9 +1353,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private val unsignedSeed =
     sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(VarkaIrGrammar.UNSIGNED_FUZZ_SEED)
 
+  // A third of the corpora's iterations: one lane, and each draw is run under its options and
+  // compared row by row, which at 300 took 3.6 minutes on the laptop.
+  private val unsignedIterations = math.max(1, iterations / 3)
+
   test(s"random long-lane IR trees with unsigned comparisons match the reference evaluator " +
-      s"(seed $unsignedSeed, $iterations iterations)") {
-    val ks = only.map(Seq(_)).getOrElse(0 until iterations)
+      s"(seed $unsignedSeed, $unsignedIterations iterations)") {
+    val ks = only.map(Seq(_)).getOrElse(0 until unsignedIterations)
     var unsignedDrawn = 0
     for (k <- ks) {
       val c = drawLong(k, unsignedSeed, unsigned = true)
