@@ -107,7 +107,7 @@ final class VarkaDecimalCompiler {
       VarkaSlotTable inputs, DeclineSink sink) {
     Expression column = stripWidening(child);
     if (column instanceof BoundReference br) {
-      if (VarkaTypes.lane(br.dataType()).isEmpty()) {
+      if (VarkaTypes.read(br.dataType()).isEmpty()) {
         return sink.decline(VarkaTypes.declineReason(br.dataType())
             .orElse("a decimal column on no lane"), whole);
       }
@@ -127,7 +127,7 @@ final class VarkaDecimalCompiler {
       DeclineSink sink) {
     Expression stripped = stripWidening(e);
     if (stripped instanceof BoundReference br) {
-      if (VarkaTypes.lane(br.dataType()).isEmpty()) {
+      if (VarkaTypes.read(br.dataType()).isEmpty()) {
         return sink.decline(VarkaTypes.declineReason(br.dataType())
             .orElse("a decimal column on no lane"), e);
       }
