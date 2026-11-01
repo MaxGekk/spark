@@ -4696,8 +4696,8 @@
     "casts" : [ ],
     "operands" : [ "Round:bigint", "Round:int" ],
     "switches" : [ "spark.sql.codegen.varka.family.rounding.enabled" ],
-    "domain" : "l BETWEEN -4503599627370495 AND 4503599627370495",
-    "note" : "the long division is exact under 2^52, so a batch with a lane past it declines",
+    "domain" : "l BETWEEN -36028797018963967 AND 36028797018963967",
+    "note" : "the pre-shift divides |l| >>> 3 by 125, exact under 2^55, so a batch with a lane past it declines",
     "verified" : "differential"
   }, {
     "sql" : "bround(l, -3)",
@@ -4708,7 +4708,7 @@
     "casts" : [ ],
     "operands" : [ "BRound:bigint", "BRound:int" ],
     "switches" : [ "spark.sql.codegen.varka.family.rounding.enabled" ],
-    "domain" : "l BETWEEN -4503599627370495 AND 4503599627370495",
+    "domain" : "l BETWEEN -36028797018963967 AND 36028797018963967",
     "note" : "",
     "verified" : "differential"
   }, {
@@ -4720,8 +4720,20 @@
     "casts" : [ ],
     "operands" : [ "Truncate:bigint", "Truncate:int" ],
     "switches" : [ "spark.sql.codegen.varka.family.rounding.enabled" ],
-    "domain" : "l BETWEEN -4503599627370495 AND 4503599627370495",
+    "domain" : "l BETWEEN -36028797018963967 AND 36028797018963967",
     "note" : "",
+    "verified" : "differential"
+  }, {
+    "sql" : "round(l, -12)",
+    "executable" : "round(l, -12)",
+    "family" : "Rounding",
+    "form" : "projection",
+    "catalyst" : [ "Round" ],
+    "casts" : [ ],
+    "operands" : [ "Round:bigint", "Round:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.rounding.enabled" ],
+    "domain" : "",
+    "note" : "from -12 the pre-shift divides every bigint exactly, so there is no guard",
     "verified" : "differential"
   }, {
     "sql" : "round(l, -19)",
