@@ -85,8 +85,8 @@ final class VarkaDecimalCompiler {
       Expression right, VarkaSlotTable inputs, DeclineSink sink) {
     DecimalType lt = (DecimalType) left.dataType();
     boolean wide = lt.precision() > DecimalColumn.MAX_LONG_PRECISION
-        || right.dataType() instanceof DecimalType w
-            && w.precision() > DecimalColumn.MAX_LONG_PRECISION;
+        || (right.dataType() instanceof DecimalType w
+            && w.precision() > DecimalColumn.MAX_LONG_PRECISION);
     if (!(right.dataType() instanceof DecimalType rt) || lt.scale() != rt.scale()) {
       return sink.decline(wide
           ? "a comparison of decimals of two scales above " + DecimalColumn.MAX_LONG_PRECISION

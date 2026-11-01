@@ -1836,6 +1836,9 @@ final class VarkaVectorWalk {
         cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
         cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
       }
+      // BoolCompare's constructor refuses them.
+      case ULT, ULE, UGT, UGE ->
+          throw VarkaErrors.illegalState("a boolean comparison has no unsigned form: " + op);
     }
   }
 
@@ -1877,6 +1880,9 @@ final class VarkaVectorWalk {
         cb.land();
       }
       case EQ -> throw VarkaErrors.illegalState("EQ is emitted above");
+      // BoolCompare's constructor refuses them.
+      case ULT, ULE, UGT, UGE ->
+          throw VarkaErrors.illegalState("a boolean comparison has no unsigned form: " + n.op());
     }
     cb.lstore(kt);
     cb.lload(s.cmpTmp);
