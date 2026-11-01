@@ -828,8 +828,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `bround(y1, -1)` | `rounding` | `y1 BETWEEN -125 AND 125` |  | vector |
 | `round(s1, -1)` | `rounding` | `s1 BETWEEN -32764 AND 32764` |  | vector |
 | `truncate(s1, -2)` | `rounding` |  |  | vector |
-| `round(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` | the long division is exact under 2^52, so a batch with a lane past it declines | per-lane: compare to mask, mask logic, blend, mask broadcast, mask test, mask cast |
-| `bround(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` |  | per-lane: compare to mask, mask logic, blend, mask broadcast, mask test, mask cast |
+| `round(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` | the long division is exact under 2^52, so a batch with a lane past it declines | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
+| `bround(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` |  | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
 | `truncate(l, -3)` | `rounding` | `l BETWEEN -4503599627370495 AND 4503599627370495` |  | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `round(l, -19)` | `rounding` | `l BETWEEN -4999999999999999999 AND 4999999999999999999` | 10^19 is past the long, so the quotient is 0 and the answer the sign of the rounding times 10^19 wrapped | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |
 | `bround(l, -19)` | `rounding` | `l BETWEEN -5000000000000000000 AND 5000000000000000000` |  | per-lane: compare to mask, mask logic, masked operation, mask broadcast, mask test, mask cast |

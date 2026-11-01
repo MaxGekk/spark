@@ -569,36 +569,46 @@ committed files:
    tests 3.1 to 3.3 and 3.5 to 3.11 for these forms; the SMT spike first, then the file.
    *1 November 2026, as built in part (branch `varka-344a-rounding`, on the baseline's):* the
    integral forms, in a new family `rounding` (`VarkaRoundingCompiler`, its switch
-   `spark.sql.codegen.varka.family.rounding.enabled`) after the floating arithmetic in the
-   chain. `floor`, `ceil` and `ceiling` over `BIGINT` are the operand; over `INT`, which arrives
-   as `FLOOR(CAST(i AS DOUBLE))`, the int widened to the long, the cast never compiled (2.4).
-   `floatingDecline` passes `Floor` and `Ceil` by name, and the arm declines a double operand
-   naming 344b, a `TINYINT` or `SMALLINT` one naming 332; `Round`, `BRound` and `Truncate` over
-   a floating operand decline there naming 346. `round`, `bround` and `truncate` over the four
-   integral types at a constant scale: the identity at a scale `>= 0`, and at `-k` the signed
-   remainder of 2.5 over existing nodes only (`ConstDivide`, `IntArith` in `WRAP`, `Compare`,
-   `BitOp(AND)` for the odd test, `IfElse`), a narrow operand widened to the int lane and the
-   answer narrowed back, which is the wrap `byteValue()` and `shortValue()` give. ANSI's tails
-   are computed at compile time by bisection over `BigDecimal.setScale(-k, mode)`, which the
-   monotone rounding allows, and guarded by one `GuardedRange` in `FAIL`; `DOWN` and the scales
-   where nothing overflows have none. Past the type's digits (`k > 2, 4, 9, 18` for `TINYINT`,
-   `SMALLINT`, `INT`, `BIGINT`, and `k >= 20` for `BIGINT`) the answer is the operand times 0,
-   which keeps its validity; `BIGINT` at `k = 19` is 2.5's sign test with `CondValue`, so a null
-   operand stays null; a scale below -100 declines, since `BigDecimal.setScale` itself raises
-   near `Integer.MIN_VALUE`, which the kernel would not reproduce; a null scale declines.
-   **Departure: `BIGINT` at `1 <= k <= 18` takes the direct form**, `ConstDivide(x, 10^k)` under
-   a guard of `|x| < 2^52` intersected with ANSI's tails, so a batch with a lane at or past
-   `2^52` declines at every such scale, where 2.5 planned the `|x| >>> k` pre-shift by `5^k` to
-   widen the window to `2^(52 + k)` and cover every long from `k = 12`. The pre-shift needs the
-   magnitude form and its proof file (3.6) and is what remains of the long lane. Tests: 24
-   coverage rows in a family "Rounding", and `VarkaRoundingSuite` (sql/core) over the cells of
-   3.1: every form fused under LEGACY over a table of the ties, the windows' ends, the types'
-   extremes and the `2^52` bound, and the raising forms under ANSI cell by cell, the answer or
-   the error condition the row engine's; `ARITHMETIC_OVERFLOW` under ANSI gains the family in
-   `fuzz/expected_errors.tsv`. **Not built in this part:** `RoundToIntegral` and
-   `rint` (the node, its lowering, the reference, the fuzz grammar, `fp_round.smt2` and the
-   `binary32` twin, 3.2 and 3.3), the 2^32 exhaustion of 3.5 and the long-lane proof file of
-   3.6, and the probe of 3.7; the integral forms add no node, so no proof file is owed by them.
+   `spark.sql.codegen.varka.family.rounding.enabled`) after the floating arithmetic in the chain.
+   `floor`, `ceil` and `ceiling` over `BIGINT` are the operand; over `INT`, which arrives as
+   `FLOOR(CAST(i AS DOUBLE))`, the int widened to the long, the cast never compiled (2.4).
+   `floatingDecline` passes `Floor` and `Ceil` by name, and the arm declines a double operand naming
+   344b, a `TINYINT` or `SMALLINT` one naming 332; `Round`, `BRound` and `Truncate` over a floating
+   operand decline there naming 346. `round`, `bround` and `truncate` over the four integral types
+   at a constant scale: the identity at a scale `>= 0`, and at `-k` the signed remainder of 2.5 over
+   existing nodes only (`ConstDivide`, `IntArith` in `WRAP`, `Compare`, `BitOp(AND)` for the odd
+   test, `CondValue` for the steps), a narrow operand widened to the int lane and the answer
+   narrowed back, which is the wrap `byteValue()` and `shortValue()` give. ANSI's tails are computed
+   at compile time by bisection over `BigDecimal.setScale(-k, mode)`, which the monotone rounding
+   allows, and guarded by one `GuardedRange` in `FAIL`; `DOWN` and the scales where nothing
+   overflows have none. Past the type's digits (`k > 2, 4, 9, 18` for `TINYINT`, `SMALLINT`, `INT`,
+   `BIGINT`, and `k >= 20` for `BIGINT`) the answer is the operand times 0, which keeps its
+   validity; `BIGINT` at `k = 19` is 2.5's sign test with `CondValue`, so a null operand stays null;
+   a scale below -100 declines, since `BigDecimal.setScale` itself raises near `Integer.MIN_VALUE`,
+   which the kernel would not reproduce; a null scale declines. **Departure: `BIGINT` at `1 <= k <=
+   18` takes the direct form**, `ConstDivide(x, 10^k)` under a guard of `|x| < 2^52` intersected
+   with ANSI's tails, so a batch with a lane at or past `2^52` declines at every such scale, where
+   2.5 planned the `|x| >>> k` pre-shift by `5^k` to widen the window to `2^(52 + k)` and cover
+   every long from `k = 12`. The pre-shift needs the magnitude form and its proof file (3.6) and is
+   what remains of the long lane. Tests: 24 coverage rows in a family "Rounding", and
+   `VarkaRoundingSuite` (sql/core) over the cells of 3.1: every form fused under LEGACY over a table
+   of the ties, the windows' ends, the types' extremes and the `2^52` bound, and the raising forms
+   under ANSI cell by cell, the answer or the error condition the row engine's;
+   `VarkaEmitterRoundingSuite` (catalyst) through the compiled kernels against Spark's `Round`,
+   `BRound` and `Truncate`, every `INT` at scales -1 to -10 in LEGACY and ANSI behind
+   `-Dvarka.sweep=true` (3.5's 30 sweeps, each in both modes), and a strided slice of 2^20 ints, the
+   windows' ends and the extremes among them, on every build, about 6 s for the suite's own JVM on
+   the laptop's cores (its 60 kernels and slices); the full sweep was not run here, and at the
+   slice's rate it would take about six hours, not the fifteen minutes prediction 4.6 registered,
+   since the `BigDecimal` evaluation of Spark's side runs on every int twice (scaled from the slice,
+   to be scored when it runs); `ARITHMETIC_OVERFLOW` under ANSI gains the family in
+   `fuzz/expected_errors.tsv`. The rounding baseline lists the sections this part fuses: `floor(i)`,
+   `round(i, -2)`, `bround(i, -2)` and `truncate(l, -3)` in both modes and `round(l, -3)` under
+   ANSI. **Not built in this part:** `RoundToIntegral` and `rint` (the node, its lowering, the
+   reference, the fuzz grammar, `fp_round.smt2` and the `binary32` twin, 3.2 and 3.3), the `TINYINT`
+   and `SMALLINT` sweeps of 3.5, which the cells and the coverage harness reach but no kernel sweep
+   does, the long-lane proof file of 3.6 and the probe of 3.7; the integral forms add no node, so no
+   proof file is owed by them.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
    disposal.
@@ -697,6 +707,20 @@ and `factorial`; until 342 and 343, `width_bucket`.
    them into `VarkaSqlBenchmarkBase` and a shared suite trait was raised at the review of this
    row's baseline and left out of it, since it touches every baseline class. It is not this
    row's work; the owner may wish to give it a row.
+5. **The `BIGINT` window, raised by 344a's first part (1 November 2026).** The part built guards
+   a `BIGINT` at scales -1 to -18 to `|x| < 2^52`. The baseline's `l` spreads to 54 bits with
+   about one row in forty past `2^52` (5.1), so nearly every 4096-row batch holds such a lane and
+   `round(l, -3)` and `truncate(l, -3)` would decline nearly every batch of their sections.
+   (a) Build 2.5's pre-shift by `5^k` and the long-lane proof file of 3.6 in 344a before its pull
+   request opens, widening the window to `2^(52 + k)`, `2^55` at `k = 3`, which no row of `l`
+   passes; (b) open the pull request with the `2^52` window and the pre-shift as a further part.
+   *Recommended: (a)*, since with (b) the measurement of 5.6 would time the decline for both
+   bigint sections.
+6. **Splitting 344a.** (a) One pull request with the integral forms and `rint`, as section 5 has
+   it; (b) the integral forms first, `rint` with its node, lowering, proof file, twin and probe
+   as a pull request of its own. *Recommended: (b)*: the integral forms add no node and are most
+   of the census movement, while `rint` is a new IR node with its own proofs, and the two share
+   no code.
 
 Settled with the lead on 30 October 2026, and so not questions: the `BIGINT` band at `k <= 11`
 declines beyond its guard, the full-range form being row 360's constant-multiplier `WideMul`

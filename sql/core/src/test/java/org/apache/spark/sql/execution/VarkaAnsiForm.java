@@ -256,7 +256,8 @@ public final class VarkaAnsiForm {
         "i ^ 21845", "~i", "i << 3", "shiftright(i, i)", "i >>> 28", "bit_count(i)",
         "bit_count(l)", "bit_count(l) + 1", "y1 + i", "CAST(s1 AS INT)",
         "CAST(y1 AS INT) * CAST(y2 AS INT)", "CAST(s1 AS INT) * CAST(s2 AS INT)", "try_add(i, 1)",
-        "try_subtract(i, 1)")) {
+        "try_subtract(i, 1)", "round(i, 0)", "round(i, -1)", "round(i, -2)", "bround(i, -1)",
+        "bround(i, -2)", "truncate(i, -2)", "round(i, -10)")) {
       out.put(sql + "\t" + COALESCE_TAIL, intCoalesce);
     }
     // CAST(i AS INTERVAL DAY) throws past INTERVAL_DAY_LIMIT_DAYS, so the compiler bounds i and
@@ -274,7 +275,10 @@ public final class VarkaAnsiForm {
         + "the left side rejected (m9/SCOPE.md item 96)";
     for (String sql : List.of("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
         "ym - ymm", "ym + ym", "i + 1", "year(d) + i", "y1 + y2", "y1 - y2", "y1 * y2", "-y1",
-        "abs(y1)", "s1 + s2", "s1 - s2", "s1 * s2", "-s1", "abs(s1)", "x / x2", "ntz + dt")) {
+        "abs(y1)", "s1 + s2", "s1 - s2", "s1 * s2", "-s1", "abs(s1)", "x / x2", "ntz + dt",
+        "round(i, -1)", "bround(i, -1)", "round(y1, -1)", "bround(y1, -1)", "round(s1, -1)",
+        "bround(s1, -2)", "round(l, -3)", "bround(l, -3)", "truncate(l, -3)", "round(l, -19)",
+        "bround(l, -19)")) {
       out.put(sql + "\t" + FALSE_AND, unqualified);
     }
     return Map.copyOf(out);

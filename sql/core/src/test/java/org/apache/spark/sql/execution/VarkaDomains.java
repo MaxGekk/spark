@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpecs;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpecs.Verdict;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser$;
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan;
 import org.apache.spark.sql.catalyst.plans.logical.Project;
@@ -102,6 +103,7 @@ public final class VarkaDomains {
     out.put("m", "0");
     out.put("y", "0");
     out.put("mm", "0");
+    out.put("l", "5000000000");
     out.put("t", "TIME'12:34:56.789'");
     out.put("t2", "TIME'00:00:00'");
     out.put("dt", "INTERVAL '1 02:03:04.5' DAY TO SECOND");
@@ -121,7 +123,7 @@ public final class VarkaDomains {
       }
     }
     return "(" + v.get("d") + ", " + v.get("d2") + ", " + v.get("i") + ", " + v.get("m") + ", "
-        + v.get("y") + ", " + v.get("mm") + ", CAST('5000000000' AS BIGINT), "
+        + v.get("y") + ", " + v.get("mm") + ", CAST('" + v.get("l") + "' AS BIGINT), "
         + "CAST('1' AS BIGINT), " + v.get("t") + ", " + v.get("t2") + ", "
         + v.get("dt") + ", INTERVAL '0 00:00:00' DAY TO SECOND, "
         + "CAST(" + v.get("y1") + " AS TINYINT), CAST(" + v.get("y2") + " AS TINYINT), "
@@ -159,7 +161,9 @@ public final class VarkaDomains {
    * a {@code d} past those days beside a null {@code ntz2}; {@code ym} at the month range on both
    * signs, at the one count whose negation overflows and one in from it, and at the counts whose
    * difference with {@code ymm} leaves the int, {@code ymm} at its most negative; a time at each
-   * end of the day; the narrow lanes' bounds. Then rows null in those columns, one column group at
+   * end of the day; the narrow lanes' bounds; {@code l} at the long division's {@code 2^52} and
+   * at half of {@code 10^19}, one in and one out on each sign, the long rounding's bounds. Then
+   * rows null in those columns, one column group at
    * a time and all at once, which the {@code IS NULL} partitions select. The other columns hold
    * the mixed fixture's first row.
    */
@@ -175,6 +179,14 @@ public final class VarkaDomains {
     ints.addAll(around(1, 12));
     var rows = new ArrayList<String>();
     ints.forEach(i -> rows.add(row("i", Long.toString(i))));
+    // The long rounding's guards (VARKA-344): the 2^52 the long division is exact under, and
+    // the half of 10^19, where round and bround at -19 leave the long.
+    long exact = ConstDivide.EXACT_DIVIDEND_BOUND;
+    long half = 5_000_000_000_000_000_000L;
+    for (long l : List.of(exact - 1, exact, -(exact - 1), -exact, half - 1, half, half + 1,
+        -(half - 1), -half, -(half + 1))) {
+      rows.add(row("l", Long.toString(l)));
+    }
     for (long i : List.of(Integer.MAX_VALUE - 9999L, Integer.MAX_VALUE - 9998L)) {
       rows.add(row("d", "DATE'9999-12-31'", "i", Long.toString(i)));
     }

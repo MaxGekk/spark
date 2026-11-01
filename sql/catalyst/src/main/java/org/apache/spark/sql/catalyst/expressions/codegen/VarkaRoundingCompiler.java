@@ -43,7 +43,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
@@ -290,8 +289,14 @@ final class VarkaRoundingCompiler {
       down = new Or(new Compare(CompareOp.LT, r, negHalf),
           new And(new Compare(CompareOp.EQ, r, negHalf), odd));
     }
-    VarkaVectorIR q = new IfElse(up, new IntArith(IntOp.ADD, Overflow.WRAP, q0, one),
-        new IfElse(down, new IntArith(IntOp.SUB, Overflow.WRAP, q0, one), q0));
+    // The steps as values, q0 + [up] - [down], rather than as IfElse arms: a guard below a
+    // conditional's arms is qualified by their conditions, and an arm-free tree keeps the ANSI
+    // guard qualified by an enclosing CASE alone. CondValue is null where its condition is
+    // unknown, which is where the operand is null.
+    LaneType lane = q0.laneType();
+    VarkaVectorIR q = new IntArith(IntOp.SUB, Overflow.WRAP,
+        new IntArith(IntOp.ADD, Overflow.WRAP, q0, new CondValue(up, lane)),
+        new CondValue(down, lane));
     return new IntArith(IntOp.MUL, Overflow.WRAP, q, dSlot);
   }
 
