@@ -26,9 +26,9 @@
 ;   Q  = t / 5^k                   ConstDivide, told t < preShiftBound(k, lo, hi)
 ;   r  = a - Q * d                 the magnitude's remainder, in [0, d)
 ;   M  = (Q + [up]) * d            HALF_UP:   up = r >= h
-;                                  HALF_EVEN: up = r > h or (r = h and Q & 1 = 1)
+;                                  HALF_EVEN: up = r + (Q & 1) > h
 ;                                  DOWN:      M = Q * d
-;   out = (M ^ s) - s              the sign put back
+;   out = M * (s | 1)              the sign put back, s | 1 being 1 or -1
 ;
 ; At k = 19, 10^19 is past the long range: q0 = 0, r = x, and out is q times 10^19
 ; wrapped, q = [x >= h] - [x <= -h] (or > and <), h = 5 * 10^18; DOWN is x * 0, and so is
@@ -44,10 +44,10 @@
 ; most 2^52. So the claims split at the quotient: over the guard the pre-shift gives
 ; floor(|x| / d), and the steps after it give the rounding from that Q, over every long,
 ; Long.MIN_VALUE's wrapped magnitude included. x ^ s
-; is written as an ite on s, which is Java's XOR for s in {0, -1}, and a first check
-; shows s is one of them. Beside the claims: each guard's end is tight (one past it
-; reaches the bound, or overflows ANSI's long), and the arithmetic shift in place of the
-; logical one is wrong at Long.MIN_VALUE.
+; is written as an ite on s, which is Java's XOR for s in {0, -1}, as s | 1 is, and a
+; first check shows s is one of them. Beside the claims: each guard's end is tight (one
+; past it reaches the bound, or overflows ANSI's long), and the arithmetic shift in place
+; of the logical one is wrong at Long.MIN_VALUE.
 ;
 ; Rendered by VarkaProofFiles. VarkaProofFilesSuite fails when this file differs from its
 ; rendering, and VARKA_PROOFS_REGEN=true build/sbt 'catalyst/testOnly *VarkaProofFilesSuite'
@@ -56,6 +56,9 @@
 (set-logic ALL)
 
 (define-fun xor.sign ((v Int) (s Int)) Int (ite (= s (- 1)) (jlong.not v) v))
+(define-fun or.one ((s Int)) Int (ite (= s (- 1)) (- 1) 1))
+; m * (s | 1) for s in {0, -1}, as the case split a check below shows it equal to.
+(define-fun times.sign ((m Int) (s Int)) Int (ite (= s (- 1)) (jlong.neg m) m))
 
 (define-fun rnd.half.up ((x Int) (d Int)) Int
   (let ((m (+ (div (abs x) d) (ite (>= (* 2 (mod (abs x) d)) d) 1 0))))
@@ -73,19 +76,28 @@
 (define-fun form.half.up ((a Int) (Q Int) (s Int) (d Int) (h Int)) Int
   (let ((r (jlong.sub a (jlong.mul Q d))))
     (let ((m (jlong.mul (jlong.add Q (ite (>= r h) 1 0)) d)))
-      (jlong.sub (xor.sign m s) s))))
+      (times.sign m s))))
 (define-fun form.half.even ((a Int) (Q Int) (s Int) (d Int) (h Int)) Int
-  (let ((r (jlong.sub a (jlong.mul Q d))) (odd (= (jlong.and.low Q 2) 1)))
-    (let ((m (jlong.mul (jlong.add Q (ite (or (> r h) (and (= r h) odd)) 1 0)) d)))
-      (jlong.sub (xor.sign m s) s))))
+  (let ((r (jlong.sub a (jlong.mul Q d))))
+    (let ((up (> (jlong.add r (jlong.and.low Q 2)) h)))
+      (let ((m (jlong.mul (jlong.add Q (ite up 1 0)) d)))
+        (times.sign m s)))))
 (define-fun form.down ((a Int) (Q Int) (s Int) (d Int) (h Int)) Int
-  (jlong.sub (xor.sign (jlong.mul Q d) s) s))
+  (times.sign (jlong.mul Q d) s))
 
 (echo "s = x >> 63 is 0 or -1 for every long: expect unsat")
 (push 1)
 (declare-const x Int)
 (assert (jlong.in x))
 (assert (not (or (= (jlong.shr x 63) 0) (= (jlong.shr x 63) (- 1)))))
+(check-sat)
+(pop 1)
+
+(echo "m * (s | 1) is times.sign for every long m and s in {0, -1}: expect unsat")
+(push 1)
+(declare-const m Int) (declare-const s Int)
+(assert (and (jlong.in m) (or (= s 0) (= s (- 1)))))
+(assert (not (= (jlong.mul m (or.one s)) (times.sign m s))))
 (check-sat)
 (pop 1)
 

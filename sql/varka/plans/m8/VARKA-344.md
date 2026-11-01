@@ -612,10 +612,13 @@ committed files:
    *1 November 2026, the pre-shift built (open point 5's decision), correcting the departure above
    and its last sentence:* `BIGINT` at `1 <= k <= 18` now rounds by 2.5's pre-shift over the
    magnitude, `s = x >> 63`, `a = (x ^ s) - s`, `Q = (a >>> k) / 5^k`, `r = a - Q * 10^k`, `Q`
-   stepped up past the half (at it for `HALF_UP`, at it for an odd `Q` for `HALF_EVEN`), times
-   `10^k`, and the sign restored by `(M ^ s) - s`. Restoring the sign to `Q` first and reusing the
-   int lane's signed remainder form was built first and refused by the emitter for `bround`: its
-   chain is 17 deep, past `MAX_CHAIN_DEPTH` of 16, where the magnitude form's is 16. The guard is
+   stepped up past the half (`r >= h` for `HALF_UP`, `r + (Q & 1) > h` for `HALF_EVEN`), times
+   `10^k`, and the sign restored as a multiply by `s | 1`. Restoring the sign to `Q` first and
+   reusing the int lane's signed remainder form was built first and refused by the emitter for
+   `bround`: its chain is 17 deep, past `MAX_CHAIN_DEPTH` of 16. The magnitude form with the tie
+   test and the sign restore of the int lane was 16 deep, and the coverage harness found that a
+   CASE, a `coalesce` or a comparison over it passed the depth; the one-compare tie and the
+   multiply by the sign bring it to 14. The guard is
    `|x| < 2^(52 + k)` for `k <= 10` (`2^53` at -1, `2^55` at -3, `2^62` at -10), every long but
    `Long.MIN_VALUE` at `k = 11` (its magnitude `2^63` shifted by 11 is `2^52`, one past the
    division's bound), and none from `k = 12`, where every long, `Long.MIN_VALUE` included, is

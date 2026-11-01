@@ -289,12 +289,15 @@ public final class VarkaRoundingCompiler {
    * {@code Long.MIN_VALUE} gives {@code 2^63}), {@code a >>> k} is {@code floor(|x| / 2^k)}, and
    * its quotient {@code Q} by {@code 5^k} is {@code floor(|x| / 10^k)}, since nested floor
    * divisions by positive integers compose. The remainder {@code R = a - Q * 10^k} is not
-   * negative, so {@code Q} steps up by one past the half - at it too for {@code HALF_UP}, at it
-   * only for an odd {@code Q} for {@code HALF_EVEN}, never for {@code DOWN} - and the magnitude
-   * {@code M} times {@code 10^k} gets its sign back as it lost it, {@code (M ^ s) - s}, every
-   * step wrapping: the rounding is symmetric in the sign, and its low 64 bits are
-   * {@code longValue()}'s. The signed remainder form of the int lane would be two levels deeper
-   * here, past the emitter's chain depth for {@code HALF_EVEN}. The dividend {@code a >>> k} is
+   * negative, so {@code Q} steps up by one past the half - at it too for {@code HALF_UP}
+   * ({@code R >= h}), at it only for an odd {@code Q} for {@code HALF_EVEN}
+   * ({@code R + (Q & 1) > h}, one compare where the tie test would be three nodes), never for
+   * {@code DOWN} - and the magnitude {@code M} times {@code 10^k} gets its sign back as a
+   * multiply by {@code s | 1}, which is 1 or -1, every step wrapping: the rounding is symmetric
+   * in the sign, and its low 64 bits are {@code longValue()}'s. Both choices keep the chain
+   * shallow: the int lane's signed remainder form over the restored quotient is 17 deep for
+   * {@code HALF_EVEN} here, past the emitter's {@code MAX_CHAIN_DEPTH} of 16, and this form is
+   * 14 deep, leaving room for a CASE or a comparison above it. The dividend {@code a >>> k} is
    * under the bound stated to the division, derived from the guard's ends;
    * {@code integral_round.smt2} proves each step.
    */
@@ -316,20 +319,16 @@ public final class VarkaRoundingCompiler {
     } else {
       VarkaVectorIR r = new IntArith(IntOp.SUB, Overflow.WRAP, a, qd);
       VarkaVectorIR half = sink.longSlot(d / 2);
-      Cond up;
-      if (mode == RoundingMode.HALF_UP) {
-        up = new Compare(CompareOp.GE, r, half);
-      } else {
-        VarkaVectorIR one = sink.longSlot(1L);
-        Cond odd = new Compare(CompareOp.EQ, new BitOp(BitOpKind.AND, q, one), one);
-        up = new Or(new Compare(CompareOp.GT, r, half),
-            new And(new Compare(CompareOp.EQ, r, half), odd));
-      }
+      Cond up = mode == RoundingMode.HALF_UP
+          ? new Compare(CompareOp.GE, r, half)
+          : new Compare(CompareOp.GT, new IntArith(IntOp.ADD, Overflow.WRAP, r,
+              new BitOp(BitOpKind.AND, q, sink.longSlot(1L))), half);
       // CondValue, not IfElse: see remainderForm.
       m = new IntArith(IntOp.MUL, Overflow.WRAP,
           new IntArith(IntOp.ADD, Overflow.WRAP, q, new CondValue(up, LaneType.LONG)), dSlot);
     }
-    return new IntArith(IntOp.SUB, Overflow.WRAP, new BitOp(BitOpKind.XOR, m, s), s);
+    VarkaVectorIR sign = new BitOp(BitOpKind.OR, s, sink.longSlot(1L));
+    return new IntArith(IntOp.MUL, Overflow.WRAP, m, sign);
   }
 
   /**
