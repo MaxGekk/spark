@@ -57,9 +57,11 @@ public final class VarkaKernelPlan {
     /** A floating conjunct of a filter whose kernel is integral, which it cannot join yet. */
     FLOATING_CONDITION,
     /**
-     * A condition root of a kernel driven at the long lane, on an x86 host whose long species has
-     * two lanes and whose masks C2 does not lower: a refusal of the host, not of the roots, so
-     * the compiler asks for it at admission ({@link #admit}) and {@link #of} never makes it.
+     * A condition root of a kernel driven at a 64-bit lane, {@code LONG} or {@code DOUBLE}, on an
+     * x86 host whose 64-bit species have two lanes or fewer and whose masks C2 does not lower
+     * ({@link #TWO_LANE_CONDITION_REASON} names the column types): a refusal
+     * of the host, not of the roots, so the compiler asks for it at admission ({@link #admit})
+     * and {@link #of} never makes it.
      */
     TWO_LANE_CONDITION
   }
@@ -153,58 +155,53 @@ public final class VarkaKernelPlan {
   // The host's refusal
   // -------------------------------------------------------------------------------------------
 
-  /**
-   * Whether this JVM is a host where a long-lane condition root is refused: x86, where the long
-   * species has two lanes. Read once, from the host reading the session's level comes from
-   * ({@link VarkaHostIsa#host()}); see {@link #twoLaneMasksFallBack(VarkaHostIsa.Reading)}. It is
-   * the answer a session that does not set
-   * {@code spark.sql.codegen.varka.declineTwoLaneConditions} resolves on this JVM, and that
-   * setting is what the compiler is handed; the compiler never reads this field itself, so a
-   * compile with no session answers alike on every host.
-   */
-  public static final boolean HOST_TWO_LANE_MASKS_FALL_BACK =
-      twoLaneMasksFallBack(VarkaHostIsa.host());
-
   /** The reason a filter's condition records where {@link #hostRefusal} refuses it. */
   public static final String TWO_LANE_CONDITION_REASON = "a filter's condition in a kernel driven "
-      + "at the LONG lane, on an x86 host whose long species has two lanes: C2 lowers no "
-      + "two-lane mask there, and the selection would run the Vector API's Java fallback";
+      + "at a 64-bit lane (BIGINT, DOUBLE, TIMESTAMP_NTZ, TIME, day-time interval, DECIMAL up to "
+      + "18 digits), on an x86 host whose 64-bit species have two lanes or fewer: C2 lowers no "
+      + "mask there, and the selection would run the Vector API's Java fallback";
 
   /**
-   * Whether {@code host}, read on this JVM, runs every mask of the long species as the Vector
-   * API's Java fallback: {@link #twoLaneMasksFallBack(boolean, int)} of the reading's
-   * architecture and this JVM's preferred long species. The lane count is the running JVM's own,
+   * Whether {@code host}, read on this JVM, runs every mask of a 64-bit species as the Vector
+   * API's Java fallback: {@link #twoLaneMasksFallBack(VarkaHostIsa.Reading, int)} of the reading
+   * and this JVM's preferred long species. The lane count is the running JVM's own,
    * as the species the kernels are emitted at is, so a planted reading changes the architecture
-   * alone. Public for the session in sql/core, which resolves its default here from the reading
-   * it resolves its level from, and which cannot reach the lanes itself.
+   * alone; the long species stands for the {@code DOUBLE} one, whose preferred species has as
+   * many lanes at every width. The architecture is asked first, so a host that is not x86 answers
+   * without loading the Vector API's species. Public for the session in sql/core, which resolves
+   * its default here from the reading it resolves its level from, and which cannot reach the
+   * lanes itself.
    */
   public static boolean twoLaneMasksFallBack(VarkaHostIsa.Reading host) {
-    return twoLaneMasksFallBack(host.x86(), Lane.LONG.preferredLanes);
+    return host.x86() && twoLaneMasksFallBack(host, Lane.LONG.preferredLanes);
   }
 
   /**
-   * Whether a host on x86 or not, with this many lanes in its preferred long species, runs every
-   * mask of the long species as the Vector API's Java fallback.
+   * Whether {@code host}, with this many lanes in its preferred long species, runs every mask of
+   * a 64-bit species, {@code LONG} or {@code DOUBLE}, as the Vector API's Java fallback. Public so
+   * that a test in sql/core can state the answer for a lane count its own JVM does not have.
    *
    * <p>C2 on x86 refuses {@code VectorLoadMask}, {@code VectorStoreMask} and
-   * {@code VectorMaskCast} at {@code vlen == 2} whatever the instruction set
-   * ({@code match_rule_supported_vector} in {@code x86.ad}), so at two long lanes every compare
-   * to a mask, mask logic, blend and mask-to-word call is a per-lane Java loop that allocates
-   * ({@code m7/VARKA-374.md} 2: the same 18-fold loss under {@code UseAVX=1}, {@code 2} and
-   * {@code 3} capped to 16 bytes). So the test is not the AVX level, as
-   * {@link VarkaEmitOptions#convertsFallBack} is for the conversions, but "x86 at two long
-   * lanes", x86 as the host reading's {@code os.arch} names it ({@link VarkaHostIsa#isX86}):
+   * {@code VectorMaskCast} at {@code vlen == 2} whatever the instruction set and whatever the
+   * element type ({@code match_rule_supported_vector} in {@code x86.ad}), so at two 64-bit lanes
+   * every compare to a mask, mask logic, blend and mask-to-word call is a per-lane Java loop
+   * that allocates ({@code m7/VARKA-374.md} 2: the same 18-fold loss under {@code UseAVX=1},
+   * {@code 2} and {@code 3} capped to 16 bytes). So the test is not the AVX level, as
+   * {@link VarkaEmitOptions#convertsFallBack} is for the conversions, but "x86 at two 64-bit
+   * lanes or fewer", x86 as the host reading's {@code os.arch} names it
+   * ({@link VarkaHostIsa#isX86}): under {@code -XX:MaxVectorSize=8} the preferred long species
+   * has one lane, and C2 has no vector of one element to lower its masks to either, while
    * aarch64's back end lowers two-lane masks, and nothing is refused there. The count is the
    * host's preferred species and never an emit option's {@code lanesOverride}, so a suite that
    * emits two long lanes on a wider host still runs them, as answer checks.
    */
-  static boolean twoLaneMasksFallBack(boolean x86, int preferredLongLanes) {
-    return x86 && preferredLongLanes == 2;
+  public static boolean twoLaneMasksFallBack(VarkaHostIsa.Reading host, int preferredLongLanes) {
+    return host.x86() && preferredLongLanes <= 2;
   }
 
   /**
    * Why no kernel of {@code roots} is admitted, or empty when one is: the plan's refusal, then,
-   * where {@code twoLaneMasksFallBack} says the host's long masks fall back, the host's
+   * where {@code twoLaneMasksFallBack} says the host's 64-bit masks fall back, the host's
    * ({@link #hostRefusal}). The predicate compiler's admission asks this, with the flag the
    * session resolved; the emitter and a compiled projection ask {@link #of}, which never refuses
    * for the host.
@@ -219,18 +216,31 @@ public final class VarkaKernelPlan {
   }
 
   /**
-   * The refusal of a filter's long-lane condition on a host whose long masks fall back
+   * The refusal of a filter's 64-bit-lane condition on a host whose 64-bit masks fall back
    * (VARKA-503): a condition root - a filter's conjunct or a selection output - of a kernel
-   * driven at the long lane, whether the compare itself is on the long lane ({@code l < l2},
-   * {@code i < l}, {@code l IS NOT NULL}) or on the int half of a kernel that reads a long column
-   * ({@code hour(t) = 12}, {@code CAST(l AS INT) < i}). The key is the drive lane and not the
-   * lane of the condition's own mask, because a long-driven kernel makes long masks of its own
-   * that no condition node names: a narrowing's range guard compares at the long lane, and
+   * driven at the long or the {@code DOUBLE} lane, whether the compare itself is on the long lane
+   * ({@code l < l2}, {@code i < l}, {@code l IS NOT NULL}) or on the int half of a kernel that
+   * reads a long column ({@code hour(t) = 12}, {@code CAST(l AS INT) < i}). The key is the drive
+   * lane and not the lane of the condition's own mask, because a long-driven kernel makes long
+   * masks of its own that no condition node names: a narrowing's range guard compares at the long
+   * lane, and
    * {@code CAST(l AS INT) < i}'s dense body at two long lanes under {@code -XX:UseAVX=2} calls
    * the long compare, mask {@code or} and {@code VectorMask.fromLong} as the Java fallback
    * ({@code m8/VARKA-503.md} 10). So on such a host every conjunct that reads a long column
    * declines, Spark's inferred {@code IS NOT NULL} of a nullable long column among them, and a
-   * filter over long columns alone declines whole.
+   * filter over long columns alone declines whole. A kernel driven at the {@code DOUBLE} lane is
+   * refused alike ({@code x < x2}, {@code x > 1.5D}, {@code x IS NOT NULL}): the refusal in
+   * {@code x86.ad} does not depend on the element type, and the fused {@code DOUBLE} filters ran
+   * at 0.4X to 0.7X of the row path at two lanes, with and without nulls, against 1.6X to 2.2X at
+   * four ({@code m8/VARKA-503.md} 12). A {@code FLOAT} kernel has four lanes there and is
+   * admitted.
+   *
+   * <p>The key being the drive lane, the column types refused are every type the registry reads
+   * on a 64-bit lane ({@link VarkaTypes#lane}): {@code BIGINT}, {@code TIMESTAMP_NTZ},
+   * {@code TIME}, the day-time intervals and a {@code DECIMAL} of up to 18 digits on the long
+   * lane, {@code DOUBLE} on its own. Only {@code BIGINT} and {@code DOUBLE} were timed; the others
+   * are refused by the mechanism, since their compares and null tests are the same long-lane
+   * masks. The zoned {@code TIMESTAMP} is not among them only because no lane reads it yet.
    *
    * <p>Only the condition roots, and not every kernel that makes a long mask, because that is
    * where the measurement put the loss. At two long lanes under {@code -XX:UseAVX=2} the long
@@ -245,7 +255,7 @@ public final class VarkaKernelPlan {
    * row filter's.
    */
   private static Optional<Refusal> hostRefusal(List<VarkaVectorIR> roots, VarkaKernelPlan plan) {
-    if (plan.drive != LaneType.LONG) {
+    if (plan.drive.bits() != 64) {
       return Optional.empty();
     }
     for (VarkaVectorIR root : roots) {

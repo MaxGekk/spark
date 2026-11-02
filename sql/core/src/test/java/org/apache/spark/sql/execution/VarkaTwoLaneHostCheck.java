@@ -19,16 +19,16 @@ package org.apache.spark.sql.execution;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.util.Locale;
-
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaHostIsa;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
  * What the two-lane refusal's host suites check, in the JVM their flags start
  * ({@link VarkaTwoLaneHost128Suite}, {@link VarkaTwoLaneHost256Suite}): that both the compiler's
- * host fact, {@link VarkaKernelPlan#HOST_TWO_LANE_MASKS_FALL_BACK}, and the default a session that
+ * host fact, {@link VarkaKernelPlan#twoLaneMasksFallBack(VarkaHostIsa.Reading)} of this JVM's
+ * reading, and the default a session that
  * does not set {@code spark.sql.codegen.varka.declineTwoLaneConditions} resolves give the answer
  * the host the flags make must give.
  *
@@ -43,8 +43,7 @@ final class VarkaTwoLaneHostCheck {
 
   /** Whether this JVM runs on x86, where {@code -XX:UseAVX} and the two-lane refusal apply. */
   static boolean isX86() {
-    String arch = System.getProperty("os.arch").toLowerCase(Locale.ROOT);
-    return arch.equals("amd64") || arch.equals("x86_64");
+    return VarkaHostIsa.host().x86();
   }
 
   /**
@@ -62,7 +61,7 @@ final class VarkaTwoLaneHostCheck {
       expected = onX86;
     }
     String host = System.getProperty("os.arch") + " at UseAVX=" + useAvx;
-    assertEquals(expected, VarkaKernelPlan.HOST_TWO_LANE_MASKS_FALL_BACK,
+    assertEquals(expected, VarkaKernelPlan.twoLaneMasksFallBack(VarkaHostIsa.host()),
         "the compiler's host fact on " + host);
     assertEquals(expected, VarkaSessionEmit.of(new SQLConf()).declineTwoLaneConditions(),
         "the session's default on " + host);

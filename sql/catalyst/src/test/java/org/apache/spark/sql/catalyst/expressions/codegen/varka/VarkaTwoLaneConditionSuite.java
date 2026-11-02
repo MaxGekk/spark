@@ -44,8 +44,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wid
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Word;
 
 /**
- * The compiler's refusal of a long-lane condition on an x86 host whose long species has two
- * lanes (VARKA-503). The host is one fact, passed in here, so both answers are checked on any
+ * The compiler's refusal of a condition in a kernel driven at a 64-bit lane, long or
+ * {@code DOUBLE}, on an x86 host whose 64-bit species have two lanes (VARKA-503). The host is
+ * one fact, passed in here, so both answers are checked on any
  * machine. What this JVM's fact is, under flags that make it the two-lane host and a four-lane
  * one, is checked in JVMs of their own by sql/core's {@code VarkaTwoLaneHost128Suite} and
  * {@code VarkaTwoLaneHost256Suite}, with the session's default beside it.
@@ -57,30 +58,38 @@ public final class VarkaTwoLaneConditionSuite {
   private static final ColumnRef L2 = new ColumnRef(1, LaneType.LONG);
   private static final ColumnRef I = new ColumnRef(2, LaneType.INT);
   private static final ColumnRef I2 = new ColumnRef(3, LaneType.INT);
+  private static final ColumnRef X = new ColumnRef(4, LaneType.DOUBLE);
+  private static final ColumnRef X2 = new ColumnRef(5, LaneType.DOUBLE);
+  private static final ColumnRef F = new ColumnRef(6, LaneType.FLOAT);
+  private static final ColumnRef F2 = new ColumnRef(7, LaneType.FLOAT);
 
   private static Optional<Refusal> admit(VarkaVectorIR root, boolean twoLaneHost) {
     return VarkaKernelPlan.admit(List.of(root), VarkaMatrixRuns.BASE, twoLaneHost);
   }
 
   @Test
-  @DisplayName("the host test is x86 at two long lanes, and nowhere else")
+  @DisplayName("the host test is x86 at two long lanes or fewer, and nowhere else")
   void hostTest() {
-    assertTrue(VarkaKernelPlan.twoLaneMasksFallBack(true, 2));
-    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(true, 4));
-    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(true, 8));
+    for (String arch : List.of("amd64", "x86_64")) {
+      var x86 = new VarkaHostIsa.Reading(arch, "", "unread");
+      // One lane is -XX:MaxVectorSize=8, where C2 lowers no mask either.
+      assertTrue(VarkaKernelPlan.twoLaneMasksFallBack(x86, 1), arch);
+      assertTrue(VarkaKernelPlan.twoLaneMasksFallBack(x86, 2), arch);
+      assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(x86, 4), arch);
+      assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(x86, 8), arch);
+    }
     // aarch64: two-lane masks are lowered there.
-    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(false, 2));
+    var arm = new VarkaHostIsa.Reading("aarch64", "fp, asimd", null);
+    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(arm, 1));
+    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(arm, 2));
     // The reading's form takes the architecture from the reading, whatever its feature list,
     // and the lanes from this JVM's long species.
-    boolean twoLanes = Lane.LONG.preferredLanes == 2;
+    boolean fewLanes = Lane.LONG.preferredLanes <= 2;
     for (String arch : List.of("amd64", "x86_64")) {
-      assertEquals(twoLanes, VarkaKernelPlan.twoLaneMasksFallBack(
+      assertEquals(fewLanes, VarkaKernelPlan.twoLaneMasksFallBack(
           new VarkaHostIsa.Reading(arch, "", "unread")), arch);
     }
-    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(
-        new VarkaHostIsa.Reading("aarch64", "fp, asimd", null)));
-    assertEquals(VarkaKernelPlan.twoLaneMasksFallBack(VarkaHostIsa.host()),
-        VarkaKernelPlan.HOST_TWO_LANE_MASKS_FALL_BACK);
+    assertFalse(VarkaKernelPlan.twoLaneMasksFallBack(arm));
   }
 
   @Test
@@ -95,6 +104,25 @@ public final class VarkaTwoLaneConditionSuite {
     // A conversion to the long lane makes the condition a long one: `i < l`.
     assertTrue(admit(new Compare(CompareOp.LT, new WidenLane(I, LaneType.LONG), L), true)
         .isPresent());
+  }
+
+  @Test
+  @DisplayName("a DOUBLE condition root is refused on the two-lane host and admitted elsewhere, "
+      + "a FLOAT one admitted on both")
+  void doubleCondition() {
+    // x86.ad's refusal at vlen == 2 does not depend on the element type, so a DOUBLE kernel at
+    // 128 bits makes its masks as the Java fallback just as a long one does.
+    var lt = new Compare(CompareOp.LT, X, X2);
+    assertEquals(LaneType.DOUBLE, VarkaKernelPlan.of(List.of(lt), VarkaMatrixRuns.BASE).drive());
+    Optional<Refusal> refused = admit(lt, true);
+    assertTrue(refused.isPresent());
+    assertEquals(Kind.TWO_LANE_CONDITION, refused.get().kind());
+    assertTrue(admit(lt, false).isEmpty());
+    // The null test Spark infers beside a comparison of a nullable double column.
+    assertTrue(admit(new IsNotNull(X), true).isPresent());
+    assertTrue(admit(new IsNotNull(X), false).isEmpty());
+    // FLOAT has 32-bit lanes, four of them where a 64-bit species has two.
+    assertTrue(admit(new Compare(CompareOp.LT, F, F2), true).isEmpty());
   }
 
   @Test

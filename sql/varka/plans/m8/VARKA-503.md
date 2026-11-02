@@ -213,7 +213,8 @@ to 18 is now read on the long lane (row 347), so its filter conditions meet this
 construction, as the row anticipated; a floating conjunct beside an integral one is refused first
 by master's `floatingConjunctRefusal`, and a filter over floating columns alone now fuses on the
 `DOUBLE` lane, whose 128-bit species also has two lanes. Nothing here measures or refuses the
-latter; it is an open point for the owner, not part of this row.
+latter; it is an open point for the owner, not part of this row (measured and refused since: 12,
+item 2).
 
 Left before the row is done: the gate's narrow step and the PR build on the merged tree, which run
 on CI when the branch is pushed. The before and after files are not rerun: the merge moves no
@@ -393,3 +394,122 @@ reading (corrects 3.1's "`HOST_USE_AVX` reads a level (the JVM is x86)"):
    `dev/varka_matrix.sh --defaults` `VarkaLongLaneSuite`, `VarkaFilterExecSuite`,
    `VarkaEvaluatorComponentsSuite`, `VarkaBooleanOutputQueriesSuite`, `VarkaCoverageHarnessSuite`,
    `VarkaTimeArithmeticSuite` and the two host suites, each in its own JVM under its flags.
+
+## 12. The PR review's fixes, 2 November 2026
+
+1. **One settings value, and no overload that defaults it** (corrects 3.1's "the compiler
+   overloads without the flag answer as a host that refuses nothing"). The refusal had travelled
+   as a bare fifth boolean beside the families off through new overloads of the predicate entry
+   points, and the old ones defaulted it to false, so a later production caller could compile
+   differently from planning without saying so. `VarkaAdmission` (catalyst) now holds both
+   settings; `compilePredicate`, `explainPredicate`, `explainAndCompilePredicate` and
+   `VarkaFusionReport.predicateLines` each have one signature that takes it, and the overloads
+   that defaulted the options, the families or the flag are gone. Production callers pass
+   `VarkaSessionEmit.admission()`; a compile with no session, every catalyst suite and committed
+   oracle among them, says `VarkaAdmission.NO_HOST_REFUSAL`. The projection entry points keep
+   their families-off set, since the refusal never reaches them. `HOST_TWO_LANE_MASKS_FALL_BACK`,
+   which only tests and the width audit read, is gone too: they ask
+   `twoLaneMasksFallBack(VarkaHostIsa.host())`. No admission and no emitted byte changed.
+2. **The `DOUBLE` lane is refused too** (answers 9's open point; corrects 3.1's "a kernel driven
+   at the long lane"). The `vlen == 2` refusal of `VectorLoadMask`, `VectorMaskCast` and
+   `VectorStoreMask` in `x86.ad` does not depend on the element type, so a filter on the `DOUBLE`
+   lane at 128 bits runs the same Java fallback. `VarkaTwoLaneLongBenchmark` gained `x < x2` and
+   `x > 1.5D` over `DOUBLE` columns and ran with the refusal forced off
+   (`-Dspark.sql.codegen.varka.declineTwoLaneConditions=false`), one run per side on the shared
+   laptop at a load of about 7, so ratios under 1.3 are directions:
+
+   | filter | 2 lanes, no nulls | 2 lanes, one in ten null | 4 lanes, no nulls | 4 lanes, nulls |
+   |---|---|---|---|---|
+   | `x < x2` | 0.4X | 0.7X | 1.6X | 2.0X |
+   | `x > 1.5D` | 0.5X | 0.6X | 1.9X | 2.2X |
+   | `l < l2` | 0.6X | 1.1X | 1.4X | 1.6X |
+   | `(d < d2) AND (l < l2)` | 0.6X | 1.5X | 3.3X | 2.9X |
+
+   Two lanes are `-XX:UseAVX=2 -XX:MaxVectorSize=16`, four are `-XX:UseAVX=2`, the control; the
+   files are `results/VARKA-503/two-lane-refusal-off-128bit.txt` and `-256bit.txt`. The fused
+   `DOUBLE` filters lose at two lanes with nulls too, unlike the long ones, and win at four. So
+   `hostRefusal` now refuses a condition root of a kernel driven at any 64-bit lane, under the
+   same setting and host fact, and the reason names "a 64-bit lane (LONG or DOUBLE)"; the
+   setting's key is kept and its doc says both. A `FLOAT` kernel has four lanes there and is
+   admitted. A local fix of 2 November, never pushed, had instead let a floating conjunct fuse
+   where the long one beside it was refused, by compiling each integral conjunct alone; that put
+   the floating conjunct into exactly this losing kernel, and it is dropped: master's columns-only
+   premise is back, and beside a refused long conjunct the floating one now takes the host's
+   reason, asked first, so `x > 1.5D AND l > l2` declines whole with one reason. Without the
+   refusal the order of reasons is master's. Also: `twoLaneMasksFallBack(Reading)` asks the
+   architecture before the long species, so an aarch64 JVM never loads the Vector API's species
+   to answer false. Tests: `VarkaTwoLaneConditionSuite` refuses a `DOUBLE` compare and null test
+   on the two-lane host and admits them elsewhere, and admits `FLOAT`;
+   `VarkaExpressionCompilerSuite` holds `x < x2`, `x > 1.5D AND l > l2` and `x > 1.5D AND
+   d < d2` both ways. The sql/core suites that check kernels set the refusal off, so a new
+   `VarkaTwoLaneDefault128Suite`, in a JVM of its own under the 128-bit flags with the setting
+   unset, runs long, `DOUBLE`, date and int filters at the default over both null patterns
+   against Varka off, and checks that no long or `DOUBLE` conjunct is a Varka filter's and that
+   each Varka node's own compile and its tasks' compile classify alike (the node's
+   `classification` fuses every conjunct, and the kernels served batches, which the evaluator does
+   only where its compile left none out). `width_audit.json` and
+   `docs/sql-varka.md`, regenerated on the laptop: at 128 bits 86 rows now read as the two-lane
+   decline, 72 before, the 14 new ones the `DOUBLE` predicates (`x < x2`, `isnan(x)`,
+   `x IS NOT NULL` among them), and the other 72 take the reason's new wording; 256 and 512 bits
+   are unchanged.
+3. **One long lane or two** (corrects 2's and 3.1's "two lanes", and 11's
+   `twoLaneMasksFallBack(boolean x86, int preferredLongLanes)`). `twoLaneMasksFallBack` tested
+   `preferredLongLanes == 2`, but under `-XX:MaxVectorSize=8` x86's preferred long species has
+   one lane, and C2 has no one-element vector to lower its masks to either, so the host refused
+   nothing where the Java fallback was certain. The test is now `<= 2`. The host suites still
+   hold: 128 bits gives two lanes and refuses, 256 bits gives four and does not. The pure form
+   now takes a `VarkaHostIsa.Reading` and a lane count, public, so that
+   `VarkaEvaluatorComponentsSuite` holds the session's default to stated constants (x86 at one,
+   two, four and eight long lanes, aarch64 at two) rather than to the kernel plan's own answer,
+   which made the old assertion a comparison of the code with itself; the session gained a
+   package-private `of(conf, host, preferredLongLanes)` for it.
+4. **The column types, from the lane map** (corrects 2's "LONG or DOUBLE"). The refusal is keyed
+   on the kernel's drive lane, and `VarkaTypes` reads more types than `BIGINT` on the long lane:
+   `TIMESTAMP_NTZ`, `TIME`, the day-time intervals and a `DECIMAL` of up to 18 digits (row 347).
+   `DOUBLE` is the only type on the `DOUBLE` lane. The zoned `TIMESTAMP` is `Declined` in the
+   registry, so no lane reads it and the refusal never meets it. The reason, the setting's doc,
+   the `TWO_LANE_CONDITION` and `hostRefusal` javadocs, `VarkaAdmission` and `VarkaSessionEmit`
+   now name these types. Only `BIGINT` and `DOUBLE` were timed (2 and section 6). The others are
+   refused by the mechanism, since `x86.ad`'s `vlen == 2` refusal does not depend on the element
+   type and their compares and null tests are the same long-lane masks, and not because their
+   own measurement found a loss.
+5. **The census declines only what the host refused** (corrects 10 item 11). `predicateRow`
+   recorded a predicate row as declined whenever any conjunct was left to the row filter, for
+   any reason. It now records one as declined only where a left conjunct carries the host's
+   reason, and a row that fuses in part for any other reason records its fused kernel's shape,
+   as on master. Regenerated on the laptop: at 128 bits the count stays at 86, all of them the
+   host's reason, so no audited row fuses in part for another reason today, as 10 item 11 had
+   found. Every one of them takes the reason's new wording, and so do the 86 rows of
+   `docs/sql-varka.md`. 256 and 512 bits are unchanged.
+6. **The host refusal is asked only where it is on.** `predicateOnce` had called
+   `VarkaKernelPlan.admit` for every conjunct, whatever the setting. With the refusal off it now
+   runs master's lazy chain, `floatingConjunctRefusal` then `of(...).refusal()`. With it on it
+   asks `admit` first and keeps only a `TWO_LANE_CONDITION`, then that chain, which gives the
+   same answer as before: where the plan refuses, `admit`'s refusal is the plan's own. No
+   admission moved (the catalyst suites and the census are unchanged).
+7. **`VarkaTwoLaneHostCheck.isX86`** asks `VarkaHostIsa.host().x86()` and no longer repeats the
+   architecture list.
+8. **A `BOOLEAN` output column at two lanes: measured, left admitted.** `hostRefusal` refuses only
+   `Cond` roots. Since row 27 (#1226, in this branch's base) a projection's `BOOLEAN` entry is a
+   `BoolOutput` root over the same condition, planned through `VarkaKernelPlan.of`, which never
+   asks the host. So `SELECT l < l2` fuses at two long lanes and makes the same long masks as
+   the Java fallback, with no row work to offset them. `VarkaTwoLaneLongBenchmark` gained
+   `l < l2` and `x < x2` as boolean output projections and ran as in 2, with the refusal forced
+   off. The setting does not reach a projection, so it changes nothing for these sections. One
+   run per side on the shared laptop, the 128-bit one at a load of about 14 falling to 4, so
+   ratios under 1.3 are directions:
+
+   | projection | 2 lanes, no nulls | 2 lanes, nulls | 4 lanes, no nulls | 4 lanes, nulls |
+   |---|---|---|---|---|
+   | `l < l2` | 1.7X | 2.1X | 5.1X | 6.8X |
+   | `x < x2` | 0.9X | 1.1X | 6.6X | 7.1X |
+
+   The files are `results/VARKA-503/two-lane-boolean-output-128bit.txt` and `-256bit.txt`, whose
+   filter sections repeat 2's directions (`l < l2` 0.5X and `x < x2` 0.4X at two lanes without
+   nulls). Neither boolean output is clearly below the row path at two lanes, so by the owner's
+   rule for this item `BoolOutput` stays admitted and no code changes. Why a boolean output
+   loses less than the filter over the same masks was not looked into. The `DOUBLE` one is at
+   about parity, against 6.6X to 7.1X at four lanes,
+   so most of its win is lost there. The 128-bit no-null rows also had the widest spread of the
+   run (the load fell during it). Open point for the owner: rerun the two-lane `x < x2` output on
+   the EPYC runner before deciding whether a `DOUBLE` `BoolOutput` should share the refusal.
