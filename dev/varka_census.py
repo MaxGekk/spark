@@ -43,9 +43,11 @@ over a derived operand, and its note must quote the coverage row that shows it. 
 `^` is fused in part: one band or one form of it fuses (DECIMAL at one scale, say, while two
 scales wait for a rescale), which a coverage row must show, but it is not counted as fused. It
 goes to census.tsv's fused_in_part column and never to fused_today, so the done-when counts and
-the need rule read it as unfused; the conformance harness lets such a form fuse without calling
-it drift (VARKA-359.md 10.4). The cast aliases'
-source types are not curated: they are the sources `legal()` allows.
+the need rule read it as unfused. The census names the band only in prose, so the type's
+conformance suite states it (VarkaTypeConformance.inFusedBand): a form inside the band is held
+to Spark's answers and is drift where it declines, and a form outside it is owed and is drift
+where it fuses (VARKA-359.md 10.4). The cast aliases' source types are not curated: they are the
+sources `legal()` allows.
 So the census is regenerated, not edited, and a registry change upstream shows up here.
 """
 

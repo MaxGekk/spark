@@ -494,6 +494,13 @@ public final class VarkaDecimalPairSuite {
                   + (yNull[i] ? "null" : y[i]) + ") is " + want + ", the kernel answers ("
                   + got.values()[0][i] + ", " + got.values()[1][i] + ")";
             }
+            // Each root picks one of two literals, so its answer is never null, a null
+            // operand included.
+            if (!got.valid()[0][i] || !got.valid()[1][i]) {
+              return where + ": row " + i + " (" + (xNull[i] ? "null" : x[i]) + ", "
+                  + (yNull[i] ? "null" : y[i]) + ") picks a literal, the kernel answers null ("
+                  + got.valid()[0][i] + ", " + got.valid()[1][i] + " valid)";
+            }
           }
         }
       }
