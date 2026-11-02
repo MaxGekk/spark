@@ -665,6 +665,16 @@ committed files:
    slower beside a load of about 8.
    Splitting the `5^k` into a proof file of their own and running the linters' files side by side
    would bring the step back near its minute; that is open point 7.
+   **The second review (2 November 2026) asked for both, and both are built.** The `5^k` are in
+   `round_divide.smt2`, each proven under `VarkaProofFiles.dividendBound`, the bound
+   `preShiftBound` gives over `preShiftGuard`, so 74 binade checks go; `VarkaDivisorProofSuite`
+   now also fails on a compiled division whose stated bound is past the one its proof is stated
+   under, which the trimming needs. `long_divide.smt2` is back to 983 checks and
+   `round_divide.smt2` has 1997, both under cvc5 in `--lint`, which runs the files side by side.
+   Laptop times, one window: `long_divide.smt2` Z3 32 s, cvc5 9 to 11 s; `round_divide.smt2`
+   Z3 74 s, cvc5 20 to 22 s; `integral_round.smt2` Z3 5 s, cvc5 1 to 2 s; `--lint` 22 s over
+   three runs, against 45 s for the old file and serial step in the same window (80 s beside a
+   load of about 4 earlier the same night).
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
    disposal.
@@ -792,9 +802,8 @@ and `factorial`; until 342 and 343, `width_bucket`.
    lane past it declines (section 7). Row 360's `WideMul` with constant multipliers is the planned
    route; if it does not land in milestone 8, the full-range division is a candidate for
    `m9/SCOPE.md`. The same review measured the linters' proof step at about a minute on the laptop
-   with `long_divide.smt2` its largest part (5.3); moving the `5^k` divisors to a file of their own
-   and running the step's files in parallel is a candidate change to `dev/varka_prove.sh`, not this
-   row's.
+   with `long_divide.smt2` its largest part (5.3); the second review had the `5^k` divisors moved
+   to a file of their own and the step's files run in parallel, done in this row (5.3).
 
 Settled with the lead on 30 October 2026, and so not questions: the `BIGINT` band at `k <= 11`
 declines beyond its guard, the full-range form being row 360's constant-multiplier `WideMul`

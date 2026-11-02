@@ -78,10 +78,11 @@ import org.apache.spark.sql.types.DecimalType;
  * {@link GuardedRange} declines the batch holding one, so the row engine raises. A scale
  * {@code >= 0} is the identity in every mode.
  *
- * <p>Public for {@code VarkaProofFiles}, which renders {@code integral_round.smt2} from
- * {@link #preShiftLimit}, {@link #preShiftBound}, {@link #window} and {@link #HALF_AT_19}, and for
- * {@code VarkaDomains}, whose edges fixture straddles {@link #preShiftLimit} and
- * {@link #HALF_AT_19}; the family is reached through {@link #arm} alone.
+ * <p>Public for {@code VarkaProofFiles}, which renders {@code integral_round.smt2} and
+ * {@code round_divide.smt2} from {@link #preShiftLimit}, {@link #preShiftGuard},
+ * {@link #preShiftBound}, {@link #window} and {@link #HALF_AT_19}, and for {@code VarkaDomains},
+ * whose edges fixture straddles {@link #preShiftLimit} and {@link #HALF_AT_19}; the family is
+ * reached through {@link #arm} alone.
  */
 public final class VarkaRoundingCompiler {
 

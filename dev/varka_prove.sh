@@ -52,12 +52,14 @@ Z3_VERSION=5.1.0
 CVC5_VERSION=1.4.1
 CVC5_ZIP=cvc5-Linux-x86_64-static.zip
 CVC5_SHA256=2f8efe58fe27ba7bccbb504533f690b9312d69da14192712460e4a19231f02a1
-# The proofs the linters' job runs under cvc5 rather than Z3, to keep the step inside its minute:
-# long_divide.smt2 took Z3 59 s on the runner and cvc5 a third of that (VARKA-241.md 9.5), and with
-# the rounding's 5^k divisors, 2999 checks, Z3 125 s on the laptop and cvc5 37 to 49 s, no check
-# over 100 ms, so --lint takes 60 to 69 s there (VARKA-344); and integral_round.smt2 Z3 5 s on the
-# laptop and cvc5 1 to 2 s (VARKA-344).
-CVC5_IN_LINT=(long_divide.smt2 integral_round.smt2)
+# The proofs the linters' job runs under cvc5 rather than Z3, to keep the step inside its minute,
+# each where cvc5 is several times faster; --lint runs the files side by side, so the step takes
+# about as long as its slowest file. Laptop times, Z3 against cvc5 (VARKA-344): long_divide.smt2,
+# 983 checks, 32 s against 9 to 11 s; round_divide.smt2, the rounding's 5^k, 1997 checks, 74 s
+# against 20 to 22 s; integral_round.smt2 5 s against 1 to 2 s. --lint takes 22 s there, where
+# with the 5^k in long_divide.smt2 and the files one after another it took 45 s in the same
+# window; the runner is about twice the laptop.
+CVC5_IN_LINT=(long_divide.smt2 round_divide.smt2 integral_round.smt2)
 limit_ms="${VARKA_PROVE_LIMIT_MS:-10000}"
 run_limit="${VARKA_PROVE_RUN_LIMIT:-300}"
 
@@ -363,12 +365,26 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 failed=0
 if [ "$mode" = lint ]; then
+  # The files side by side, at most one per core, each report printed in file order once all
+  # are done; a file's time is its own run's, beside the others.
+  jobs_max="$(nproc 2>/dev/null || echo 4)"
+  out_dir="$(mktemp -d)"
+  pids=()
+  i=0
   for f in "${files[@]}"; do
     [ -f "$f" ] || f="$proofs/$f"
     name=z3
     for c in "${CVC5_IN_LINT[@]}"; do [ "$(basename "$f")" = "$c" ] && name=cvc5; done
-    run_file "$name" "${paths[$name]}" "$f" || failed=$((failed + 1))
+    while [ "$(jobs -rp | wc -l)" -ge "$jobs_max" ]; do wait -n; done
+    run_file "$name" "${paths[$name]}" "$f" > "$out_dir/$i" 2>&1 &
+    pids+=("$!")
+    i=$((i + 1))
   done
+  for j in "${!pids[@]}"; do
+    wait "${pids[$j]}" || failed=$((failed + 1))
+    cat "$out_dir/$j"
+  done
+  rm -rf "$out_dir"
 else
   for name in "${names[@]}"; do
     for f in "${files[@]}"; do

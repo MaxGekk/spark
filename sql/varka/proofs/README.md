@@ -11,7 +11,8 @@ VARKA-241 added the long lane's division forms, and VARKA-242 the calendar's div
 | `java.smt2` | the prelude: Java's `int` and `long` operators over SMT-LIB's integers, each defined as the JLS defines it, and doubles by their rounding | hand |
 | `java_check.smt2` | the prelude against the JVM: each operator over boundary operands, the expected values computed by Java | `VarkaProofFiles` |
 | `int_mulhi_divide.smt2` | the int lane's multiply-high division (VARKA-149) exact for every divisor in use, with `signedMagic`'s constants | `VarkaProofFiles` |
-| `long_divide.smt2` | the long lane's two division forms exact under `ConstDivide.EXACT_DIVIDEND_BOUND` for every divisor in use, and the conversion form's exact bound past it (VARKA-241), and each `5^k` of the integral rounding's pre-shift (VARKA-344), which took the file from 983 checks to 2999 and its laptop time from Z3 28 s and cvc5 8 s to 171 s and 42 s; `VarkaDivisorProofSuite` fails on a divisor the compiler builds that it leaves out (VARKA-496) | `VarkaProofFiles` |
+| `long_divide.smt2` | the long lane's two division forms exact under `ConstDivide.EXACT_DIVIDEND_BOUND` for every divisor in use but the rounding's, and the conversion form's exact bound past it (VARKA-241); `VarkaDivisorProofSuite` fails on a divisor the compiler builds that this file and `round_divide.smt2` leave out (VARKA-496) | `VarkaProofFiles` |
+| `round_divide.smt2` | the same two forms for each `5^k` of the integral rounding's pre-shift, exact under the dividend bound the rounding states to the division over its widest guard, `2^52` to `k = 11` and `2^(63 - k) + 1` from `k = 12`, one check per quotient binade under it; `VarkaDivisorProofSuite` fails on a compiled division by a `5^k` that states a larger bound (VARKA-344) | `VarkaProofFiles` |
 | `chrono_divide.smt2` | every calendar division site (`ChronoDivide`): the magic form with its carry exact over the site's dividends and first failing where the table says, and both double forms exact over the range (VARKA-242) | `VarkaProofFiles` |
 | `floor_mod7.smt2` | `emitFloorMod7`'s three forms, `Math.floorMod(v, 7)` for every int, by lemmas over each fold's digits (VARKA-242) | `VarkaProofFiles` |
 | `leap_hash.smt2` | the leap flag's perfect hash and its unsigned compare exact over every biased year to `LEAP_HASH_MAX_BIASED_YEAR`, over bit-vectors (VARKA-242) | `VarkaProofFiles` |
@@ -110,10 +111,13 @@ serves; before, it was assumed, and a cached far day was served wrong.
 2. The claim as `unsat` checks, and `sat` checks that its domain admits its boundary inputs and
    that a constant changed by one is refuted.
 3. `dev/varka_prove.sh --solver both` holds, in seconds: the linters' job allows a minute for all of
-   them. The runner is about twice the laptop. `--lint` runs a file under Z3 unless the script's
-   `CVC5_IN_LINT` names it, which it does for a file one solver proves much faster than the other:
-   `long_divide.smt2` took Z3 28 s on the laptop and cvc5 8 s (VARKA-241.md 9.5), and with the
-   rounding's `5^k` divisors Z3 171 s and cvc5 42 s (VARKA-344).
+   them, and `--lint` runs the files side by side, one per core, so the step takes about as long as
+   its slowest file. The runner is about twice the laptop. `--lint` runs a file under Z3 unless the
+   script's `CVC5_IN_LINT` names it, which it does for a file cvc5 proves much faster. On the
+   laptop (VARKA-344): `long_divide.smt2` takes Z3 32 s and cvc5 9 to 11 s, `round_divide.smt2`
+   Z3 74 s and cvc5 20 to 22 s, and `integral_round.smt2` Z3 5 s and cvc5 1 to 2 s, so `--lint`
+   takes 22 s there, where it took 45 s with the `5^k` in `long_divide.smt2` and the files run
+   one after another.
 4. cvc5 is the fragile one (`VARKA-242.md` 2.2 and 9). Where it answers `unknown`, try in order:
    `(set-logic ALL)` in place of `QF_NIA`; one lemma per step over named digits or quotients, so
    each check is linear arithmetic over a few small variables; a residue written as 7 times a

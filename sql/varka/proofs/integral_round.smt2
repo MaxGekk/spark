@@ -38,16 +38,16 @@
 ; d, raised by one past the half (HALF_UP at it too, HALF_EVEN at it for an odd
 ; quotient), the sign put back, times d; longValue() is its low 64 bits, jlong.wrap. It
 ; is pinned to BigDecimal at sample values. The division itself is not proven here:
-; long_divide.smt2 proves the ConstDivide exact by each 5^k for every dividend under
-; 2^52, and these checks take Q as the exact floor of a non-negative t, beside a check
-; per scale that the guard keeps t under the bound the compiler states, which is at
-; most 2^52. So the claims split at the quotient: over the guard the pre-shift gives
-; floor(|x| / d), and the steps after it give the rounding from that Q, over every long,
-; Long.MIN_VALUE's wrapped magnitude included. x ^ s
-; is written as an ite on s, which is Java's XOR for s in {0, -1}, as s | 1 is, and a
-; first check shows s is one of them. Beside the claims: each guard's end is tight (one
-; past it reaches the bound, or overflows ANSI's long), and the arithmetic shift in place
-; of the logical one is wrong at Long.MIN_VALUE.
+; round_divide.smt2 proves the ConstDivide exact by each 5^k for every dividend under
+; the bound the pre-shift's own guard gives, and these checks take Q as the exact floor
+; of a non-negative t, beside a check per scale that the guard keeps t under the bound
+; the compiler states, which ANSI's narrower guard only lowers. So the claims split at
+; the quotient: over the guard the pre-shift gives floor(|x| / d), and the steps after it
+; give the rounding from that Q, over every long, Long.MIN_VALUE's wrapped magnitude
+; included. x ^ s is written as an ite on s, which is Java's XOR for s in {0, -1}, as
+; s | 1 is, and a first check shows s is one of them. Beside the claims: each guard's end
+; is tight (one past it reaches the bound, or overflows ANSI's long), and the arithmetic
+; shift in place of the logical one is wrong at Long.MIN_VALUE.
 ;
 ; Rendered by VarkaProofFiles. VarkaProofFilesSuite fails when this file differs from its
 ; rendering, and VARKA_PROOFS_REGEN=true build/sbt 'catalyst/testOnly *VarkaProofFilesSuite'

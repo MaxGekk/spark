@@ -81,6 +81,7 @@ final class VarkaProofFiles {
     files.put("java_check.smt2", javaCheck());
     files.put("int_mulhi_divide.smt2", intMulHiDivide());
     files.put("long_divide.smt2", longDivide());
+    files.put("round_divide.smt2", roundDivide());
     files.put("chrono_divide.smt2", chronoDivide());
     files.put("floor_mod7.smt2", floorMod7());
     files.put("leap_hash.smt2", leapHash());
@@ -214,7 +215,8 @@ final class VarkaProofFiles {
   /**
    * The divisors of the integral rounding's pre-shift over a {@code BIGINT}
    * ({@code VarkaRoundingCompiler.preShiftForm}, VARKA-344): {@code 5^k} for each scale
-   * {@code -k} from -1 to -18. Their dividend is {@code |x| >>> k}, which the guard keeps under
+   * {@code -k} from -1 to -18, proven in {@code round_divide.smt2} under
+   * {@link #dividendBound}. Their dividend is {@code |x| >>> k}, which the guard keeps under
    * 2^52, so the conversion form's behaviour past 2^53 is no fact about them and is not stated.
    */
   static final List<Long> ROUNDING_DIVISORS = roundingDivisors();
@@ -227,9 +229,28 @@ final class VarkaProofFiles {
    * -60, which takes the sign branch a positive divisor does not, and {@link #NTZ_DAY_ODD}.
    * {@code VarkaDivisorProofSuite} holds the list to the compiler (VARKA-496): it fails on a
    * long-lane divisor the coverage rows or the cast matrix compile that is missing here, and on
-   * one here that none compiles, -60 apart. The {@link #ROUNDING_DIVISORS} close the list.
+   * one here that none compiles, -60 apart, and on a compiled {@code ConstDivide} that states a
+   * dividend bound past {@link #dividendBound}. The {@link #ROUNDING_DIVISORS} close the list;
+   * {@code round_divide.smt2} proves them, {@code long_divide.smt2} the others.
    */
   static final List<Long> LONG_DIVISORS = longDivisors();
+
+  /**
+   * The exclusive bound on the dividend's magnitude under which the proofs state the long-lane
+   * division by {@code d}: {@code ConstDivide.EXACT_DIVIDEND_BOUND} for the divisors of
+   * {@code long_divide.smt2}, and for {@code 5^k} the bound the rounding states to it under the
+   * widest guard it builds, {@code preShiftBound(k)} over {@code preShiftGuard(k)}: 2^52 to
+   * {@code k = 11}, {@code 2^(63 - k) + 1} from {@code k = 12}, where every long is inside the
+   * guard. ANSI's tails only narrow the guard, and so the bound.
+   */
+  static long dividendBound(long d) {
+    int k = ROUNDING_DIVISORS.indexOf(d) + 1;
+    if (k == 0) {
+      return VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND;
+    }
+    long[] g = VarkaRoundingCompiler.preShiftGuard(k);
+    return VarkaRoundingCompiler.preShiftBound(k, g[0], g[1]);
+  }
 
   private static List<Long> roundingDivisors() {
     var out = new ArrayList<Long>();
@@ -260,10 +281,11 @@ final class VarkaProofFiles {
   private static final long P53 = 1L << 53;
 
   /**
-   * {@code long_divide.smt2}: for every divisor in {@link #LONG_DIVISORS}, both forms
-   * {@code VarkaDivisionLowering.emitConstDivide} takes at the long lane are Java's {@code v / d}
-   * for every dividend under {@code ConstDivide.EXACT_DIVIDEND_BOUND}; the conversion form is
-   * exact to one below the first multiple of {@code d} past 2^53 and wrong there.
+   * {@code long_divide.smt2}: for every divisor in {@link #LONG_DIVISORS} but the
+   * {@link #ROUNDING_DIVISORS}, both forms {@code VarkaDivisionLowering.emitConstDivide} takes at
+   * the long lane are Java's {@code v / d} for every dividend under
+   * {@code ConstDivide.EXACT_DIVIDEND_BOUND}; the conversion form is exact to one below the first
+   * multiple of {@code d} past 2^53 and wrong there.
    *
    * <p>Every rounding is the prelude's {@code jdouble.rne} in a named binade, so each check is
    * linear: one check per binade the quotient can fall in, and a check that those binades cover
@@ -271,17 +293,12 @@ final class VarkaProofFiles {
    * quotient out.
    */
   static String longDivide() {
-    if (VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND != P52
-        || VarkaDivisionLowering.MANTISSA_52 != P52 - 1
-        || VarkaDivisionLowering.TWO_52_BITS != 0x433L << 52) {
-      throw new IllegalStateException("long_divide.smt2 is stated for a dividend bound of 2^52 "
-          + "and the magic form's constants 0x4330000000000000 and 2^52 - 1; restate it");
-    }
     var out = new StringBuilder(LICENSE);
     out.append("""
         ; The long lane's constant division (VarkaVectorIR.ConstDivide) is exact under its
         ; dividend bound, ConstDivide.EXACT_DIVIDEND_BOUND = 2^52, in both of the forms
-        ; VarkaDivisionLowering.emitConstDivide emits (VARKA-241). Per lane:
+        ; VarkaDivisionLowering.emitConstDivide emits (VARKA-241), for every divisor but the
+        ; integral rounding's 5^k, which round_divide.smt2 proves. Per lane:
         ;
         ;   the conversion form, emitDoubleDivide:
         ;     double x = (double) v;          L2D
@@ -303,6 +320,68 @@ final class VarkaProofFiles {
         ; the first multiple of d above 2^53, and wrong there: the solver confirms the bound both
         ; ways, so the rule that renders it is checked too.
         """);
+    divideLemmas(out);
+    for (long d : LONG_DIVISORS) {
+      if (ROUNDING_DIVISORS.contains(d)) {
+        continue;
+      }
+      long m = Math.abs(d);
+      out.append("\n; d = ").append(d).append("\n");
+      conversionExact(out, d, m, P53);
+      // Where the conversion form first goes wrong past 2^53 is a fact about the TIME divisors,
+      // whose dividends reach the bound. The day's odd part is still exact at the dividend the
+      // rule renders - both solvers say so - and its caller states a bound near 2^50.
+      if (d != NTZ_DAY_ODD) {
+        conversionBound(out, d, m);
+      }
+      magicExact(out, d, m, P52);
+    }
+    floorDivDay(out);
+    return out.toString();
+  }
+
+  /**
+   * {@code round_divide.smt2}: for each of the {@link #ROUNDING_DIVISORS} {@code 5^k}, both forms
+   * of {@code long_divide.smt2} are Java's {@code v / 5^k} for every {@code |v|} under
+   * {@link #dividendBound}, the bound the rounding states to the division (VARKA-344). A file of
+   * its own so that {@code dev/varka_prove.sh --lint} runs it beside the others.
+   */
+  static String roundDivide() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The long lane's constant division by 5^k, the integral rounding's pre-shift
+        ; (VarkaRoundingCompiler.preShiftForm, VARKA-344): Q = t / 5^k over t = |x| >>> k, a
+        ; ConstDivide told t < preShiftBound(k, lo, hi). Over the widest guard the rounding
+        ; builds, preShiftGuard(k), that bound is 2^52 to k = 11 and 2^(63 - k) + 1 from k = 12,
+        ; and ANSI's tails only narrow the guard. Per divisor both forms of long_divide.smt2,
+        ; whose header shows them, are v / 5^k for every 0 < |v| under that bound, one check per
+        ; binade the quotient can fall in there, and one that the binades listed cover every
+        ; quotient. integral_round.smt2 proves the guard keeps t under the bound the compiler
+        ; states, and VarkaDivisorProofSuite that no compiled division by a 5^k states a larger
+        ; one.
+        """);
+    divideLemmas(out);
+    for (long d : ROUNDING_DIVISORS) {
+      long bound = dividendBound(d);
+      out.append("\n; d = ").append(d).append(", |v| < ").append(bound).append("\n");
+      conversionExact(out, d, d, bound);
+      magicExact(out, d, d, bound);
+    }
+    return out.toString();
+  }
+
+  /**
+   * The constants both division files are stated for, the prelude, and their two lemmas: an
+   * integer up to 2^53 rounds to itself, and the magic form's OR is disjoint below 2^52.
+   */
+  private static void divideLemmas(StringBuilder out) {
+    if (VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND != P52
+        || VarkaDivisionLowering.MANTISSA_52 != P52 - 1
+        || VarkaDivisionLowering.TWO_52_BITS != 0x433L << 52) {
+      throw new IllegalStateException("the long division proofs are stated for a dividend bound "
+          + "of 2^52 and the magic form's constants 0x4330000000000000 and 2^52 - 1; restate "
+          + "them");
+    }
     out.append(RENDERED);
     out.append("""
 
@@ -330,20 +409,6 @@ final class VarkaProofFiles {
                 + "))",
             "(assert (not (and (= (jdouble.fromBits.E xb) 0) (= (jdouble.fromBits.M xb) (+ "
                 + P52 + " a)))))"));
-    for (long d : LONG_DIVISORS) {
-      long m = Math.abs(d);
-      out.append("\n; d = ").append(d).append("\n");
-      conversionExact(out, d, m);
-      // Where the conversion form first goes wrong past 2^53 is a fact about the TIME divisors,
-      // whose dividends reach the bound. The day's odd part is still exact at the dividend the
-      // rule renders - both solvers say so - and its caller states a bound near 2^50.
-      if (d != NTZ_DAY_ODD && !ROUNDING_DIVISORS.contains(d)) {
-        conversionBound(out, d, m);
-      }
-      magicExact(out, d, m);
-    }
-    floorDivDay(out);
-    return out.toString();
   }
 
   /**
@@ -390,20 +455,24 @@ final class VarkaProofFiles {
     }
   }
 
-  /** The conversion form, for every {@code 0 < |v| < 2^53}: one check per quotient binade. */
-  private static void conversionExact(StringBuilder out, long d, long m) {
-    int kLo = binade(BigInteger.valueOf(P53 - 1), BigInteger.valueOf(m)) - 1;
+  /**
+   * The conversion form, for every {@code 0 < |v| < bound}, {@code bound <= 2^53}: one check per
+   * quotient binade.
+   */
+  private static void conversionExact(StringBuilder out, long d, long m, long bound) {
+    int kLo = binade(BigInteger.valueOf(bound - 1), BigInteger.valueOf(m)) - 1;
     int kHi = binade(BigInteger.ONE, BigInteger.valueOf(m));
-    check(out, "d = " + d + ": the conversion form's quotients for 0 < v < 2^53 lie in binades 2^-"
-        + (kLo + 1) + " to 2^-" + kHi, "unsat", List.of("(declare-const v Int)",
-        "(assert (and (<= 1 v) (< v " + P53 + ")))",
+    String under = bounded(bound);
+    check(out, "d = " + d + ": the conversion form's quotients for 0 < v < " + under
+        + " lie in binades 2^-" + (kLo + 1) + " to 2^-" + kHi, "unsat", List.of(
+        "(declare-const v Int)", "(assert (and (<= 1 v) (< v " + bound + ")))",
         "(assert (not " + inBinades("v", m, kLo + 1, kHi) + "))"));
     for (int k = kLo; k <= kHi; k++) {
       String[] s = scale(-k);
-      check(out, "d = " + d + ": the conversion form is v / d for 0 < |v| < 2^53, quotient in "
-          + "binade 2^-" + k, "unsat", List.of(
+      check(out, "d = " + d + ": the conversion form is v / d for 0 < |v| < " + under
+          + ", quotient in binade 2^-" + k, "unsat", List.of(
           "(declare-const v Int)", "(declare-const M Int)", "(declare-const r Int)",
-          "(assert (and (< 0 (abs v)) (< (abs v) " + P53 + ")))",
+          "(assert (and (< 0 (abs v)) (< (abs v) " + bound + ")))",
           "; L2D leaves v as it is (the lemma); |v| / |d| rounds to M * 2^-" + k
               + "; D2L truncates it",
           "(assert (jdouble.rne (abs v) " + m + " M " + s[0] + " " + s[1] + "))",
@@ -455,24 +524,28 @@ final class VarkaProofFiles {
     }
   }
 
-  /** The magic form, for every {@code 0 < |v| < 2^52}: one check per quotient binade. */
-  private static void magicExact(StringBuilder out, long d, long m) {
-    int kLo = binade(BigInteger.valueOf(P52 - 1), BigInteger.valueOf(m)) - 1;
+  /**
+   * The magic form, for every {@code 0 < |v| < bound}, {@code bound <= 2^52}: one check per
+   * quotient binade.
+   */
+  private static void magicExact(StringBuilder out, long d, long m, long bound) {
+    int kLo = binade(BigInteger.valueOf(bound - 1), BigInteger.valueOf(m)) - 1;
     int kHi = binade(BigInteger.ONE, BigInteger.valueOf(m));
-    check(out, "d = " + d + ": the magic form's quotients for 0 < a < 2^52 lie in binades 2^-"
-        + (kLo + 1) + " to 2^-" + kHi, "unsat", List.of("(declare-const a Int)",
-        "(assert (and (<= 1 a) (< a " + P52 + ")))",
+    String under = bounded(bound);
+    check(out, "d = " + d + ": the magic form's quotients for 0 < a < " + under
+        + " lie in binades 2^-" + (kLo + 1) + " to 2^-" + kHi, "unsat", List.of(
+        "(declare-const a Int)", "(assert (and (<= 1 a) (< a " + bound + ")))",
         "(assert (not " + inBinades("a", m, kLo + 1, kHi) + "))"));
     String flip = d < 0 ? "(not (< v 0))" : "(< v 0)";
     for (int k = kLo; k <= kHi; k++) {
       String[] s = scale(-k);
       BigInteger p = BigInteger.ONE.shiftLeft(k);
       String sum = "(+ Mq " + BigInteger.valueOf(P52).shiftLeft(k) + ")";
-      check(out, "d = " + d + ": the magic form is v / d for 0 < |v| < 2^52, quotient in binade 2^-"
-          + k, "unsat", List.of(
+      check(out, "d = " + d + ": the magic form is v / d for 0 < |v| < " + under
+          + ", quotient in binade 2^-" + k, "unsat", List.of(
           "(declare-const v Int)", "(declare-const Mq Int)", "(declare-const Ms Int)",
           "(declare-const s Int)",
-          "(assert (and (< 0 (abs v)) (< (abs v) " + P52 + ")))",
+          "(assert (and (< 0 (abs v)) (< (abs v) " + bound + ")))",
           "; a = |v|; x = 2^52 + a (the second lemma); x - 2^52 = a (the first); a / |d| rounds to "
               + "Mq * 2^-" + k,
           "(define-fun a () Int (ite (< v 0) (jlong.neg v) v))",
@@ -490,6 +563,11 @@ final class VarkaProofFiles {
           "(assert (not (and (<= 0 r1) (<= r1 " + P52 + ") (<= 0 fl) (< fl " + P52 + ")",
           "  (= r (jlong.div v " + lit(d) + ")))))"));
     }
+  }
+
+  /** A dividend bound as the checks name it: 2^52 or 2^53 by its power, any other in full. */
+  private static String bounded(long bound) {
+    return bound == P52 ? "2^52" : bound == P53 ? "2^53" : Long.toString(bound);
   }
 
   /** {@code |r|} with the quotient's sign: negative where exactly one of v and d is. */
@@ -2027,16 +2105,16 @@ final class VarkaProofFiles {
         ; d, raised by one past the half (HALF_UP at it too, HALF_EVEN at it for an odd
         ; quotient), the sign put back, times d; longValue() is its low 64 bits, jlong.wrap. It
         ; is pinned to BigDecimal at sample values. The division itself is not proven here:
-        ; long_divide.smt2 proves the ConstDivide exact by each 5^k for every dividend under
-        ; 2^52, and these checks take Q as the exact floor of a non-negative t, beside a check
-        ; per scale that the guard keeps t under the bound the compiler states, which is at
-        ; most 2^52. So the claims split at the quotient: over the guard the pre-shift gives
-        ; floor(|x| / d), and the steps after it give the rounding from that Q, over every long,
-        ; Long.MIN_VALUE's wrapped magnitude included. x ^ s
-        ; is written as an ite on s, which is Java's XOR for s in {0, -1}, as s | 1 is, and a
-        ; first check shows s is one of them. Beside the claims: each guard's end is tight (one
-        ; past it reaches the bound, or overflows ANSI's long), and the arithmetic shift in place
-        ; of the logical one is wrong at Long.MIN_VALUE.
+        ; round_divide.smt2 proves the ConstDivide exact by each 5^k for every dividend under
+        ; the bound the pre-shift's own guard gives, and these checks take Q as the exact floor
+        ; of a non-negative t, beside a check per scale that the guard keeps t under the bound
+        ; the compiler states, which ANSI's narrower guard only lowers. So the claims split at
+        ; the quotient: over the guard the pre-shift gives floor(|x| / d), and the steps after it
+        ; give the rounding from that Q, over every long, Long.MIN_VALUE's wrapped magnitude
+        ; included. x ^ s is written as an ite on s, which is Java's XOR for s in {0, -1}, as
+        ; s | 1 is, and a first check shows s is one of them. Beside the claims: each guard's end
+        ; is tight (one past it reaches the bound, or overflows ANSI's long), and the arithmetic
+        ; shift in place of the logical one is wrong at Long.MIN_VALUE.
         """);
     out.append(rendered("ALL"));
     out.append("""
