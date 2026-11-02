@@ -722,6 +722,14 @@ row 359 among them, where 359b builds them. Choice and round trip cancel on the 
 363). With `VarkaDecimalFault.LOW_WORD_SIGNED` planted for one run, load, null handling and
 ordering fail: the reference evaluates the faulty lowering and disagrees with Spark.
 
+Six of the suite's seven tests end cancelled, by design, until 359b and rows 360 to 364 land; each
+message names every owed form. Under the fused-in-part rule a one-scale comparison that started
+to decline would also be listed as owed, not failed. Against the lines above, a reader would see it
+as a new name in the load or ordering message; no test pins that.
+
+*11.7's cost prediction, scored*: "of the size of 347's, seconds". The suite took 3.3 s of test
+time in its own JVM (the final run's JUnit total, seven tests), the fork's start aside. Holds.
+
 **Still owed.** The suite holds the pair's representation only. The 64-bit one (DECIMAL(10, 2),
 row 347's leaf) reads the same sixteen-byte slots, and `DecimalSlotLane` already reads its leaf.
 It needs a second suite class, which the census's one-name-per-type check does not provide for
