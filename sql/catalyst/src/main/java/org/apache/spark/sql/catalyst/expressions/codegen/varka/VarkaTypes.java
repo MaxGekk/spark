@@ -450,6 +450,13 @@ public final class VarkaTypes {
    * ask. It answers only for {@link Storage.Plain} storage, so a consumer that takes a long lane
    * for an eight-byte long cannot see a decimal, whose sixteen-byte slots only its own leaf reads;
    * {@link #read(DataType)} is the question for every storage.
+   *
+   * <p>The contract: empty for a {@code DECIMAL} of every precision, 18 digits or fewer
+   * included, although its leaf computes on the long lane; empty too for a {@code BOOLEAN} and
+   * for every type no lane reads. A caller that unwraps the answer ({@code orElseThrow}) does so
+   * only under a guard over this same call, such as
+   * {@code lane(t).filter(LaneType::isNarrow).isPresent()}, so a decimal never reaches the unwrap;
+   * a caller that wants a decimal's lane asks {@link #read}.
    */
   public static Optional<LaneType> lane(DataType dataType) {
     return read(dataType).flatMap(r -> switch (r) {

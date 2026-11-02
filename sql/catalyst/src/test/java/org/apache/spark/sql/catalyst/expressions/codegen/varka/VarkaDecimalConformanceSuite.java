@@ -19,8 +19,13 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.Set;
 import java.util.stream.LongStream;
 
+import scala.jdk.javaapi.CollectionConverters;
+
+import org.apache.spark.sql.catalyst.expressions.BinaryComparison;
+import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.DecimalType;
 
@@ -74,5 +79,27 @@ public final class VarkaDecimalConformanceSuite extends VarkaTypeConformance {
   @Override
   protected BigInteger[] decimalSlots() {
     return VALUES;
+  }
+
+  /** The census entries that mark {@code dec} fused in part: the comparisons. */
+  private static final Set<String> COMPARISONS = Set.of("<=>", "=", "==", ">", ">=", "<", "<=");
+
+  /**
+   * The band {@code census_curated.txt} states for the comparisons: two decimals of one scale, to
+   * 38 digits. A comparison across two scales needs rows 360 and 363's rescale and is owed.
+   */
+  @Override
+  protected boolean inFusedBand(String register, Expression expr) {
+    return COMPARISONS.contains(register) && oneScale(expr);
+  }
+
+  /** Whether every comparison in {@code e} compares two decimals of one scale. */
+  private static boolean oneScale(Expression e) {
+    if (e instanceof BinaryComparison c && !(c.left().dataType() instanceof DecimalType l
+        && c.right().dataType() instanceof DecimalType r && l.scale() == r.scale())) {
+      return false;
+    }
+    return CollectionConverters.asJava(e.children()).stream()
+        .allMatch(VarkaDecimalConformanceSuite::oneScale);
   }
 }

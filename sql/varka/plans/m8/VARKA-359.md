@@ -724,9 +724,9 @@ third review the emit option `decimalFault=LOW_WORD_SIGNED`), load, null handlin
 fail: the faulty kernel disagrees with the reference and with Spark.
 
 Six of the suite's seven tests end cancelled, by design, until 359b and rows 360 to 364 land; each
-message names every owed form. Under the fused-in-part rule a one-scale comparison that started
-to decline would also be listed as owed, not failed. Against the lines above, a reader would see it
-as a new name in the load or ordering message; no test pins that.
+message names every owed form. Under the fused-in-part rule as first built, a one-scale
+comparison that started to decline would also have been listed as owed, not failed; since the third
+review below it fails as drift.
 
 *11.7's cost prediction, scored*: "of the size of 347's, seconds". The suite took 3.3 s of test
 time in its own JVM (the final run's JUnit total, seven tests), the fork's start aside. Holds.
@@ -769,6 +769,19 @@ time in its own JVM (the final run's JUnit total, seven tests), the fork's start
   `condition`. `condition` now routes once: one scale above 18 digits to the pairs, two scales to
   the decline naming the rescale (the reasons unchanged), the rest to the longs; `operands` takes
   the scale and cannot throw.
+- **The census drift check skipped a fused-in-part form.** An owed form that compiled under an
+  operator marked fused in part was checked and never called drift, wherever it fused. The census
+  names the band only in prose, so a conformance suite now states it (`inFusedBand`, false by
+  default; the decimal suite's is the seven comparisons over one scale): a form outside the band
+  that fuses is drift, and so is one inside it that declines, which before was listed as owed.
+- **`ConformanceType.lane()` asked `VarkaTypes.lane`**, empty for a decimal since this row, so a
+  decimal suite counted the int lane; it asks `VarkaTypes.read`.
+- **`VarkaTypes.lane` went empty for a decimal of 18 digits or fewer** without its doc saying so.
+  The doc now states the contract. Every caller was read: the three `orElseThrow` sites in
+  `VarkaNodeCompiler` sit under a narrow-lane guard over the same call, `VarkaTimeCompiler`'s
+  long column arm is behind the decimal decline and its literal arm needs a `Long` value, and the
+  floating and narrow-store callers filter. None throws or misclassifies; `VarkaTypesSuite` pins
+  that every value form over `DECIMAL(10, 2)` declines.
 - **`literal`'s doc repeated `foldLiteral`'s**; it names only its own declines now.
 
 **Still owed.** The suite holds the pair's representation only. The 64-bit one (DECIMAL(10, 2),

@@ -144,11 +144,15 @@ public abstract class VarkaTypeConformance {
     }
 
     /**
-     * The lane a column of the type is read at, the registry's; a {@code BOOLEAN}, read as a
-     * condition and on no lane, is counted with the int lane, as its bitmaps' words are.
+     * The lane a column of the type is read at, the registry's read ({@link VarkaTypes#read}):
+     * a decimal's is the long lane, its words loaded from the sixteen-byte slots. A
+     * {@code BOOLEAN}, read as a condition and on no lane, is counted with the int lane, as its
+     * bitmaps' words are.
      */
     LaneType lane() {
-      return VarkaTypes.lane(spark).orElse(LaneType.INT);
+      return VarkaTypes.read(spark).map(r -> switch (r) {
+        case VarkaTypes.Read.Lanes l -> l.lane();
+      }).orElse(LaneType.INT);
     }
   }
 
@@ -177,6 +181,18 @@ public abstract class VarkaTypeConformance {
    */
   protected BigInteger[] decimalSlots() {
     return null;
+  }
+
+  /**
+   * Whether {@code expr}, a form of census entry {@code register} the census marks fused in part
+   * for the type ({@code fused_in_part}, a {@code ^} in {@code census_curated.txt}), is inside
+   * the band that fuses. The census names the band only in prose, so the suite states it here.
+   * A form inside the band is held to the answers where it fuses and is drift where it declines;
+   * one outside is owed and is drift where it fuses. False by default, so a type marked fused in
+   * part whose suite states no band fails as drift on its first form that fuses.
+   */
+  protected boolean inFusedBand(String register, Expression expr) {
+    return false;
   }
 
   /**
@@ -511,14 +527,21 @@ public abstract class VarkaTypeConformance {
       Optional<String> owner = owedTo(f, expr.dataType());
       Optional<Compiled> compiled = compile(f, expr);
       if (owner.isPresent()) {
-        if (compiled.isPresent() && fusedInPart(f)) {
-          // The census marks the type fused in part: this fixture's form is in the band that
-          // fuses, so it is held to the answers rather than called drift.
+        if (fusedInPart(f) && inFusedBand(f.register(), expr)) {
+          // The census marks the type fused in part and the suite puts this form in the band
+          // that fuses: it is held to the answers, and declining is drift.
+          if (compiled.isEmpty()) {
+            cancelIfTheWidthCannotWiden(f);
+            drift.add(f + " declines inside the band the census marks fused in part for "
+                + type().census() + " under " + f.register() + declineReason(f, expr));
+            continue;
+          }
           check(f, compiled.get());
           continue;
         }
         if (compiled.isPresent()) {
           drift.add(f + " fuses, and the register owes it to rows " + owner.get()
+              + (fusedInPart(f) ? ", outside the band the suite states fuses in part" : "")
               + ": mark the type fused in the census or casts.tsv");
         }
         owed.add(f + ": rows " + owner.get() + declineReason(f, expr));

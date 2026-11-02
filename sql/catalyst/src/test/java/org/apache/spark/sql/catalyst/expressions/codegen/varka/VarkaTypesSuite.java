@@ -37,6 +37,11 @@ import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import scala.jdk.javaapi.CollectionConverters;
+
+import org.apache.spark.sql.catalyst.expressions.Attribute;
+import org.apache.spark.sql.catalyst.expressions.NamedExpression;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes.Admission;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes.Conformance;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes.Info;
@@ -207,6 +212,26 @@ public final class VarkaTypesSuite {
     assertTrue(VarkaTypes.declineReason(DataTypes.FloatType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.TimestampNTZType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.StringType).isEmpty());
+  }
+
+  @Test
+  @DisplayName("a decimal of 18 digits or fewer has no plain lane, and every value form over one "
+      + "declines with a reason rather than reaching a reader that unwraps the lane")
+  void decimalValueFormsDeclineWithoutAPlainLane() {
+    DecimalType d10 = DataTypes.createDecimalType(10, 2);
+    assertTrue(VarkaTypes.lane(d10).isEmpty());
+    var columns = CollectionConverters.asScala(List.<Attribute>of(VarkaSqlResolve.column("d", d10),
+        VarkaSqlResolve.column("e", d10), VarkaSqlResolve.column("i", DataTypes.IntegerType)))
+        .toSeq();
+    // The arms that ask lane(): the narrow negation, abs, arithmetic and casts, the choices'
+    // narrow store, the floating arms and the long column and literal arms.
+    for (String sql : List.of("-d", "abs(d)", "d + e", "d - e", "d * e", "d + 1",
+        "if(i > 0, d, e)", "CAST(d AS TINYINT)", "CAST(d AS SMALLINT)", "CAST(d AS INT)",
+        "CAST(d AS BIGINT)", "CAST(d AS DOUBLE)", "CAST(d AS FLOAT)", "greatest(d, e)")) {
+      var entry = CollectionConverters.asScala(List.<NamedExpression>of(
+          VarkaSqlResolve.named(VarkaSqlResolve.parse(sql, columns), "c"))).toSeq();
+      assertEquals(1, VarkaExpressionCompiler.declines(entry, columns).size(), sql);
+    }
   }
 
   @Test
