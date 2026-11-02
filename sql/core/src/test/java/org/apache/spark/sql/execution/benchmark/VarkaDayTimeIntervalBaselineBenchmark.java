@@ -52,7 +52,7 @@ import org.apache.spark.sql.internal.SQLConf;
  * the results file notes each section that fuses. A row that fuses a
  * section lists it, so that its fusion cannot turn a baseline section into a fused one unnoticed.
  * Row 103's first step lists {@code dt + dt2 - dt} and {@code abs(dt)}, the checked arithmetic
- * of {@code VARKA-103.md} 2.1.
+ * of {@code VARKA-103.md} 2.1, and {@code dt * 3}, the guarded product of 2.2.
  *
  * <p>The filters run under {@code spark.sql.constraintPropagation.enabled=false} on both
  * sessions. With constraint propagation on, the optimizer infers {@code dt_n IS NOT NULL} from
@@ -165,7 +165,7 @@ public class VarkaDayTimeIntervalBaselineBenchmark extends VarkaSqlBenchmarkBase
       out.add(new Section("abs(dt)" + density,
           "SELECT abs(" + dt + ") AS a" + from, Map.of(), true));
       out.add(new Section("dt * 3" + density,
-          "SELECT " + dt + " * 3 AS a" + from, Map.of(), false));
+          "SELECT " + dt + " * 3 AS a" + from, Map.of(), true));
       out.add(new Section("dt * 1.5" + density,
           "SELECT " + dt + " * 1.5 AS a" + from, Map.of(), false));
       out.add(new Section("dt / 24" + density,
