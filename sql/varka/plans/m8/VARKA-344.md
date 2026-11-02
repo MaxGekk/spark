@@ -660,8 +660,9 @@ committed files:
    bound, so the restriction would remove about 74 of the 2999 checks, a second of cvc5's time;
    it was not built. The checks are uniform: under cvc5 none takes more than 100 ms on the
    laptop, about 15 ms each (`VARKA_PROVE_LIMIT_MS` is 10 s), so the step's risk is its total,
-   not a check's limit. Re-timed on the laptop: `long_divide.smt2` Z3 125 s, cvc5 37 to 46 s
-   over three runs, `integral_round.smt2` Z3 5 s, cvc5 1 s, and `--lint` about 60 s.
+   not a check's limit. Re-timed on the laptop: `long_divide.smt2` Z3 125 s, cvc5 37 to 49 s
+   over four runs, `integral_round.smt2` Z3 5 s, cvc5 1 to 2 s, and `--lint` 60 to 69 s, the
+   slower beside a load of about 8.
    Splitting the `5^k` into a proof file of their own and running the linters' files side by side
    would bring the step back near its minute; that is open point 7.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
