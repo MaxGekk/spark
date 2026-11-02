@@ -558,7 +558,10 @@ Predictions, registered before the build:
    an integral literal. `VarkaAnsiForm` lists both product rows under a false AND and names
    `dt * 3` as the first row raising the bare `ArithmeticException`, which `ntz + dt` was;
    `VarkaIntervalCompiler` is public so the renderer and the suite read the compiler's bounds.
-   A probe of the baseline after the build found exactly its listed sections fusing. No fuzz
+   A probe of the baseline after the build found exactly its listed sections fusing. Merged with
+   master, whose baselines record a `Fusion` class per section in place of a flag, the baseline
+   marks those three sections and the control `WHOLE` and the rest `NONE`, and its queries suite
+   makes the fuse check itself under `PinsDefaults`, as the other baselines' suites now do. No fuzz
    production: an overflowing product raises a bare
    `ArithmeticException`, which the Spark-level fuzzer's expected-errors list cannot name, as for
    `ym * k`. Left of 103a: `ym * k` (2.2's int-lane half), `extract(DAY)` with `truncDivLong`,

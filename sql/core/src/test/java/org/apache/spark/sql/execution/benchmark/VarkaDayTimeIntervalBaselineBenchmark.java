@@ -39,20 +39,22 @@ import org.apache.spark.sql.internal.SQLConf;
  * hours; and the filter {@code extract(HOUR FROM dt) >= 12}. Each runs with no nulls and with one
  * row in ten null. Every one of these forms raises on overflow in every mode, so none depends on
  * the session's mode, and the data keeps every result and every partial sum inside the long. A
- * control section, the filter {@code dt > dt2}, fuses already and is listed so.
+ * control section, the filter {@code dt > dt2}, fuses already and is {@code WHOLE}.
  *
  * <p>Each section has two arms, named so the labels survive the row landing:
  * {@code spark row path (varka off)}, a session without the Varka rule, and {@code varka on}, a
- * session with it. Today no section but the control plans a Varka node, so both arms of the
- * others are the row path and should tie.
+ * session with it. The sections that are {@code NONE} plan no Varka node, so both of their arms
+ * are the row path and should tie.
  *
  * <p>A baseline is only one while nothing fuses: before any section is timed, the run checks
- * each section's plan on the Varka session against the section's {@code fuses} flag, the list of
- * the sections a row has fused, and fails when an unlisted section fuses or a listed one does not;
- * the results file notes each section that fuses. A row that fuses a
- * section lists it, so that its fusion cannot turn a baseline section into a fused one unnoticed.
- * Row 103's first step lists {@code dt + dt2 - dt} and {@code abs(dt)}, the checked arithmetic
- * of {@code VARKA-103.md} 2.1, and {@code dt * 3}, the guarded product of 2.2.
+ * each section's plan on the Varka session against the section's {@link Fusion} class, the
+ * record of how much of it a row has fused, and fails when the plan's class differs
+ * ({@link VarkaSqlBenchmarkBase#requireBaseline(SparkSession, String, String, Fusion)}); the
+ * results file notes each section that fuses. A row that fuses more of a section sets its new
+ * class, so that its fusion cannot turn a baseline section into a fused one unnoticed. Row 103's
+ * first step sets {@code dt + dt2 - dt} and {@code abs(dt)}, the checked arithmetic of
+ * {@code VARKA-103.md} 2.1, and {@code dt * 3}, the guarded product of 2.2, to {@code WHOLE}
+ * beside the control; every other section is {@code NONE}.
  *
  * <p>The filters run under {@code spark.sql.constraintPropagation.enabled=false} on both
  * sessions. With constraint propagation on, the optimizer infers {@code dt_n IS NOT NULL} from
@@ -60,8 +62,8 @@ import org.apache.spark.sql.internal.SQLConf;
  * null test, into a {@code VarkaFilterColumnarToRow} under Spark's {@code Filter}: the plan
  * would hold a Varka node while the extract declines, and the check could not see the row start
  * fusing the extract itself. The setting changes only that inference, so both arms at both
- * densities time Spark's own plan of the bare condition. Each section's {@code fuses} flag is
- * the one a probe of its plan found.
+ * densities time Spark's own plan of the bare condition. Each section's {@link Fusion} class
+ * is the one a probe of its plan found.
  *
  * <p>To run this benchmark, on a GitHub runner (the results come back as an artifact):
  * <pre>
@@ -89,10 +91,11 @@ public class VarkaDayTimeIntervalBaselineBenchmark extends VarkaSqlBenchmarkBase
 
   /**
    * A section: its title, its query, the SQL settings it runs under on both sessions (the
-   * filters' constraint propagation), empty for a projection, and whether the Varka session fuses
-   * it, which the run checks before it times anything.
+   * filters' constraint propagation), empty for a projection, and how much of it the Varka
+   * session fuses today, the {@link VarkaSqlBenchmarkBase.Fusion} class the run checks its plan
+   * against before it times anything.
    */
-  record Section(String title, String query, Map<String, String> conf, boolean fuses) {}
+  record Section(String title, String query, Map<String, String> conf, Fusion fusion) {}
 
   /**
    * The table: {@code dt} and {@code dt2} {@code INTERVAL DAY TO SECOND}, {@code i}, {@code i2}
@@ -161,35 +164,36 @@ public class VarkaDayTimeIntervalBaselineBenchmark extends VarkaSqlBenchmarkBase
       String density = ", " + (nulls.isEmpty() ? "no nulls" : "one row in ten null");
       String from = " FROM " + VIEW;
       out.add(new Section("dt + dt2 - dt" + density,
-          "SELECT " + dt + " + dt2 - " + dt + " AS a" + from, Map.of(), true));
+          "SELECT " + dt + " + dt2 - " + dt + " AS a" + from, Map.of(), Fusion.WHOLE));
       out.add(new Section("abs(dt)" + density,
-          "SELECT abs(" + dt + ") AS a" + from, Map.of(), true));
+          "SELECT abs(" + dt + ") AS a" + from, Map.of(), Fusion.WHOLE));
       out.add(new Section("dt * 3" + density,
-          "SELECT " + dt + " * 3 AS a" + from, Map.of(), true));
+          "SELECT " + dt + " * 3 AS a" + from, Map.of(), Fusion.WHOLE));
       out.add(new Section("dt * 1.5" + density,
-          "SELECT " + dt + " * 1.5 AS a" + from, Map.of(), false));
+          "SELECT " + dt + " * 1.5 AS a" + from, Map.of(), Fusion.NONE));
       out.add(new Section("dt / 24" + density,
-          "SELECT " + dt + " / 24 AS a" + from, Map.of(), false));
+          "SELECT " + dt + " / 24 AS a" + from, Map.of(), Fusion.NONE));
       out.add(new Section("extract(DAY FROM dt)" + density,
-          "SELECT extract(DAY FROM " + dt + ") AS a" + from, Map.of(), false));
+          "SELECT extract(DAY FROM " + dt + ") AS a" + from, Map.of(), Fusion.NONE));
       out.add(new Section("extract(HOUR FROM dt)" + density,
-          "SELECT extract(HOUR FROM " + dt + ") AS a" + from, Map.of(), false));
+          "SELECT extract(HOUR FROM " + dt + ") AS a" + from, Map.of(), Fusion.NONE));
       out.add(new Section("extract DAY, HOUR, MINUTE and SECOND together" + density,
           "SELECT extract(DAY FROM " + dt + ") AS a, extract(HOUR FROM " + dt + ") AS b, "
               + "extract(MINUTE FROM " + dt + ") AS c, extract(SECOND FROM " + dt + ") AS d"
-              + from, Map.of(), false));
+              + from, Map.of(), Fusion.NONE));
       out.add(new Section("make_dt_interval(i, i2, i3)" + density,
-          "SELECT make_dt_interval(" + i + ", i2, i3) AS a" + from, Map.of(), false));
+          "SELECT make_dt_interval(" + i + ", i2, i3) AS a" + from, Map.of(), Fusion.NONE));
       out.add(new Section("make_dt_interval(i, i2, i3, s), DECIMAL(18, 6) seconds" + density,
-          "SELECT make_dt_interval(i, i2, i3, " + s + ") AS a" + from, Map.of(), false));
+          "SELECT make_dt_interval(i, i2, i3, " + s + ") AS a" + from, Map.of(), Fusion.NONE));
       out.add(new Section("CAST(dt AS INTERVAL HOUR)" + density,
-          "SELECT CAST(" + dt + " AS INTERVAL HOUR) AS a" + from, Map.of(), false));
+          "SELECT CAST(" + dt + " AS INTERVAL HOUR) AS a" + from, Map.of(), Fusion.NONE));
       // The bare condition at both densities, with no IS NOT NULL inferred (the class javadoc).
       out.add(new Section("filter extract(HOUR FROM dt) >= 12" + density,
           "SELECT " + dt + " AS a" + from + " WHERE extract(HOUR FROM " + dt + ") >= 12",
-          noConstraints, false));
+          noConstraints, Fusion.NONE));
       out.add(new Section("filter dt > dt2, control, fuses today" + density,
-          "SELECT " + dt + " AS a" + from + " WHERE " + dt + " > dt2", noConstraints, true));
+          "SELECT " + dt + " AS a" + from + " WHERE " + dt + " > dt2", noConstraints,
+          Fusion.WHOLE));
     }
     return out;
   }
@@ -209,7 +213,7 @@ public class VarkaDayTimeIntervalBaselineBenchmark extends VarkaSqlBenchmarkBase
         VarkaArrowSessions.cache(session, VIEW);
       }
       for (Section s : sections()) {
-        withConf(varka, s.conf(), () -> requireBaseline(varka, s.title(), s.query(), s.fuses()));
+        withConf(varka, s.conf(), () -> requireBaseline(varka, s.title(), s.query(), s.fusion()));
       }
       for (Section s : sections()) {
         section(s.title(), () -> withConf(baseline, s.conf(), () -> withConf(varka, s.conf(),

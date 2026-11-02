@@ -17,9 +17,12 @@
 
 package org.apache.spark.sql.execution.benchmark
 
+import java.util.Optional
+
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.QueryTest
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.execution.VarkaSharedSessions
 import org.apache.spark.sql.types._
 
@@ -28,8 +31,9 @@ import org.apache.spark.sql.types._
  * build, so a section that no longer parses, raises, changes its result type or that the two
  * sessions answer differently fails a pull request rather than the runner dispatch that times it
  * (VARKA-103 4). The filters run with constraint propagation off, as the benchmark runs them. It
- * checks the answers only: whether a section fuses is the benchmark's own check, made when it is
- * timed, for VARKA-103 is meant to start fusing these queries.
+ * also makes the benchmark's own fuse check, that each section's plan on the Varka session has
+ * the section's fusion class under the section's settings, so a row that changes how a section
+ * fuses sets the section's new class in the same pull request.
  *
  * The fixture is the benchmark's table over its first 2000 ids. Its columns are hashes of the
  * id, so these rows already reach the regions the benchmark's javadoc states, which the suite
@@ -105,7 +109,7 @@ class VarkaDayTimeIntervalBaselineQueriesSuite extends QueryTest with VarkaShare
 
       val sections = VarkaDayTimeIntervalBaselineBenchmark.sections().asScala.toSeq
       assert(sections.size === 2 * resultTypes.size)
-      assert(sections.filter(_.fuses).map(_.title) === Seq(
+      assert(sections.filter(_.fusion != VarkaSqlBenchmarkBase.Fusion.NONE).map(_.title) === Seq(
         "dt + dt2 - dt, no nulls", "abs(dt), no nulls", "dt * 3, no nulls",
         "filter dt > dt2, control, fuses today, no nulls",
         "dt + dt2 - dt, one row in ten null", "abs(dt), one row in ten null",
@@ -145,6 +149,39 @@ class VarkaDayTimeIntervalBaselineQueriesSuite extends QueryTest with VarkaShare
       for (session <- sessions if session.catalog.tableExists(view)) {
         session.catalog.uncacheTable(view)
         session.catalog.dropTempView(view)
+      }
+    }
+  }
+
+  test("each section of the day-time interval baseline fuses as its class lists it",
+      PinsDefaults) {
+    // The benchmark's own fuse check, made here too, so a change to how a section fuses fails a
+    // pull request rather than the runner dispatch that times it. Each section is planned under
+    // its own settings, as the benchmark plans it, and under the emitter's default options, so
+    // the classes pin the defaults; the run that lifts the benchmark's check cancels it.
+    assume(VarkaSqlBenchmarkBase.fuseCheck(),
+      s"-D${VarkaSqlBenchmarkBase.FUSE_CHECK_PROPERTY}=false times the sections fused")
+    val view = VarkaDayTimeIntervalBaselineBenchmark.VIEW
+    try {
+      varkaSpark.sql(VarkaDayTimeIntervalBaselineBenchmark.tableSql(rows))
+        .createOrReplaceTempView(view)
+      varkaSpark.catalog.cacheTable(view)
+      for (s <- VarkaDayTimeIntervalBaselineBenchmark.sections().asScala) {
+        withClue(s.title) {
+          def check(): Unit = {
+            val plan = varkaSpark.sql(s.query).queryExecution.executedPlan
+            assert(VarkaSqlBenchmarkBase.fusion(plan) === Optional.of(s.fusion))
+          }
+          s.conf.asScala.toSeq.headOption match {
+            case Some((key, value)) => withBothConf(key, value)(check())
+            case None => check()
+          }
+        }
+      }
+    } finally {
+      if (varkaSpark.catalog.tableExists(view)) {
+        varkaSpark.catalog.uncacheTable(view)
+        varkaSpark.catalog.dropTempView(view)
       }
     }
   }
