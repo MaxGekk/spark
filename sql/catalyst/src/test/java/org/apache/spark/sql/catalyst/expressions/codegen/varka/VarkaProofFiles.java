@@ -36,6 +36,7 @@ import org.apache.spark.sql.catalyst.expressions.BitmapExpressionUtils;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDivisionLowering.MulHiMagic;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange.Range;
 import org.apache.spark.sql.catalyst.util.DateTimeConstants;
+import org.apache.spark.sql.types.DecimalType$;
 
 /**
  * The rendered files under {@code sql/varka/proofs/} (VARKA-240, VARKA-241): the proofs whose
@@ -2904,7 +2905,8 @@ final class VarkaProofFiles {
         + "values", "unsat", nullSafe);
     List<String> u = List.of("(declare-const uh Int)", "(declare-const ul Int)",
         "(assert (and (w.hi uh) (w.lo ul)))");
-    for (int p = DecimalWords.MAX_LONG_PRECISION + 1; p <= DecimalWords.MAX_PRECISION; p++) {
+    for (int p = VarkaVectorIR.DecimalColumn.MAX_LONG_PRECISION + 1;
+        p <= DecimalType$.MODULE$.MAX_PRECISION(); p++) {
       DecimalWords b = DecimalWords.bound(p);
       BigInteger bound = b.value();
       for (int off : new int[] {0, 1, -1}) {
@@ -2964,7 +2966,8 @@ final class VarkaProofFiles {
         widen);
     List<String> u = List.of("(declare-const uh Int)", "(declare-const ul Int)",
         "(assert (and (j.long uh) (j.long ul)))");
-    for (int p = DecimalWords.MAX_LONG_PRECISION + 1; p <= DecimalWords.MAX_PRECISION; p++) {
+    for (int p = VarkaVectorIR.DecimalColumn.MAX_LONG_PRECISION + 1;
+        p <= DecimalType$.MODULE$.MAX_PRECISION(); p++) {
       DecimalWords b = DecimalWords.bound(p);
       DecimalWords n = b.negate();
       String decline = "(or (> uh " + lit(b.hi()) + ") (and (= uh " + lit(b.hi()) + ") (> (j.u ul) "

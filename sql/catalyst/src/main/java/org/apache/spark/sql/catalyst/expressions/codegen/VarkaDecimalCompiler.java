@@ -20,7 +20,6 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
@@ -95,9 +94,7 @@ final class VarkaDecimalCompiler {
   private static Optional<List<VarkaVectorIR>> operands(Expression whole, Expression left,
       Expression right, VarkaSlotTable inputs, DeclineSink sink) {
     DecimalType lt = (DecimalType) left.dataType();
-    boolean wide = lt.precision() > DecimalColumn.MAX_LONG_PRECISION
-        || (right.dataType() instanceof DecimalType w
-            && w.precision() > DecimalColumn.MAX_LONG_PRECISION);
+    boolean wide = widerThanLong(left, right);
     if (!(right.dataType() instanceof DecimalType rt) || lt.scale() != rt.scale()) {
       return sink.decline(wide
           ? "a comparison of decimals of two scales above " + DecimalColumn.MAX_LONG_PRECISION
@@ -157,11 +154,24 @@ final class VarkaDecimalCompiler {
    */
   private static Optional<DecimalType> wideType(Expression left, Expression right) {
     if (left.dataType() instanceof DecimalType lt && right.dataType() instanceof DecimalType rt
-        && lt.scale() == rt.scale()
-        && Math.max(lt.precision(), rt.precision()) > DecimalColumn.MAX_LONG_PRECISION) {
+        && lt.scale() == rt.scale() && widerThanLong(left, right)) {
       return Optional.of(lt.precision() >= rt.precision() ? lt : rt);
     }
     return Optional.empty();
+  }
+
+  /**
+   * Whether either operand is a decimal of more than 18 digits, whatever the scales: the
+   * comparison is a pair's, compiled by {@link #wideType}'s path at one scale and declined
+   * naming the rescales at two.
+   */
+  private static boolean widerThanLong(Expression left, Expression right) {
+    return isWide(left) || isWide(right);
+  }
+
+  private static boolean isWide(Expression e) {
+    return e.dataType() instanceof DecimalType t
+        && t.precision() > DecimalColumn.MAX_LONG_PRECISION;
   }
 
   /** Both operands of a wide comparison as pairs of {@code type}, or empty with the reason. */
@@ -194,11 +204,11 @@ final class VarkaDecimalCompiler {
       }
       int precision = ((DecimalType) br.dataType()).precision();
       if (precision <= DecimalColumn.MAX_LONG_PRECISION) {
-        return Optional.of(widened(column(br, inputs), type, sink));
+        return Optional.of(widened(column(br, inputs), sink));
       }
       int ordinal = inputs.intern(br.ordinal());
       return Optional.of(new Pair(new DecimalWord(ordinal, Word.LOW, precision),
-          new DecimalWord(ordinal, Word.HIGH, precision), type));
+          new DecimalWord(ordinal, Word.HIGH, precision)));
     }
     if (isLiteralTree(e)) {
       Object value;
@@ -358,9 +368,8 @@ final class VarkaDecimalCompiler {
    * high 64 bits, signed. A compile-time value, never an IR node (`m8/VARKA-359.md` 2.2): every
    * operator over a pair is composed from long-lane nodes over the two words.
    */
-  record Pair(VarkaVectorIR lo, VarkaVectorIR hi, DecimalType type) {
+  record Pair(VarkaVectorIR lo, VarkaVectorIR hi) {
     Pair {
-      Objects.requireNonNull(type, "type");
       if (lo.laneType() != LaneType.LONG || hi.laneType() != LaneType.LONG) {
         throw new IllegalArgumentException("a decimal pair's words are on the long lane, not "
             + lo.laneType() + " and " + hi.laneType());
@@ -369,13 +378,13 @@ final class VarkaDecimalCompiler {
   }
 
   /**
-   * A 64-bit decimal operand {@code x}, an unscaled long, as a pair of the wider type {@code to}
-   * at the same scale: its low word is {@code x} and its high word {@code x >> 63}, the sign
+   * A 64-bit decimal operand {@code x}, an unscaled long, as a pair of a wider type at the same
+   * scale: its low word is {@code x} and its high word {@code x >> 63}, the sign
    * extension. Type coercion casts {@code d18 < d38} to the wider type at one scale, which
    * changes no unscaled value, so the extension is the whole of the cast.
    */
-  static Pair widened(VarkaVectorIR x, DecimalType to, DeclineSink sink) {
-    return new Pair(x, new BitOp(BitOpKind.SHR, x, sink.longSlot(Long.SIZE - 1)), to);
+  static Pair widened(VarkaVectorIR x, DeclineSink sink) {
+    return new Pair(x, new BitOp(BitOpKind.SHR, x, sink.longSlot(Long.SIZE - 1)));
   }
 
   /**
@@ -396,6 +405,6 @@ final class VarkaDecimalCompiler {
           e);
     }
     DecimalWords words = DecimalWords.of(unscaled);
-    return Optional.of(new Pair(sink.longSlot(words.lo()), sink.longSlot(words.hi()), type));
+    return Optional.of(new Pair(sink.longSlot(words.lo()), sink.longSlot(words.hi())));
   }
 }

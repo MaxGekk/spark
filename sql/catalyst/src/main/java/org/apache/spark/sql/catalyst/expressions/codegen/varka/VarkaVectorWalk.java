@@ -584,13 +584,7 @@ final class VarkaVectorWalk {
           + VarkaVectorIR.canonical(c));
     }
     line(cb, analysis, c);
-    for (int half = 0; half < 2; half++) {
-      cb.aload(s.species);
-      emitDecimalSlotHalf(cb, s, s.srcSeg(c.ordinal()), half);
-      cb.invokestatic(lane.vector, "fromMemorySegment",
-          s.epilogue ? lane.fromMemorySegmentMasked : lane.fromMemorySegmentDense);
-      cb.astore(halves[half]);
-    }
+    emitDecimalSlotLoads(cb, s, c.ordinal(), halves);
     // lo = a.rearrange(EVEN, b), parked for the check and left on the stack for the parent.
     emitRearrange(cb, halves, s.decimalShuffle[0]);
     cb.dup();
@@ -657,13 +651,7 @@ final class VarkaVectorWalk {
     int lo = tmp[2];
     int hi = tmp[3];
     if (s.pairLoaded.add(key)) {
-      for (int half = 0; half < 2; half++) {
-        cb.aload(s.species);
-        emitDecimalSlotHalf(cb, s, s.srcSeg(w.ordinal()), half);
-        cb.invokestatic(lane.vector, "fromMemorySegment",
-            s.epilogue ? lane.fromMemorySegmentMasked : lane.fromMemorySegmentDense);
-        cb.astore(tmp[half]);
-      }
+      emitDecimalSlotLoads(cb, s, w.ordinal(), tmp);
       // The planted fault parks the other word from the visited word's own rearrange.
       boolean wrongSibling =
           VarkaDecimalFault.planted() == VarkaDecimalFault.SIBLING_FROM_WRONG_REARRANGE;
@@ -694,6 +682,23 @@ final class VarkaVectorWalk {
       emitGuardCollect(cb, w, dense ? null : s.wordRef.get(w), dense, analysis, s);
     }
     cb.aload(w.word() == VarkaVectorIR.Word.LOW ? lo : hi);
+  }
+
+  /**
+   * Loads a lane group's two vectors of sixteen-byte slots from column {@code ordinal} into
+   * {@code locals[0]} and {@code locals[1]}: the vector at the group's first slot and the one
+   * after it, masked in the epilogue ({@link #emitDecimalSlotHalf}). The 64-bit decimal's load
+   * and the 128-bit pair's shared load both start here.
+   */
+  private static void emitDecimalSlotLoads(CodeBuilder cb, Slots s, int ordinal, int[] locals) {
+    Lane lane = Lane.LONG;
+    for (int half = 0; half < 2; half++) {
+      cb.aload(s.species);
+      emitDecimalSlotHalf(cb, s, s.srcSeg(ordinal), half);
+      cb.invokestatic(lane.vector, "fromMemorySegment",
+          s.epilogue ? lane.fromMemorySegmentMasked : lane.fromMemorySegmentDense);
+      cb.astore(locals[half]);
+    }
   }
 
   /** {@code v.compare(op, c)} over the long vector parked in {@code local}: a mask. */

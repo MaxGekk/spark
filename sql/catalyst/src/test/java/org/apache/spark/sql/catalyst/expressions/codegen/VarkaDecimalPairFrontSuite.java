@@ -73,7 +73,6 @@ public final class VarkaDecimalPairFrontSuite {
       long hi = table.get(((LiteralSlot) pair.hi()).index());
       BigInteger unscaled = new java.math.BigDecimal(text).unscaledValue();
       assertEquals(unscaled, new DecimalWords(lo, hi).value(), text);
-      assertEquals(D38, pair.type());
     }
   }
 
@@ -96,7 +95,7 @@ public final class VarkaDecimalPairFrontSuite {
   void widenedIsTheSignExtension() {
     DeclineSink sink = sink();
     VarkaVectorIR x = new ColumnRef(0, LaneType.LONG);
-    Pair pair = VarkaDecimalCompiler.widened(x, D38, sink);
+    Pair pair = VarkaDecimalCompiler.widened(x, sink);
     assertEquals(x, pair.lo());
     BitOp hi = (BitOp) pair.hi();
     assertEquals(BitOpKind.SHR, hi.op());
@@ -112,7 +111,7 @@ public final class VarkaDecimalPairFrontSuite {
   @DisplayName("a pair's words are long-lane nodes")
   void pairWordsAreLong() {
     assertThrows(IllegalArgumentException.class,
-        () -> new Pair(new ColumnRef(0), new ColumnRef(1), D38));
+        () -> new Pair(new ColumnRef(0), new ColumnRef(1)));
   }
 
   @Test
