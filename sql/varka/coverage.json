@@ -4781,7 +4781,7 @@
     "catalyst" : [ "Cast", "GreaterThan", "Greatest" ],
     "casts" : [ "dec>dec:ansi" ],
     "operands" : [ "Cast:dec", "GreaterThan:dec", "Greatest:dec" ],
-    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "",
     "note" : "the null-skipping pick at DECIMAL(11, 4), each branch carrying its rescale",
     "verified" : "refinement: greatest(d9, d9s4) > d9b"
@@ -4793,7 +4793,7 @@
     "catalyst" : [ "Coalesce", "IsNull" ],
     "casts" : [ ],
     "operands" : [ "Coalesce:dec", "IsNull:dec" ],
-    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "null where every operand is: the validity of each leaf, ORed, and every leaf's slots checked",
     "verified" : "refinement: coalesce(d9, d9b) IS NULL"
@@ -4817,7 +4817,7 @@
     "catalyst" : [ "CaseWhen", "Cast", "GreaterThan", "LessThan" ],
     "casts" : [ "dec>dec:ansi" ],
     "operands" : [ "CaseWhen:dec", "Cast:dec", "GreaterThan:dec", "LessThan:dec" ],
-    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "a choice at DECIMAL(11, 4) under a comparison; the branch of the smaller scale carries its rescale",
     "verified" : "refinement: CASE WHEN d9 < d9b THEN d9 ELSE d9s4 END > 0.0"

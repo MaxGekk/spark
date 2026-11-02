@@ -39,6 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.Least;
 import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
@@ -156,25 +157,22 @@ final class VarkaDecimalCompiler {
           .map(x -> new Scaled(new IntNeg(Overflow.WRAP, x.unscaled()), x.type()));
       case Abs a -> value(a.child(), inputs, literals, sink)
           .map(x -> new Scaled(new IntNeg(Overflow.WRAP, x.unscaled(), true), x.type()));
-      case If i -> choice(i, List.of(i.predicate()), List.of(i.trueValue()), i.falseValue(),
-          type, inputs, literals, sink);
-      case CaseWhen c when c.elseValue().isEmpty() -> sink.decline("a CASE without an ELSE "
-          + "needs a typed null value, which is row 333's", c);
-      case CaseWhen c -> {
-        List<Tuple2<Expression, Expression>> branches = CollectionConverters.asJava(c.branches());
-        var predicates = new ArrayList<Expression>(branches.size());
-        var values = new ArrayList<Expression>(branches.size());
-        for (Tuple2<Expression, Expression> branch : branches) {
-          predicates.add(branch._1());
-          values.add(branch._2());
-        }
-        yield choice(c, predicates, values, c.elseValue().get(), type, inputs, literals, sink);
-      }
-      case Coalesce c -> coalesce(c, type, inputs, literals, sink);
-      case Greatest g -> pick(g, CollectionConverters.asJava(g.children()), type, inputs,
-          literals, sink, VarkaVectorIR.Greatest::new);
-      case Least l -> pick(l, CollectionConverters.asJava(l.children()), type, inputs,
-          literals, sink, VarkaVectorIR.Least::new);
+      // The choices and the picks are under the switch of the family that claims them in the
+      // chain, the condition family and the int arithmetic, as their int forms are: this path
+      // never passes through compileNode, so it asks the switch and notes the family itself.
+      case If i -> VarkaNodeCompiler.inFamily(VarkaFamily.CONDITION, () -> choice(i,
+          List.of(i.predicate()), List.of(i.trueValue()), i.falseValue(), type, inputs,
+          literals, sink), i, sink);
+      case CaseWhen c -> VarkaNodeCompiler.inFamily(VarkaFamily.CONDITION,
+          () -> caseWhen(c, type, inputs, literals, sink), c, sink);
+      case Coalesce c -> VarkaNodeCompiler.inFamily(VarkaFamily.CONDITION,
+          () -> coalesce(c, type, inputs, literals, sink), c, sink);
+      case Greatest g -> VarkaNodeCompiler.inFamily(VarkaFamily.INT_ARITHMETIC,
+          () -> pick(g, CollectionConverters.asJava(g.children()), type, inputs, literals, sink,
+              VarkaVectorIR.Greatest::new), g, sink);
+      case Least l -> VarkaNodeCompiler.inFamily(VarkaFamily.INT_ARITHMETIC,
+          () -> pick(l, CollectionConverters.asJava(l.children()), type, inputs, literals, sink,
+              VarkaVectorIR.Least::new), l, sink);
       default -> sink.decline("a decimal operator no arm builds yet: +, - and * are row 349's "
           + "and the rounding functions row 351's, and a quotient or a remainder is no row's in "
           + "this milestone", e);
@@ -454,6 +452,23 @@ final class VarkaDecimalCompiler {
       folded = new IfElse(conds.get(b), branches.get(b), folded);
     }
     return Optional.of(new Scaled(folded, type));
+  }
+
+  /** {@code CASE WHEN}, which needs an {@code ELSE}, as the {@link #choice} of its branches. */
+  private static Optional<Scaled> caseWhen(CaseWhen c, DecimalType type, VarkaSlotTable inputs,
+      VarkaSlotTable literals, DeclineSink sink) {
+    if (c.elseValue().isEmpty()) {
+      return sink.decline("a CASE without an ELSE needs a typed null value, which is row 333's",
+          c);
+    }
+    List<Tuple2<Expression, Expression>> branches = CollectionConverters.asJava(c.branches());
+    var predicates = new ArrayList<Expression>(branches.size());
+    var values = new ArrayList<Expression>(branches.size());
+    for (Tuple2<Expression, Expression> branch : branches) {
+      predicates.add(branch._1());
+      values.add(branch._2());
+    }
+    return choice(c, predicates, values, c.elseValue().get(), type, inputs, literals, sink);
   }
 
   /**
