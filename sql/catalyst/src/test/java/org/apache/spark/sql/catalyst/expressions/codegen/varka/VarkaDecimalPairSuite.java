@@ -614,25 +614,25 @@ public final class VarkaDecimalPairSuite {
     assertEquals(new BigDecimal(bound(38)).toBigInteger(), lo(0, 38).bound().value());
   }
 
-  /**
-   * Runs {@code check} with the lowering's {@code fault} planted, cleared after whatever happens.
-   * The load's faults are emit options instead ({@link DecimalFault}), planted per emission.
-   */
-  private static String planted(VarkaDecimalFault fault, java.util.function.Supplier<String>
-      check) {
-    VarkaDecimalFault.plantForTesting(fault);
-    try {
-      return check.get();
-    } finally {
-      VarkaDecimalFault.plantForTesting(VarkaDecimalFault.NONE);
-    }
-  }
-
   @Test
-  @DisplayName("planted: the low words compared signed is caught by the word edges")
+  @DisplayName("planted: the low words compared signed is caught by the word edges, under a key "
+      + "of its own")
   void plantedSignedLowWord() {
-    assertNotNull(planted(VarkaDecimalFault.LOW_WORD_SIGNED, () -> everyComparison(
-        new int[] {4})), "a signed low-word compare must disagree at a low word's sign bit");
+    assertNotNull(everyComparison(new int[] {4}, DecimalFault.LOW_WORD_SIGNED),
+        "a signed low-word compare must disagree at a low word's sign bit");
+    // The fault is the emission's option, not a JVM-wide switch: the IR is the clean one, the
+    // key and the bytes are not, and the clean emission is unchanged.
+    var roots = List.<VarkaVectorIR>of(new IfElse(compare(CompareOp.LT, new int[] {38, 38}),
+        new LiteralSlot(0, LaneType.LONG), new LiteralSlot(1, LaneType.LONG)));
+    VarkaEmitOptions clean = at(4);
+    VarkaEmitOptions faulty = clean.withDecimalFault(DecimalFault.LOW_WORD_SIGNED);
+    assertNotEquals(VarkaShapeCacheImpl.shapeHash(new VarkaShapeKey(roots, 2, 2, clean)),
+        VarkaShapeCacheImpl.shapeHash(new VarkaShapeKey(roots, 2, 2, faulty)));
+    String name = "org.apache.spark.sql.varka.execution.VarkaFusedSignedLowWord";
+    byte[] before = VarkaLoopEmitter.emit(name, roots, 2, 2, null, null, clean);
+    assertTrue(!java.util.Arrays.equals(before,
+        VarkaLoopEmitter.emit(name, roots, 2, 2, null, null, faulty)), "the fault moved no byte");
+    assertArrayEquals(before, VarkaLoopEmitter.emit(name, roots, 2, 2, null, null, clean));
   }
 
   @Test

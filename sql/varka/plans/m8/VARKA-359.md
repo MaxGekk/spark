@@ -625,9 +625,9 @@ both bodies): the slot table over precisions 19, 20, 30 and 38 and lengths 1, 3,
 `ArrowColumnVector.getDecimal`; a body reading both words loads and rearranges once; the word
 edges of every comparison, `<>` and `<=>` against `BigInteger`, three-valued, over the words'
 sign bits, zero low words and both high signs with every null pattern, and `d18 < d38` widened;
-the null test still checking the slots; and the three planted faults of 11.7 (`VarkaDecimalFault`:
-the low words compared signed, the bound at `10^p`, the sibling parked from the visited word's
-rearrange), each caught.
+the null test still checking the slots; and the three planted faults of 11.7 (the emit option
+`VarkaEmitOptions.DecimalFault`: the low words compared signed, the bound at `10^p`, the sibling
+parked from the visited word's rearrange), each caught.
 
 **Departures.** The lowering of `>` and `>=` is direct (`GT`/`UGT`, `GE`/`UGE`), not the swapped
 `<`: the same lane calls, and the carry layer proves the form emitted. The pair's locals are four
@@ -719,8 +719,9 @@ conditions and values, and `IS NULL`. Load runs `x < y`, `x = 2^64 + 5` (a liter
 values, and cancels on `greatest` and `least` alone. Those three are owed to the census's rows,
 row 359 among them, where 359b builds them. Choice and round trip cancel on the choices
 (359b), the cast row on the casts (rows 350 and 364), and overflow on the arithmetic (360 to
-363). With `VarkaDecimalFault.LOW_WORD_SIGNED` planted for one run, load, null handling and
-ordering fail: the reference evaluates the faulty lowering and disagrees with Spark.
+363). With the low words compared signed planted for one run (then a JVM-wide switch, since the
+third review the emit option `decimalFault=LOW_WORD_SIGNED`), load, null handling and ordering
+fail: the faulty kernel disagrees with the reference and with Spark.
 
 Six of the suite's seven tests end cancelled, by design, until 359b and rows 360 to 364 land; each
 message names every owed form. Under the fused-in-part rule a one-scale comparison that started
@@ -740,11 +741,11 @@ time in its own JVM (the final run's JUnit total, seven tests), the fork's start
   (`VarkaEmitOptions.DecimalFault`, a fault injector in the options table, rendered only off its
   default), so a faulty class is cached under a key of its own, and the defaults' rendering and
   `emitted_bytes.json` do not move. This corrects 10.3's departure: the planting is no longer
-  one enum read at emit time. `VarkaDecimalFault` keeps the low words compared signed alone,
-  which the lowering reads while it builds the IR, so a kernel under it is a different IR and a
-  different key. `VarkaDecimalPairSuite` gains a test that, through one cache, a faulty key
-  hashes apart from the clean one, answers wrongly, and leaves the clean kernel emitted after it
-  declining `10^38` and reading every word, its bytes those emitted before. The same pattern
+  one enum read at emit time. The low words compared signed stayed a JVM-wide switch the
+  lowering read; the third review below moves it into the same option. `VarkaDecimalPairSuite`
+  gains a test that, through one cache, a faulty key hashes apart from the clean one, answers
+  wrongly, and leaves the clean kernel emitted after it declining `10^38` and reading every word,
+  its bytes those emitted before. The same pattern
   remains in `VarkaFloatingFault.DIVISOR_POSITIVE_ZERO_ONLY`, read at emit time in
   `VarkaVectorWalk`; it is row 342's code, left to the lead.
 - **The literal fold was written twice** in `VarkaDecimalCompiler`; `foldLiteral` is the one
@@ -755,6 +756,15 @@ time in its own JVM (the final run's JUnit total, seven tests), the fork's start
   loads, the two rearranges and the six compares - and five mask calls; the budget charges nine,
   the first load being paid once per column as every leaf's, and the weight's doc now says so.
 
+**A third review (2 November 2026)** found more on 359a's own code; each was fixed:
+
+- **The comparisons' fault was still a JVM-wide switch.** `VarkaDecimalFault.LOW_WORD_SIGNED`
+  was read by `DecimalPairLowering` while it built the IR, so a concurrent compile of a wide
+  decimal comparison in the same JVM lowered its low words signed and answered wrongly. It is now
+  the third value of the `decimalFault` emit option: the lowering always builds the unsigned
+  compares, and `VarkaVectorWalk` emits an unsigned compare as its signed form under the option
+  (only the pair's low words are unsigned compares). `VarkaDecimalFault` is gone; the defaults'
+  key and `emitted_bytes.json` do not move.
 **Still owed.** The suite holds the pair's representation only. The 64-bit one (DECIMAL(10, 2),
 row 347's leaf) reads the same sixteen-byte slots, and `DecimalSlotLane` already reads its leaf.
 It needs a second suite class, which the census's one-name-per-type check does not provide for

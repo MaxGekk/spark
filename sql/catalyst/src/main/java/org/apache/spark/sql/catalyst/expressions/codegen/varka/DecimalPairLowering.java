@@ -74,14 +74,17 @@ public final class DecimalPairLowering {
     return new And(new NullSafeEqual(xHi, yHi), new NullSafeEqual(xLo, yLo));
   }
 
-  /** The low words' compare of an order {@code op}: its unsigned form, or a planted fault's. */
+  /**
+   * The low words' compare of an order {@code op}: its unsigned form. A test plants the signed
+   * form at emit time, from the emission's options
+   * ({@link VarkaEmitOptions.DecimalFault#LOW_WORD_SIGNED}), and never here.
+   */
   private static CompareOp lowWord(CompareOp op) {
-    boolean faulty = VarkaDecimalFault.planted() == VarkaDecimalFault.LOW_WORD_SIGNED;
     return switch (op) {
-      case LT -> faulty ? CompareOp.LT : CompareOp.ULT;
-      case LE -> faulty ? CompareOp.LE : CompareOp.ULE;
-      case GT -> faulty ? CompareOp.GT : CompareOp.UGT;
-      case GE -> faulty ? CompareOp.GE : CompareOp.UGE;
+      case LT -> CompareOp.ULT;
+      case LE -> CompareOp.ULE;
+      case GT -> CompareOp.UGT;
+      case GE -> CompareOp.UGE;
       case EQ, ULT, ULE, UGT, UGE -> throw VarkaErrors.illegalState("unreachable: " + op);
     };
   }

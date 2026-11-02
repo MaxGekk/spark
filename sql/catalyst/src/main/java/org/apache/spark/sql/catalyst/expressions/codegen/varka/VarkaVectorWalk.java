@@ -1989,6 +1989,26 @@ final class VarkaVectorWalk {
   }
 
   /**
+   * The operator a {@code Compare} of {@code op} is emitted with: {@code op} itself, unless the
+   * emission's options plant {@link DecimalFault#LOW_WORD_SIGNED}, which emits an unsigned
+   * compare as its signed form. Only {@code DecimalPairLowering} builds an unsigned compare, for
+   * a 128-bit decimal's low words, so the fault reaches those alone; read from the emission's
+   * options, it is in the shape key and never reaches a concurrent clean compile.
+   */
+  private static CompareOp emittedOp(CompareOp op, VarkaEmitOptions options) {
+    if (options.decimalFault() != DecimalFault.LOW_WORD_SIGNED) {
+      return op;
+    }
+    return switch (op) {
+      case ULT -> CompareOp.LT;
+      case ULE -> CompareOp.LE;
+      case UGT -> CompareOp.GT;
+      case UGE -> CompareOp.GE;
+      case LT, LE, GT, GE, EQ -> op;
+    };
+  }
+
+  /**
    * Emits a condition node: in the dense body a single {@code VectorMask} local (every input
    * lane is valid, so known-true is the comparison itself and known-false its complement); in
    * the masked body the known-true / known-false word pair of plan 2.6.
@@ -2001,8 +2021,8 @@ final class VarkaVectorWalk {
     computed.add(node);
     switch (node) {
       case Compare n -> {
-        emitLaneCompare(cb, n.op().name(), n.left(), n.right(), node, dense, analysis, s,
-            computed);
+        emitLaneCompare(cb, emittedOp(n.op(), analysis.options).name(), n.left(), n.right(),
+            node, dense, analysis, s, computed);
         if (dense) {
           cb.astore(s.condMask.get(node));
         } else {

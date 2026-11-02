@@ -540,8 +540,8 @@ public sealed interface VarkaEmitOption
       new Choice<>("decimalStore", Reason.MACHINE, DecimalStore.class, DecimalStore.REARRANGE,
           VarkaEmitOptions::decimalStore, Builder::decimalStore,
           new ChoiceTag("decimalStore="), Optional.of(WidenDecimal.class)),
-      // Only the 128-bit decimal's load reads it; a fault injector is never drawn, so it needs
-      // no readOnlyBy to stay out of the general draws.
+      // Only the 128-bit decimal's load and its unsigned low-word compares read it; a fault
+      // injector is never drawn, so it needs no readOnlyBy to stay out of the general draws.
       new Choice<>("decimalFault", Reason.FAULT_INJECTOR, DecimalFault.class, DecimalFault.NONE,
           VarkaEmitOptions::decimalFault, Builder::decimalFault,
           new ChoiceTag("decimalFault="), Optional.empty()));

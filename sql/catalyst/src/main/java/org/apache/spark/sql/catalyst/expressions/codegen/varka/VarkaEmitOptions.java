@@ -493,8 +493,9 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * @param decimalStore how a {@code WidenDecimal} root interleaves its words into Arrow's
  *        sixteen-byte decimal slots (VARKA-157 2.2): see {@link DecimalStore}. No other root reads
  *        it, so every shape without a decimal output emits the same bytes under either value.
- * @param decimalFault a wrong lowering planted in the 128-bit decimal's load, so a test can show
- *        that the checks over it fail (milestone 8 row 504): see {@link DecimalFault}. An option
+ * @param decimalFault a wrong lowering planted in the 128-bit decimal's load or comparisons, so a
+ *        test can show that the checks over them fail (milestone 8 row 504): see
+ *        {@link DecimalFault}. An option
  *        rather than a JVM-wide switch, so that a faulty class is cached under a key of its own
  *        and never served to a clean emission of the same shape. {@link DecimalFault#NONE} in
  *        production.
@@ -594,10 +595,10 @@ public record VarkaEmitOptions(
   public enum DecimalStore { REARRANGE, SELECT_FROM }
 
   /**
-   * The faults a test plants in the 128-bit decimal's load (milestone 8 row 504,
+   * The faults a test plants in the 128-bit decimal's load and comparisons (milestone 8 row 504,
    * {@code m8/VARKA-359.md} 11.7), each a plausible wrong emission that agrees with Spark on most
-   * inputs. The comparisons' fault changes the IR rather than the emission, and so is planted
-   * through {@link VarkaDecimalFault} instead.
+   * inputs. Each is read at emit time from the emission's own options, so a faulty class is
+   * cached under a key of its own and a concurrent clean compile in the same JVM never sees it.
    */
   public enum DecimalFault {
     /** No fault: the load as built. */
@@ -611,7 +612,14 @@ public record VarkaEmitOptions(
      * The sibling word parked from the visited word's own rearrange, so that both words of a
      * column read the same half of its slots.
      */
-    SIBLING_FROM_WRONG_REARRANGE
+    SIBLING_FROM_WRONG_REARRANGE,
+    /**
+     * The low words compared signed ({@code LT} for {@code ULT}, and so on), which is wrong
+     * exactly where one low word has its sign bit set and the high words are equal. An unsigned
+     * {@code Compare} is built only by {@code DecimalPairLowering} for a pair's low words, so the
+     * emitter swaps the signed form in for every unsigned compare of the emission.
+     */
+    LOW_WORD_SIGNED
   }
 
   /*
