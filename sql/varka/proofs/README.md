@@ -116,8 +116,8 @@ serves; before, it was assumed, and a cached far day was served wrong.
    script's `CVC5_IN_LINT` names it, which it does for a file cvc5 proves much faster. On the
    laptop (VARKA-344): `long_divide.smt2` takes Z3 32 s and cvc5 9 to 11 s, `round_divide.smt2`
    Z3 74 s and cvc5 20 to 22 s, and `integral_round.smt2` Z3 5 s and cvc5 1 to 2 s, so `--lint`
-   takes 22 s there, where it took 45 s with the `5^k` in `long_divide.smt2` and the files run
-   one after another.
+   takes 22 s there, 25 s held to four cores as the runner's are, where it took 45 s with the
+   `5^k` in `long_divide.smt2` and the files run one after another.
 4. cvc5 is the fragile one (`VARKA-242.md` 2.2 and 9). Where it answers `unknown`, try in order:
    `(set-logic ALL)` in place of `QF_NIA`; one lemma per step over named digits or quotients, so
    each check is linear arithmetic over a few small variables; a residue written as 7 times a

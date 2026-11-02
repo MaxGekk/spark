@@ -673,8 +673,9 @@ committed files:
    `round_divide.smt2` has 1997, both under cvc5 in `--lint`, which runs the files side by side.
    Laptop times, one window: `long_divide.smt2` Z3 32 s, cvc5 9 to 11 s; `round_divide.smt2`
    Z3 74 s, cvc5 20 to 22 s; `integral_round.smt2` Z3 5 s, cvc5 1 to 2 s; `--lint` 22 s over
-   three runs, against 45 s for the old file and serial step in the same window (80 s beside a
-   load of about 4 earlier the same night).
+   three runs, 25 s held to four cores (`VARKA_PROVE_JOBS=4 taskset -c 0-3`), the runner's
+   count, against 45 s for the old file and serial step in the same window (80 s beside a load
+   of about 4 earlier the same night).
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
    disposal.

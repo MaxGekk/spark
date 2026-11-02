@@ -18,8 +18,8 @@
 # The SMT proofs under sql/varka/proofs/ (VARKA-240), run by a solver with every verdict checked.
 #
 #   dev/varka_prove.sh                          # every proof under Z3
-#   dev/varka_prove.sh --lint                   # as the linters' job runs them: CVC5_IN_LINT's under
-#                                               # cvc5, every other under Z3
+#   dev/varka_prove.sh --lint                   # as the linters' job runs them, side by side:
+#                                               # CVC5_IN_LINT's under cvc5, every other under Z3
 #   dev/varka_prove.sh --solver both            # under Z3 and cvc5, each held to every expectation
 #   dev/varka_prove.sh --solver cvc5 int_mulhi_divide.smt2
 #   dev/varka_prove.sh --install z3|cvc5|both   # the pinned solvers, into target/varka-solvers/
@@ -37,7 +37,8 @@
 #
 # A solver is taken from $VARKA_Z3 or $VARKA_CVC5, else from target/varka-solvers/, else from
 # PATH. VARKA_PROVE_LIMIT_MS bounds each check (default 10000) and VARKA_PROVE_RUN_LIMIT each
-# file's run under one solver, in seconds (default 300). Exit status 0 when every proof holds.
+# file's run under one solver, in seconds (default 300); VARKA_PROVE_JOBS caps --lint's files at
+# once (default the cores). Exit status 0 when every proof holds.
 set -uo pipefail
 # Usage text is found rather than numbered (see dev/varka_nightly.sh): from the line after the
 # license to the first line that is not a comment.
@@ -56,9 +57,9 @@ CVC5_SHA256=2f8efe58fe27ba7bccbb504533f690b9312d69da14192712460e4a19231f02a1
 # each where cvc5 is several times faster; --lint runs the files side by side, so the step takes
 # about as long as its slowest file. Laptop times, Z3 against cvc5 (VARKA-344): long_divide.smt2,
 # 983 checks, 32 s against 9 to 11 s; round_divide.smt2, the rounding's 5^k, 1997 checks, 74 s
-# against 20 to 22 s; integral_round.smt2 5 s against 1 to 2 s. --lint takes 22 s there, where
-# with the 5^k in long_divide.smt2 and the files one after another it took 45 s in the same
-# window; the runner is about twice the laptop.
+# against 20 to 22 s; integral_round.smt2 5 s against 1 to 2 s. --lint takes 22 s there, 25 s
+# held to four cores as the runner's are, where with the 5^k in long_divide.smt2 and the files
+# one after another it took 45 s in the same window; the runner is about twice the laptop.
 CVC5_IN_LINT=(long_divide.smt2 round_divide.smt2 integral_round.smt2)
 limit_ms="${VARKA_PROVE_LIMIT_MS:-10000}"
 run_limit="${VARKA_PROVE_RUN_LIMIT:-300}"
@@ -365,24 +366,36 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 failed=0
 if [ "$mode" = lint ]; then
-  # The files side by side, at most one per core, each report printed in file order once all
-  # are done; a file's time is its own run's, beside the others.
-  jobs_max="$(nproc 2>/dev/null || echo 4)"
+  # The files side by side, at most VARKA_PROVE_JOBS at once (default one per core), the
+  # CVC5_IN_LINT files, the slowest, started first. Each run writes its report and its status to
+  # files, so a slot is refilled as soon as any run ends (wait -n) without a status being lost to
+  # it, and the reports print in file order once all are done. A file's time is its own run's,
+  # beside the others.
+  jobs_max="${VARKA_PROVE_JOBS:-$(nproc 2>/dev/null || echo 4)}"
   out_dir="$(mktemp -d)"
-  pids=()
-  i=0
-  for f in "${files[@]}"; do
+  heavy=()
+  light=()
+  for i in "${!files[@]}"; do
+    f="${files[$i]}"
     [ -f "$f" ] || f="$proofs/$f"
+    files[$i]="$f"
     name=z3
     for c in "${CVC5_IN_LINT[@]}"; do [ "$(basename "$f")" = "$c" ] && name=cvc5; done
-    while [ "$(jobs -rp | wc -l)" -ge "$jobs_max" ]; do wait -n; done
-    run_file "$name" "${paths[$name]}" "$f" > "$out_dir/$i" 2>&1 &
-    pids+=("$!")
-    i=$((i + 1))
+    if [ "$name" = cvc5 ]; then heavy+=("$i"); else light+=("$i"); fi
   done
-  for j in "${!pids[@]}"; do
-    wait "${pids[$j]}" || failed=$((failed + 1))
-    cat "$out_dir/$j"
+  for i in "${heavy[@]}" "${light[@]}"; do
+    while [ "$(jobs -rp | wc -l)" -ge "$jobs_max" ]; do wait -n; done
+    name=z3
+    for c in "${heavy[@]}"; do [ "$c" = "$i" ] && name=cvc5; done
+    (
+      run_file "$name" "${paths[$name]}" "${files[$i]}" > "$out_dir/$i" 2>&1
+      echo "$?" > "$out_dir/$i.status"
+    ) &
+  done
+  wait
+  for i in "${!files[@]}"; do
+    cat "$out_dir/$i"
+    [ "$(cat "$out_dir/$i.status" 2>/dev/null)" = 0 ] || failed=$((failed + 1))
   done
   rm -rf "$out_dir"
 else
