@@ -667,6 +667,67 @@ checks, 67 of the ring layer and 26 of the carry layer; Z3 0.03 s and cvc5 0.09 
    decline, and the two comparisons as values fuse and record C2's `not supported` lines, the
    Java fallback 11.4 expected there. Holds.
 
+### 10.4 359a, the review's findings and the owed half (2 November 2026)
+
+*Branch `varka-359a-pair`, from `9893a33eef4`; local commits only.* A review of 10.3's diff
+found five things; each was verified and fixed:
+
+- **The budget under-charged a body holding one word.** 10.3 item 7 split the shared load's
+  nine lane calls between the words (the low 5, the high 4), but the first visit of either word
+  emits the whole load, so a body holding only the low word - Spark's inferred `isnotnull(d38)` -
+  was charged about half of what it emits. This corrects 10.3 item 7: each word now weighs the
+  whole load (`VarkaEmitBudget.DECIMAL_PAIR_LOAD_WEIGHT`, 9), and `GroupOps` takes it back from
+  the second word of a column in the same group, so the budget never under-predicts. The register
+  reads a shape's two words of one column as one load and gains a row for each word alone.
+- **The two-half slot load was written twice**; `emitDecimalSlotLoads` is the one helper the
+  64-bit load and the pair's shared load call. `emitted_bytes.json` did not move.
+- **`Pair` carried a type nothing read.** It is `Pair(lo, hi)` now, and `widened` takes no target
+  type. A departure from 2.2 and 11.5 item 4, which wrote `Pair(lo, hi, type)`: no step of 359b
+  reads it either, since the store binds the output expression's own `dataType` (2.4).
+- **The precision test above 18 digits was written twice** in `VarkaDecimalCompiler`;
+  `widerThanLong` is the one predicate `operands()` and `wideType` share.
+- **`DecimalWords` re-declared two constants**; it reads `DecimalColumn.MAX_LONG_PRECISION` and
+  `DecimalType.MAX_PRECISION` as their other users now do.
+
+**The two-lane case.** `VarkaTwoLaneConditionSuite` pins that `d38 < d38b` as its words is
+refused on the planted two-lane x86 host with row 503's reason and admitted on a wider one, that
+the null test over the low word is refused beside it, and that the comparison as a projected
+`BOOLEAN` value is admitted on both (11.4).
+
+**Item 5, the conformance suite.** It hit a census gap first. The census counts `dec` fused for
+the comparisons only once rows 360 and 363 bring the rescale across two scales (the `<` note),
+while at one scale they fuse. The harness calls a form that fuses against the register drift,
+so the suite would have failed. The lead's answer (2 November 2026) was a census marker, not
+a harness allowance or a claim: a type marked `^` in `census_curated.txt` is *fused in part*. It
+goes to `census.tsv`'s new last column, `fused_in_part`, never to `fused_today`, so the counts
+and the need rule read it as unfused (the first twelve columns came out byte-identical), and a
+coverage row must still show it. The harness checks a form whose type is fused in part where it
+fuses and owes it where it declines; a form the census owes with no marker is still drift. The
+seven comparisons (`<`, `<=`, `>`, `>=`, `=`, `==`, `<=>`) carry `dec^`.
+
+The harness's sixteen-byte path: `VarkaKernelChecks.runLoadedDecimal` runs a kernel whose
+columns are decimal slots (`DecimalSlotLane`). A drawn value is an index into the suite's table
+of unscaled values, each slot is written as the value's two words, a null slot holds `2^127 - 1`
+or `-2^127`, and the reference reads each word leaf as a column of a row twice as wide.
+`VarkaSparkOracle.answerInternal` takes Catalyst's values, so the harness hands Spark the
+`Decimal` an index names. `VarkaDecimalConformanceSuite` runs at the registry's
+`DECIMAL(30, 4)` over eleven values: the bounds and their neighbours, `2^63`, `-2^63 - 1`,
+`-2^64`, `2^64 + 5`, and zero and one each way. The registry's entry is `Suite("Decimal")`.
+**What it answers.** Null handling passes whole: `x < y` as the pair form, `=` and `<=>` as
+conditions and values, and `IS NULL`. Load runs `x < y`, `x = 2^64 + 5` (a literal pair) and
+`IS NOT NULL`, and cancels on `IN` alone. Ordering runs the six comparisons as conditions and
+values, and cancels on `greatest` and `least` alone. Those three are owed to the census's rows,
+row 359 among them, where 359b builds them. Choice and round trip cancel on the choices
+(359b), the cast row on the casts (rows 350 and 364), and overflow on the arithmetic (360 to
+363). With `VarkaDecimalFault.LOW_WORD_SIGNED` planted for one run, load, null handling and
+ordering fail: the reference evaluates the faulty lowering and disagrees with Spark.
+
+**Still owed.** The suite holds the pair's representation only. The 64-bit one (DECIMAL(10, 2),
+row 347's leaf) reads the same sixteen-byte slots, and `DecimalSlotLane` already reads its leaf.
+It needs a second suite class, which the census's one-name-per-type check does not provide for
+(open point for the lead). Every value form over a pair declines until 359b, so the slot lane
+writes no decimal output.
+
 ## 11. 359a, the build plan (1 November 2026)
 
 Written from master at `239995f4fe4` before the laptop's reading of the spike, so that 359a can

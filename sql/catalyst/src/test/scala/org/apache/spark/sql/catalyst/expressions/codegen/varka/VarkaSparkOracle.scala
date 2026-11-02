@@ -84,6 +84,15 @@ class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
         case _ => throw new IllegalArgumentException(s"no kernel input of type ${types(k)}")
       }
     }
+    answerInternal(o, values)
+  }
+
+  /**
+   * Spark's answer for output `o` on a row of Catalyst's internal values, `null` for a null
+   * input: for an input no lane value carries whole, such as a 128-bit decimal's `Decimal`,
+   * which a harness builds from the slot's two words.
+   */
+  def answerInternal(o: Int, values: Seq[Any]): VarkaSparkOracle.Answer = {
     try {
       bound(o).eval(new GenericInternalRow(values.toArray[Any])) match {
         case null => VarkaSparkOracle.Null
