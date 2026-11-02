@@ -79,8 +79,9 @@ import org.apache.spark.sql.types.DecimalType;
  * {@code >= 0} is the identity in every mode.
  *
  * <p>Public for {@code VarkaProofFiles}, which renders {@code integral_round.smt2} from
- * {@link #preShiftLimit}, {@link #preShiftBound} and {@link #window}; the family is reached
- * through {@link #arm} alone.
+ * {@link #preShiftLimit}, {@link #preShiftBound} and {@link #window}, and for
+ * {@code VarkaDomains}, whose edges fixture straddles {@link #preShiftLimit}; the family is
+ * reached through {@link #arm} alone.
  */
 public final class VarkaRoundingCompiler {
 
