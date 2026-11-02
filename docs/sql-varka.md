@@ -358,6 +358,16 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `extract(YEAR FROM ym)` | `interval` |  | a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does | vector |
 | `extract(YEAR FROM ym) - 1` | `interval`, `intArithmetic` | `extract(YEAR FROM ym) > -2147483648` | the quotient feeding further int arithmetic, checked under ANSI; the check cannot fire, since the quotient is within +/-178956970 | vector |
 
+#### Day-time interval arithmetic
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `dt + dt2` | `interval` | `if(dt IS NULL OR dt2 IS NULL, NULL, try_add(dt, dt2) IS NOT NULL)` | a sum past the long raises in every mode, so its batch declines and the row engine raises | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `dt - dt2` | `interval` | `if(dt IS NULL OR dt2 IS NULL, NULL, try_subtract(dt, dt2) IS NOT NULL)` | the difference, exact in every mode as the sum is | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `-dt` | `interval` | `dt <> INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND` | negateExact raises on the least interval alone | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `abs(dt)` | `interval` | `dt <> INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND` | the checked negation under a blend; Spark raises on the least interval in every mode, with ARITHMETIC_OVERFLOW rather than the interval condition | per-lane: compare to mask, mask logic, blend, mask broadcast, mask test, mask cast |
+| `dt + INTERVAL '1' DAY` | `interval` | `if(dt IS NULL, NULL, try_add(dt, INTERVAL '1' DAY) IS NOT NULL)` | the literal, cast to the column's unit and folded, takes a slot in the long lane's table | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+
 #### Integer arithmetic
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |
@@ -877,7 +887,7 @@ operands (a row counts once for each type it reads):
 | `date` | 87 | 17 | 0 | 1 | 0 | 69 |
 | `dec` | 17 | 0 | 0 | 0 | 0 | 17 |
 | `double` | 37 | 0 | 0 | 0 | 0 | 37 |
-| `dt` | 20 | 2 | 0 | 0 | 0 | 18 |
+| `dt` | 25 | 2 | 0 | 0 | 0 | 23 |
 | `float` | 29 | 0 | 0 | 0 | 0 | 29 |
 | `int` | 75 | 14 | 2 | 0 | 1 | 58 |
 | `ntz` | 24 | 0 | 1 | 0 | 0 | 23 |

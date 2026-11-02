@@ -106,7 +106,9 @@ class VarkaDayTimeIntervalBaselineQueriesSuite extends QueryTest with VarkaShare
       val sections = VarkaDayTimeIntervalBaselineBenchmark.sections().asScala.toSeq
       assert(sections.size === 2 * resultTypes.size)
       assert(sections.filter(_.fuses).map(_.title) === Seq(
+        "dt + dt2 - dt, no nulls", "abs(dt), no nulls",
         "filter dt > dt2, control, fuses today, no nulls",
+        "dt + dt2 - dt, one row in ten null", "abs(dt), one row in ten null",
         "filter dt > dt2, control, fuses today, one row in ten null"))
       for ((s, index) <- sections.zipWithIndex) {
         withClue(s.title) {
@@ -120,7 +122,7 @@ class VarkaDayTimeIntervalBaselineQueriesSuite extends QueryTest with VarkaShare
             checkAnswer(varkaSpark.sql(s.query), answer)
             val noNulls = s.title.endsWith("no nulls")
             val nulls = if (s.query.contains("WHERE")) {
-              val kept = if (s.fuses) {
+              val kept = if (s.query.contains("> dt2")) {
                 controlKept - (if (noNulls) 0 else k.getLong(1))
               } else {
                 hourKept - (if (noNulls) 0 else k.getLong(0))
