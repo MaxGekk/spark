@@ -29,15 +29,19 @@ import org.junit.jupiter.api.Test;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan.Kind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan.Refusal;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalWord;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Word;
 
 /**
  * The compiler's refusal of a long-lane condition on an x86 host whose long species has two
@@ -134,5 +138,27 @@ public final class VarkaTwoLaneConditionSuite {
   void planIsPure() {
     var lt = new Compare(CompareOp.LT, L, L2);
     assertTrue(VarkaKernelPlan.of(List.of(lt), VarkaMatrixRuns.BASE).refusal().isEmpty());
+  }
+
+  @Test
+  @DisplayName("a 128-bit decimal filter is refused on the two-lane host with the two-lane "
+      + "reason and admitted elsewhere, and the comparison as a value is admitted on both")
+  void decimalPairCondition() {
+    // `d38 < d38b` as its words (`m8/VARKA-359.md` 11.4): the strict compare of the high words
+    // and the unsigned one of the low words, every mask a long one.
+    var x = new DecimalWord(0, Word.LOW, 38);
+    var y = new DecimalWord(1, Word.LOW, 38);
+    Cond lt = DecimalPairLowering.compare(CompareOp.LT, x, x.sibling(), y, y.sibling());
+    Optional<Refusal> refused = admit(lt, true);
+    assertTrue(refused.isPresent());
+    assertEquals(Kind.TWO_LANE_CONDITION, refused.get().kind());
+    assertEquals(VarkaKernelPlan.TWO_LANE_CONDITION_REASON, refused.get().reason());
+    assertTrue(admit(lt, false).isEmpty());
+    // The null test Spark infers beside it reads the low word alone, and is refused too.
+    assertTrue(admit(new IsNotNull(x), true).isPresent());
+    assertTrue(admit(new IsNotNull(x), false).isEmpty());
+    // The comparison as a projected BOOLEAN value stays fused, as row 503 leaves projections.
+    assertTrue(admit(new BoolOutput(lt), true).isEmpty());
+    assertTrue(admit(new BoolOutput(lt), false).isEmpty());
   }
 }
