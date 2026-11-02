@@ -562,8 +562,9 @@ Predictions, registered before the build:
    master, whose baselines record a `Fusion` class per section in place of a flag, the baseline
    marks those three sections and the control `WHOLE` and the rest `NONE`, and its queries suite
    makes the fuse check itself under `PinsDefaults`, as the other baselines' suites now do. No fuzz
-   production: an overflowing product raises a bare
-   `ArithmeticException`, which the Spark-level fuzzer's expected-errors list cannot name, as for
+   production: an overflowing product raises a bare `ArithmeticException`, which reaches the
+   Spark-level fuzzer as the job's `SparkException` with no condition, a class its expected-errors
+   list cannot hold without excusing every task failure, as `VarkaCatalystGrammar` says of
    `ym * k`. Left of 103a: `ym * k` (2.2's int-lane half), `extract(DAY)` with `truncDivLong`,
    2.4's day split and the decimal literal forms, the rest of 3.1's proofs, their cells and rows,
    and the first planted fault.
