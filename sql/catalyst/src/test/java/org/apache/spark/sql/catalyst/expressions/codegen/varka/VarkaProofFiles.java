@@ -212,6 +212,14 @@ final class VarkaProofFiles {
       >> Long.numberOfTrailingZeros(DateTimeConstants.MICROS_PER_DAY);
 
   /**
+   * The divisors of the integral rounding's pre-shift over a {@code BIGINT}
+   * ({@code VarkaRoundingCompiler.preShiftForm}, VARKA-344): {@code 5^k} for each scale
+   * {@code -k} from -1 to -18. Their dividend is {@code |x| >>> k}, which the guard keeps under
+   * 2^52, so the conversion form's behaviour past 2^53 is no fact about them and is not stated.
+   */
+  static final List<Long> ROUNDING_DIVISORS = roundingDivisors();
+
+  /**
    * The long-lane constant divisors: every one the {@code TIME} compiler divides by
    * ({@code VarkaTimeCompiler}'s {@code subtractTimes}, {@code timeDiff}, {@code timeTrunc}, the
    * conversions to milliseconds and microseconds, the field extracts and
@@ -222,14 +230,6 @@ final class VarkaProofFiles {
    * one here that none compiles, -60 apart. The {@link #ROUNDING_DIVISORS} close the list.
    */
   static final List<Long> LONG_DIVISORS = longDivisors();
-
-  /**
-   * The divisors of the integral rounding's pre-shift over a {@code BIGINT}
-   * ({@code VarkaRoundingCompiler.preShiftForm}, VARKA-344): {@code 5^k} for each scale
-   * {@code -k} from -1 to -18. Their dividend is {@code |x| >>> k}, which the guard keeps under
-   * 2^52, so the conversion form's behaviour past 2^53 is no fact about them and is not stated.
-   */
-  static final List<Long> ROUNDING_DIVISORS = roundingDivisors();
 
   private static List<Long> roundingDivisors() {
     var out = new ArrayList<Long>();
@@ -252,7 +252,7 @@ final class VarkaProofFiles {
         (long) DateTimeConstants.SECONDS_PER_MINUTE,
         -60L,
         NTZ_DAY_ODD));
-    out.addAll(roundingDivisors());
+    out.addAll(ROUNDING_DIVISORS);
     return List.copyOf(out);
   }
 

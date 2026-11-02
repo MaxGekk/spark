@@ -43,6 +43,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.PartialVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaConjunctSpec;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaInputBound;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaRoundingCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpecs;
@@ -161,8 +162,9 @@ public final class VarkaDomains {
    * a {@code d} past those days beside a null {@code ntz2}; {@code ym} at the month range on both
    * signs, at the one count whose negation overflows and one in from it, and at the counts whose
    * difference with {@code ymm} leaves the int, {@code ymm} at its most negative; a time at each
-   * end of the day; the narrow lanes' bounds; {@code l} at the long division's {@code 2^52} and
-   * at half of {@code 10^19}, one in and one out on each sign, the long rounding's bounds. Then
+   * end of the day; the narrow lanes' bounds; {@code l} at the long division's {@code 2^52}, at
+   * the pre-shift's {@code 2^55} at -3 and at half of {@code 10^19}, one in and one out on each
+   * sign, the long rounding's bounds. Then
    * rows null in those columns, one column group at
    * a time and all at once, which the {@code IS NULL} partitions select. The other columns hold
    * the mixed fixture's first row.
@@ -179,12 +181,14 @@ public final class VarkaDomains {
     ints.addAll(around(1, 12));
     var rows = new ArrayList<String>();
     ints.forEach(i -> rows.add(row("i", Long.toString(i))));
-    // The long rounding's guards (VARKA-344): the 2^52 the long division is exact under, and
-    // the half of 10^19, where round and bround at -19 leave the long.
+    // The long rounding's guards (VARKA-344): the 2^52 the long division is exact under, the
+    // pre-shift's window at -3, the coverage rows' guarded scale, |l| < 2^55, and the half of
+    // 10^19, where round and bround at -19 leave the long.
     long exact = ConstDivide.EXACT_DIVIDEND_BOUND;
+    long window = VarkaRoundingCompiler.preShiftLimit(3);
     long half = 5_000_000_000_000_000_000L;
-    for (long l : List.of(exact - 1, exact, -(exact - 1), -exact, half - 1, half, half + 1,
-        -(half - 1), -half, -(half + 1))) {
+    for (long l : List.of(exact - 1, exact, -(exact - 1), -exact, window, window + 1, -window,
+        -(window + 1), half - 1, half, half + 1, -(half - 1), -half, -(half + 1))) {
       rows.add(row("l", Long.toString(l)));
     }
     for (long i : List.of(Integer.MAX_VALUE - 9999L, Integer.MAX_VALUE - 9998L)) {

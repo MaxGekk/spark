@@ -640,6 +640,30 @@ committed files:
    -1 to -20 and mode, the longs at the window's edge and beside `2^52`, `2^55`, `5 * 10^18` and
    the extremes, with the ties beside each and a seeded draw, are answered exactly in one chunk
    where they lie inside the window and Spark answers, and each other one is declined.
+   *2 November 2026, the review's findings on the part:* a decimal operand is declined by its
+   type before the lane is looked up, at every scale: a `DECIMAL` of precision 18 or less is read
+   on the long lane as its unscaled value since VARKA-347, and the lane lookup alone would have
+   rounded that long, ignoring the scale and the result's type (a latent wrong answer, no coverage
+   row reaching it; `VarkaExpressionCompilerSuite` now holds the decline at negative and
+   non-negative scales). The int lane's `HALF_EVEN` takes the long lane's one-compare tie,
+   `r + (q0 & 1) > h` and its mirror `r - (q0 & 1) < -h` on the signed remainder, an integer
+   identity, which makes the chain a node shallower: `bround(y, -1)` over a `TINYINT` under ANSI
+   is 12 deep, and `CASE WHEN bround(y, -1) > 0 THEN bround(y, -1) ELSE 0Y END` 16, the emitter's
+   `MAX_CHAIN_DEPTH`, where the Or-of-And form made it 17 and declined it for the budget
+   (`VarkaEmitterRoundingSuite` holds it fused); the int
+   slice gains the ties at every scale for quotients of both parities and signs. The edges
+   fixture of the coverage harness gains `l` at `2^55 - 1` and `2^55` on both signs, the window
+   of the coverage rows' scale -3. **Where the review was wrong:** it asked that each `5^k` be
+   proven in `long_divide.smt2` only up to the dividend its scale needs, to shrink the file back.
+   `preShiftBound` over the guard is `2^52` for every scale from -1 to -11 and `2^(63 - k) + 1`
+   from -12, and a divisor's checks are one per quotient binade, about `log2` of the dividend's
+   bound, so the restriction would remove about 74 of the 2999 checks, a second of cvc5's time;
+   it was not built. The checks are uniform: under cvc5 none takes more than 100 ms on the
+   laptop, about 15 ms each (`VARKA_PROVE_LIMIT_MS` is 10 s), so the step's risk is its total,
+   not a check's limit. Re-timed on the laptop: `long_divide.smt2` Z3 125 s, cvc5 37 to 46 s
+   over three runs, `integral_round.smt2` Z3 5 s, cvc5 1 s, and `--lint` about 60 s.
+   Splitting the `5^k` into a proof file of their own and running the linters' files side by side
+   would bring the step back near its minute; that is open point 7.
 4. **344b, after 343b**: `FLOOR` and `CEIL` to `LONG` on the three host forms, the ANSI guard,
    the `MAGIC` arm under 343's option, 3.4's sweep; `factorial`'s two arms on 343b's `NULL`
    disposal.
@@ -712,7 +736,9 @@ measurement exists, and this row keeps the option's one default until then.
 
 Declines that stay: a batch with a live lane Spark raises on (ANSI's `floor` and `ceil` past the
 long, an integral rounding past its type); on the `MAGIC` arm, a lane with `|x| >= 2^51`;
-a `BIGINT` rounding at `k <= 11` with a lane at or past `2^(52 + k)`; at the forced 128-bit
+a `BIGINT` rounding at `k <= 11` with a lane at or past `2^(52 + k)`, under LEGACY as
+under ANSI - a known limit of 344a, a decline at the division's exactness bound where Spark
+answers every long, never a wrong answer; at the forced 128-bit
 species on x86, the floating forms' recorded refusals; until 343a, `floor(f)`, and `rint(i)` or
 `rint(f)`, which arrive under a cast to double; until 332's narrow load in a `BIGINT` kernel,
 `floor` and `ceil` over `SMALLINT` and `TINYINT`; until 343b, `floor` and `ceil` over a double
@@ -757,6 +783,17 @@ and `factorial`; until 342 and 343, `width_bucket`.
    no code.
    *Decided by the lead, 1 November 2026: (b)*, this pull request the integral forms only, and
    `rint` with its node, lowering, `fp_round.smt2`, twin and probe a later pull request of its own.
+
+7. **The full-range long division, as context: an m9 scope candidate (2 November 2026).** The
+   review of 344a asked for a `BIGINT` rounding exact over every long at `k <= 11`. That needs a
+   division by `10^k` exact over the full 64-bit range, which needs the high 64 bits of a 64 by 64
+   product, and the Vector API has no such lane operation, so the window stays `2^(52 + k)` and a
+   lane past it declines (section 7). Row 360's `WideMul` with constant multipliers is the planned
+   route; if it does not land in milestone 8, the full-range division is a candidate for
+   `m9/SCOPE.md`. The same review measured the linters' proof step at about a minute on the laptop
+   with `long_divide.smt2` its largest part (5.3); moving the `5^k` divisors to a file of their own
+   and running the step's files in parallel is a candidate change to `dev/varka_prove.sh`, not this
+   row's.
 
 Settled with the lead on 30 October 2026, and so not questions: the `BIGINT` band at `k <= 11`
 declines beyond its guard, the full-range form being row 360's constant-multiplier `WideMul`

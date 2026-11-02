@@ -83,10 +83,33 @@ public final class VarkaEmitterRoundingSuite {
   private static final List<Attribute> LONG_COLS =
       List.of(VarkaSqlResolve.column("l", DataTypes.LongType));
 
-  /** The ints every slice starts with: the extremes and the ends of ANSI's windows at -1. */
-  private static final int[] EDGES = {Integer.MIN_VALUE, Integer.MAX_VALUE, 0, -1, 1, 5, -5,
-      2147483644, -2147483644, 2147483645, -2147483645, 2147483646, -2147483646, 1999999999,
-      -1999999999, 2147483640, -2147483640};
+  /**
+   * The ints every slice starts with: the extremes, the ends of ANSI's windows at -1, and at each
+   * scale -k from -1 to -9 the ties {@code q0 * 10^k + 10^k / 2} and their neighbours on both
+   * signs, for quotients of both parities near zero and near the top, where HALF_EVEN's
+   * {@code r + (q0 & 1) > h} decides.
+   */
+  private static final int[] EDGES = edges();
+
+  private static int[] edges() {
+    var out = new LinkedHashSet<Integer>(List.of(Integer.MIN_VALUE, Integer.MAX_VALUE, 0, -1, 1,
+        5, -5, 2147483644, -2147483644, 2147483645, -2147483645, 2147483646, -2147483646,
+        1999999999, -1999999999, 2147483640, -2147483640));
+    for (int k = 1; k <= 9; k++) {
+      long d = BigInteger.TEN.pow(k).longValueExact();
+      long top = Integer.MAX_VALUE / d;
+      for (long q0 : new long[] {0, 1, 2, 3, top - 1, top}) {
+        for (long off = -1; off <= 1; off++) {
+          long v = q0 * d + d / 2 + off;
+          if (v <= Integer.MAX_VALUE) {
+            out.add((int) v);
+            out.add((int) -v);
+          }
+        }
+      }
+    }
+    return out.stream().mapToInt(Integer::intValue).toArray();
+  }
 
   private static boolean sweepsEnabled() {
     return "true".equals(System.getProperty("varka.sweep"));
@@ -235,6 +258,17 @@ public final class VarkaEmitterRoundingSuite {
   void everyInt() {
     assumeTrue(sweepsEnabled(), "set -Dvarka.sweep=true to sweep the emitted kernels");
     sweepAll(1L << 32, r -> (int) r);
+  }
+
+  @Test
+  @DisplayName("bround of a tinyint at -1 under ANSI fuses inside a CASE, at the chain depth the "
+      + "emitter allows")
+  void narrowHalfEvenNests() {
+    // The narrow operand is widened, guarded, rounded at the int lane and narrowed back, 12
+    // deep; the comparison's widening and compare and the CASE bring it to MAX_CHAIN_DEPTH, 16.
+    // The tie test as an Or of an And would make it 17, and the shape would decline.
+    List<Attribute> cols = List.of(VarkaSqlResolve.column("y", DataTypes.ByteType));
+    compile("CASE WHEN bround(y, -1) > 0 THEN bround(y, -1) ELSE 0Y END", true, cols);
   }
 
   // -----------------------------------------------------------------------------------------

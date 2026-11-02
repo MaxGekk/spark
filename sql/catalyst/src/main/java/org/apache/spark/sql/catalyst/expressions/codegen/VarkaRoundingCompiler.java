@@ -34,24 +34,23 @@ import org.apache.spark.sql.catalyst.expressions.Truncate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOpKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.DecimalType;
 
 /**
  * The rounding family (VARKA-344): {@code floor}, {@code ceil} and {@code ceiling} over
@@ -161,11 +160,18 @@ public final class VarkaRoundingCompiler {
       RoundBase whole, RoundingMode mode, boolean ansi, VarkaSlotTable inputs,
       VarkaSlotTable literals, DeclineSink sink) {
     Expression child = whole.left();
-    Optional<LaneType> typeLane = VarkaTypes.lane(child.dataType());
-    if (typeLane.isEmpty() || typeLane.get().isFloating()) {
+    // A decimal is declined by its type, before the lane: a DECIMAL of precision 18 or less is
+    // read on the long lane as its unscaled value, and the integer rounding of that value would
+    // ignore the scale and the result's type, at a non-negative scale as much as a negative one.
+    if (child.dataType() instanceof DecimalType) {
       return sink.decline("round, bround or truncate over " + child.dataType().simpleString()
-          + (typeLane.isPresent() && typeLane.get().isFloating() ? " (row 346)"
-              : " (rows 351, 363)"), whole);
+          + " (rows 351, 363)", whole);
+    }
+    // A floating operand never reaches here: VarkaNodeCompiler.floatingDecline declines it first.
+    Optional<LaneType> typeLane = VarkaTypes.lane(child.dataType()).filter(l -> !l.isFloating());
+    if (typeLane.isEmpty()) {
+      return sink.decline("round, bround or truncate over " + child.dataType().simpleString(),
+          whole);
     }
     Expression scaleExpr = whole.right();
     if (!scaleExpr.foldable()) {
@@ -295,11 +301,10 @@ public final class VarkaRoundingCompiler {
    * {@code DOWN} - and the magnitude {@code M} times {@code 10^k} gets its sign back as a
    * multiply by {@code s | 1}, which is 1 or -1, every step wrapping: the rounding is symmetric
    * in the sign, and its low 64 bits are {@code longValue()}'s. Both choices keep the chain
-   * shallow: the int lane's signed remainder form over the restored quotient is 17 deep for
-   * {@code HALF_EVEN} here, past the emitter's {@code MAX_CHAIN_DEPTH} of 16, and this form is
-   * 14 deep, leaving room for a CASE or a comparison above it. The dividend {@code a >>> k} is
-   * under the bound stated to the division, derived from the guard's ends;
-   * {@code integral_round.smt2} proves each step.
+   * shallow: this form is 14 deep for {@code HALF_EVEN}, under the emitter's
+   * {@code MAX_CHAIN_DEPTH} of 16, leaving room for a CASE or a comparison above it. The
+   * dividend {@code a >>> k} is under the bound stated to the division, derived from the
+   * guard's ends; {@code integral_round.smt2} proves each step.
    */
   private static VarkaVectorIR preShiftForm(VarkaVectorIR x, int k, long lo, long hi,
       RoundingMode mode, DeclineSink sink) {
@@ -378,11 +383,14 @@ public final class VarkaRoundingCompiler {
       up = new Compare(CompareOp.GE, r, half);
       down = new Compare(CompareOp.LE, r, negHalf);
     } else {
-      Cond odd = new Compare(CompareOp.EQ, new BitOp(BitOpKind.AND, q0, one), one);
-      up = new Or(new Compare(CompareOp.GT, r, half),
-          new And(new Compare(CompareOp.EQ, r, half), odd));
-      down = new Or(new Compare(CompareOp.LT, r, negHalf),
-          new And(new Compare(CompareOp.EQ, r, negHalf), odd));
+      // The tie test folded into one compare per side, as preShiftForm does: r and h are
+      // integers and q0 & 1 is 0 or 1 (1 for a negative odd q0 too, in two's complement), so
+      // r + (q0 & 1) > h is r > h, or r == h with q0 odd, and r - (q0 & 1) < -h its mirror.
+      // |r| < d <= 10^9, so neither wraps. The chain is a node shallower than the Or of an
+      // And would be, room for a CASE or a comparison above a narrow operand under ANSI.
+      VarkaVectorIR odd = new BitOp(BitOpKind.AND, q0, one);
+      up = new Compare(CompareOp.GT, new IntArith(IntOp.ADD, Overflow.WRAP, r, odd), half);
+      down = new Compare(CompareOp.LT, new IntArith(IntOp.SUB, Overflow.WRAP, r, odd), negHalf);
     }
     // The steps as values, q0 + [up] - [down], rather than as IfElse arms: a guard below a
     // conditional's arms is qualified by their conditions, and an arm-free tree keeps the ANSI
