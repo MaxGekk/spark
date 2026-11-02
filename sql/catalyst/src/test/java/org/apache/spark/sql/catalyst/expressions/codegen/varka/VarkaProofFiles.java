@@ -2128,7 +2128,7 @@ final class VarkaProofFiles {
     check(out, "k = 12: with the arithmetic shift in place of the logical one the dividend is "
         + "negative at Long.MIN_VALUE", "sat", List.of(x, "(assert (= x jlong.MIN))",
             preShift("jlong.shr", 12), "(assert (< t 0))"));
-    long h19 = 5_000_000_000_000_000_000L;
+    long h19 = VarkaRoundingCompiler.HALF_AT_19;
     long d19 = BigInteger.TEN.pow(19).longValue();
     String ten19 = BigInteger.TEN.pow(19).toString();
     check(out, "k = 19: round's sign test is the rounding wrapped, for every long", "unsat",

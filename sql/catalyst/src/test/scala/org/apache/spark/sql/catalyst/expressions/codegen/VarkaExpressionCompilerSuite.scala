@@ -26,7 +26,7 @@ import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, BoundReference, BRound, CaseWhen, Cast, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, DivideYMInterval, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InheritAnalysisRules, InSet, IsNotNull, IsNull, LastDay, LeafExpression, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Rand, Remainder, Round, RuntimeReplaceable, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractDates, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, Truncate, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, BoundReference, BRound, CaseWhen, Cast, Ceil, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, DivideYMInterval, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, Floor, GreaterThan, Greatest, HoursOfTime, If, In, InheritAnalysisRules, InSet, IsNotNull, IsNull, LastDay, LeafExpression, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Rand, Remainder, Round, RuntimeReplaceable, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractDates, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, Truncate, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{ForwardedOutput, FusedOutput, KernelOutput}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaEmitOptions, VarkaEmitterTestSupport, VarkaLoopEmitter, VarkaMatrix, VarkaShapeCache, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmup, VarkaShapeKey}
@@ -1014,6 +1014,27 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       val reason = declineReason(e, childOutput :+ dec)
       assert(reason.contains("decimal(10,2)"), reason)
       assert(reason.contains("rows 351, 363"), reason)
+    }
+  }
+
+  test("floor and ceil over a float or a string name the missing cast to double, not row 344b") {
+    // The analyzer casts a FLOAT or STRING operand to DOUBLE, so the rounding arm sees the
+    // cast: what is missing is the floating cast of row 343, not 344b's double lowering, which
+    // a bare double column still names.
+    val f = AttributeReference("f", FloatType)()
+    val s = AttributeReference("s", StringType)()
+    val dbl = AttributeReference("dbl", DoubleType)()
+    val output = childOutput ++ Seq(f, s, dbl)
+    for ((from, name) <- Seq(f -> "float", s -> "string");
+        e <- Seq(Floor(Cast(from, DoubleType)), Ceil(Cast(from, DoubleType)))) {
+      val reason = declineReason(e, output)
+      assert(reason.contains(s"a cast from $name to double"), reason)
+      assert(reason.contains("row 343"), reason)
+      assert(!reason.contains("344b"), reason)
+    }
+    for (e <- Seq(Floor(dbl), Ceil(dbl))) {
+      val reason = declineReason(e, output)
+      assert(reason.contains("floor or ceil over a double (row 344b)"), reason)
     }
   }
 

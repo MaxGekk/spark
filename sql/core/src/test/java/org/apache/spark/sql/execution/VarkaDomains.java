@@ -164,10 +164,9 @@ public final class VarkaDomains {
    * difference with {@code ymm} leaves the int, {@code ymm} at its most negative; a time at each
    * end of the day; the narrow lanes' bounds; {@code l} at the long division's {@code 2^52}, at
    * the pre-shift's {@code 2^55} at -3 and at half of {@code 10^19}, one in and one out on each
-   * sign, the long rounding's bounds. Then
-   * rows null in those columns, one column group at
-   * a time and all at once, which the {@code IS NULL} partitions select. The other columns hold
-   * the mixed fixture's first row.
+   * sign, the long rounding's bounds. Then rows null in those columns, one column group at a time
+   * and all at once, which the {@code IS NULL} partitions select. The other columns hold the mixed
+   * fixture's first row.
    */
   static String edgesSql() {
     long dayLimit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS;
@@ -186,7 +185,7 @@ public final class VarkaDomains {
     // 10^19, where round and bround at -19 leave the long.
     long exact = ConstDivide.EXACT_DIVIDEND_BOUND;
     long window = VarkaRoundingCompiler.preShiftLimit(3);
-    long half = 5_000_000_000_000_000_000L;
+    long half = VarkaRoundingCompiler.HALF_AT_19;
     for (long l : List.of(exact - 1, exact, -(exact - 1), -exact, window, window + 1, -window,
         -(window + 1), half - 1, half, half + 1, -(half - 1), -half, -(half + 1))) {
       rows.add(row("l", Long.toString(l)));

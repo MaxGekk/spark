@@ -79,9 +79,9 @@ import org.apache.spark.sql.types.DecimalType;
  * {@code >= 0} is the identity in every mode.
  *
  * <p>Public for {@code VarkaProofFiles}, which renders {@code integral_round.smt2} from
- * {@link #preShiftLimit}, {@link #preShiftBound} and {@link #window}, and for
- * {@code VarkaDomains}, whose edges fixture straddles {@link #preShiftLimit}; the family is
- * reached through {@link #arm} alone.
+ * {@link #preShiftLimit}, {@link #preShiftBound}, {@link #window} and {@link #HALF_AT_19}, and for
+ * {@code VarkaDomains}, whose edges fixture straddles {@link #preShiftLimit} and
+ * {@link #HALF_AT_19}; the family is reached through {@link #arm} alone.
  */
 public final class VarkaRoundingCompiler {
 
@@ -91,6 +91,13 @@ public final class VarkaRoundingCompiler {
    * kernel would not reproduce.
    */
   static final int MAX_NEGATIVE_SCALE = 100;
+
+  /**
+   * Half of {@code 10^19}, {@code 5 * 10^18}: at scale -19 the truncating quotient is 0 for
+   * every long, and {@code round} and {@code bround} step away from zero from this magnitude on,
+   * where the rounded value leaves the long range.
+   */
+  public static final long HALF_AT_19 = 5_000_000_000_000_000_000L;
 
   /** What {@link #window} answers when every input of the type rounds inside it. */
   private static final long[] NO_WINDOW = new long[0];
@@ -133,6 +140,12 @@ public final class VarkaRoundingCompiler {
       if (DataTypes.ByteType.equals(from) || DataTypes.ShortType.equals(from)) {
         return sink.decline("floor or ceil over a narrow integral operand, which needs the "
             + "narrow load in a BIGINT kernel (row 332)", whole);
+      }
+      // A float, or any other source the analyzer casts to a double (a string, say), arrives
+      // as the cast, which is the missing piece: the floating casts are row 343's.
+      if (!DataTypes.DoubleType.equals(from)) {
+        return sink.decline("floor or ceil over a cast from " + from.simpleString()
+            + " to double, which needs the floating casts (row 343)", whole);
       }
     }
     if (DataTypes.DoubleType.equals(t)) {
@@ -251,7 +264,7 @@ public final class VarkaRoundingCompiler {
       return new IntArith(IntOp.MUL, Overflow.WRAP, g, sink.longSlot(0L));
     }
     // k = 19: q0 = 0 and r = x; the half is 5 * 10^18 and 10^19 wraps to its low 64 bits.
-    long h = 5_000_000_000_000_000_000L;
+    long h = HALF_AT_19;
     long dWrapped = BigInteger.TEN.pow(19).longValue();
     if (mode == RoundingMode.DOWN) {
       return new IntArith(IntOp.MUL, Overflow.WRAP, g, sink.longSlot(0L));

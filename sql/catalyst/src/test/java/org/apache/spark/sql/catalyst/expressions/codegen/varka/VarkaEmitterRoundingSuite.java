@@ -52,6 +52,7 @@ import org.apache.spark.sql.catalyst.expressions.Truncate;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaRoundingCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterFixtures.Output;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.internal.SQLConf$;
@@ -297,7 +298,7 @@ public final class VarkaEmitterRoundingSuite {
     BigInteger d = BigInteger.TEN.pow(k);
     long edge = k <= 10 ? 1L << (52 + k) : Long.MAX_VALUE;
     for (long c : new long[] {0, 1, edge - 1, edge, 1L << 52, 1L << 55,
-        5_000_000_000_000_000_000L, Long.MAX_VALUE}) {
+        VarkaRoundingCompiler.HALF_AT_19, Long.MAX_VALUE}) {
       for (long off = -2; off <= 2; off++) {
         long v = c + off;
         if ((off > 0 && v < c) || (off < 0 && v > c)) {
