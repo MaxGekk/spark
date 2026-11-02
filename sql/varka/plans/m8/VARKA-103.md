@@ -508,12 +508,13 @@ Predictions, registered before the build:
    the filter `extract(HOUR FROM dt) >= 12` runs under `spark.sql.constraintPropagation.enabled`
    off on both sessions, as 332's baseline does, since the `dt_n IS NOT NULL` the optimizer infers
    would fuse on its own as a long-lane null test while the extract declines; and a control
-   section, the filter `dt > dt2` under the same setting, fuses today and is listed so, so that a
-   run whose Varka session is off fails the check. A probe planned every section on an
-   Arrow-cached Varka session: each declines but the control. The queries suite runs every
-   section on both sessions over the table's first 2000 rows in each build, 8 s on the laptop.
-   The results files at both widths
-   come from the EPYC runners and are committed before it merges; not yet run.
+   section, the filter `dt > dt2` under the same setting, fuses today, so that a run whose Varka
+   session is off fails the check. Each section records master's `Fusion` class: the control
+   `WHOLE`, every other section `NONE`, as a probe on an Arrow-cached Varka session found. The
+   queries suite runs every section on both sessions over the table's first 2000 rows in each
+   build, and makes the fuse check itself under `PinsDefaults`, as the other baselines' suites
+   do, 8 s on the laptop. The results files at both widths come from the EPYC runners and are
+   committed before it merges; not yet run.
 2. **103a, needing nothing unbuilt**: 2.1, 2.2 with `ym * k`, `extract(DAY)` (and the bias
    helper, if 332b has not built it), 2.4's day split and the decimal literal forms whose divisor
    divides `D`, the proof additions, the cells and coverage rows of those forms, the first planted
@@ -558,11 +559,10 @@ Predictions, registered before the build:
    an integral literal. `VarkaAnsiForm` lists both product rows under a false AND and names
    `dt * 3` as the first row raising the bare `ArithmeticException`, which `ntz + dt` was;
    `VarkaIntervalCompiler` is public so the renderer and the suite read the compiler's bounds.
-   A probe of the baseline after the build found exactly its listed sections fusing. Merged with
-   master, whose baselines record a `Fusion` class per section in place of a flag, the baseline
-   marks those three sections and the control `WHOLE` and the rest `NONE`, and its queries suite
-   makes the fuse check itself under `PinsDefaults`, as the other baselines' suites now do. No fuzz
-   production: an overflowing product raises a bare `ArithmeticException`, which reaches the
+   A probe of the baseline after the build found exactly its listed sections fusing: the
+   baseline's `Fusion` classes mark those three sections `WHOLE` beside the control, the rest
+   staying `NONE`, and its queries suite's fuse check holds them. No fuzz production: an
+   overflowing product raises a bare `ArithmeticException`, which reaches the
    Spark-level fuzzer as the job's `SparkException` with no condition, a class its expected-errors
    list cannot hold without excusing every task failure, as `VarkaCatalystGrammar` says of
    `ym * k`. Left of 103a: `ym * k` (2.2's int-lane half), `extract(DAY)` with `truncDivLong`,
