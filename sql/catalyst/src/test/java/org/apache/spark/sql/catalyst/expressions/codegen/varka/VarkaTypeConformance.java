@@ -467,8 +467,9 @@ public abstract class VarkaTypeConformance {
 
   /**
    * Whether the census marks the type fused in part for {@code f}'s operator (its
-   * {@code fused_in_part} column): one band or form of the type fuses and the rest is owed, so
-   * the form may fuse or decline, and is checked where it fuses.
+   * {@code fused_in_part} column): one band or form of the type fuses and the rest is owed. A
+   * form the suite puts in the band ({@link #inFusedBand}) is held to the answers and is drift
+   * where it declines; any other is owed, and drift where it fuses.
    */
   private boolean fusedInPart(Form f) {
     return f.register() != null && !f.register().startsWith("cast:")
