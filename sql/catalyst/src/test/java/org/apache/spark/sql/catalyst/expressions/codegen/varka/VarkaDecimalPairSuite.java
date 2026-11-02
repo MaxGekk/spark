@@ -18,7 +18,9 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDecimalStoreTables.label;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -40,6 +42,7 @@ import org.apache.arrow.vector.DecimalVector;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.DecimalFault;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
@@ -282,12 +285,17 @@ public final class VarkaDecimalPairSuite {
 
   /** The slot table at {@code widths}: the first mismatch, or null. */
   private static String slotTable(int[] widths, int[] precisions) {
+    return slotTable(widths, precisions, DecimalFault.NONE);
+  }
+
+  /** The slot table at {@code widths}, emitted with {@code fault} planted. */
+  private static String slotTable(int[] widths, int[] precisions, DecimalFault fault) {
     boolean[] declined = new boolean[1];
     int planted = 0;
     for (int lanes : widths) {
       for (int precision : precisions) {
         VarkaFusedKernel k = kernel(List.of(lo(0, precision), hi(0, precision)), 1, 0,
-            at(lanes)).kernel();
+            at(lanes).withDecimalFault(fault)).kernel();
         for (int length : LENGTHS) {
           for (boolean masked : new boolean[] {false, true}) {
             String where = label(lanes) + ", precision " + precision + ", length " + length
@@ -423,6 +431,12 @@ public final class VarkaDecimalPairSuite {
    */
   private static String edgeTable(String name, Function<int[], Cond> cond, int yPrecision,
       Truth truth, int[] widths) {
+    return edgeTable(name, cond, yPrecision, truth, widths, DecimalFault.NONE);
+  }
+
+  /** {@link #edgeTable} emitted with {@code fault} planted. */
+  private static String edgeTable(String name, Function<int[], Cond> cond, int yPrecision,
+      Truth truth, int[] widths, DecimalFault fault) {
     List<BigInteger> xs = edges();
     List<BigInteger> ys = yPrecision > DecimalColumn.MAX_LONG_PRECISION ? edges()
         : List.of(BigInteger.ZERO, BigInteger.ONE, BigInteger.ONE.negate(),
@@ -455,7 +469,8 @@ public final class VarkaDecimalPairSuite {
         new IfElse(new Not(c), new LiteralSlot(0, LaneType.LONG),
             new LiteralSlot(1, LaneType.LONG)));
     for (int lanes : widths) {
-      VarkaFusedKernel k = kernel(roots, 2, EDGE_LITERALS.length, at(lanes)).kernel();
+      VarkaFusedKernel k =
+          kernel(roots, 2, EDGE_LITERALS.length, at(lanes).withDecimalFault(fault)).kernel();
       // Without nulls too, so the dense body runs.
       for (boolean withNulls : new boolean[] {false, true}) {
         int rows = withNulls ? n : n - 3;
@@ -495,8 +510,14 @@ public final class VarkaDecimalPairSuite {
 
   /** Every order and the equality, over two 38-digit columns: the first mismatch, or null. */
   private static String everyComparison(int[] widths) {
+    return everyComparison(widths, DecimalFault.NONE);
+  }
+
+  /** {@link #everyComparison(int[])} emitted with {@code fault} planted. */
+  private static String everyComparison(int[] widths, DecimalFault fault) {
     for (CompareOp op : CompareOp.signed()) {
-      String m = edgeTable("x " + op + " y", p -> compare(op, p), 38, order(op), widths);
+      String m =
+          edgeTable("x " + op + " y", p -> compare(op, p), 38, order(op), widths, fault);
       if (m != null) {
         return m;
       }
@@ -593,7 +614,10 @@ public final class VarkaDecimalPairSuite {
     assertEquals(new BigDecimal(bound(38)).toBigInteger(), lo(0, 38).bound().value());
   }
 
-  /** Runs {@code check} with {@code fault} planted, cleared after whatever happens. */
+  /**
+   * Runs {@code check} with the lowering's {@code fault} planted, cleared after whatever happens.
+   * The load's faults are emit options instead ({@link DecimalFault}), planted per emission.
+   */
   private static String planted(VarkaDecimalFault fault, java.util.function.Supplier<String>
       check) {
     VarkaDecimalFault.plantForTesting(fault);
@@ -614,16 +638,56 @@ public final class VarkaDecimalPairSuite {
   @Test
   @DisplayName("planted: the check's bound at 10^p is caught by the slot table's 10^p row")
   void plantedBoundAtThePower() {
-    assertNotNull(planted(VarkaDecimalFault.BOUND_AT_POWER, () -> slotTable(new int[] {4},
-        new int[] {38})), "a check at 10^p must pass the slot Spark raises on");
+    assertNotNull(slotTable(new int[] {4}, new int[] {38}, DecimalFault.BOUND_AT_POWER),
+        "a check at 10^p must pass the slot Spark raises on");
   }
 
   @Test
   @DisplayName("planted: the sibling word parked from the wrong rearrange is caught by every row")
   void plantedSiblingFromTheWrongRearrange() {
-    assertNotNull(planted(VarkaDecimalFault.SIBLING_FROM_WRONG_REARRANGE, () -> slotTable(
-        new int[] {4}, new int[] {38})), "both words read from one half must disagree");
-    assertNotNull(planted(VarkaDecimalFault.SIBLING_FROM_WRONG_REARRANGE, () -> everyComparison(
-        new int[] {4})), "the comparisons over one half must disagree");
+    assertNotNull(slotTable(new int[] {4}, new int[] {38},
+        DecimalFault.SIBLING_FROM_WRONG_REARRANGE), "both words read from one half must disagree");
+    assertNotNull(everyComparison(new int[] {4}, DecimalFault.SIBLING_FROM_WRONG_REARRANGE),
+        "the comparisons over one half must disagree");
+  }
+
+  @Test
+  @DisplayName("planted: a load's fault is cached under a key of its own, so the clean shape "
+      + "emitted after it is clean")
+  void plantedFaultNeverServesTheCleanShape() {
+    var roots = List.<VarkaVectorIR>of(lo(0, 38), hi(0, 38));
+    VarkaEmitOptions clean = at(4);
+    VarkaShapeKey cleanKey = new VarkaShapeKey(roots, 1, 0, clean);
+    String name = "org.apache.spark.sql.varka.execution.VarkaFusedFaultKey";
+    byte[] before = VarkaLoopEmitter.emit(name, roots, 1, 0, null, null, clean);
+    // A slot holding 10^38, which Spark's reader raises on, so the clean kernel declines where
+    // the check at 10^p answers; and a column of valid slots, whose words the wrong sibling
+    // reads from one half.
+    Column outside = column(8, 38, false, 3L);
+    outside.values()[5] = BigInteger.TEN.pow(38);
+    Column valid = column(8, 38, false, 4L);
+    boolean[] declined = new boolean[1];
+    var cache = new VarkaShapeCacheImpl(8);
+    ClassLoader parent = VarkaDecimalPairSuite.class.getClassLoader();
+    for (DecimalFault fault : List.of(DecimalFault.BOUND_AT_POWER,
+        DecimalFault.SIBLING_FROM_WRONG_REARRANGE)) {
+      VarkaShapeKey faultyKey =
+          new VarkaShapeKey(roots, 1, 0, clean.withDecimalFault(fault));
+      assertNotEquals(VarkaShapeCacheImpl.shapeHash(cleanKey),
+          VarkaShapeCacheImpl.shapeHash(faultyKey), fault + " shares the clean shape's hash");
+      VarkaShapeLookup faulty = cache.getOrEmit(parent, faultyKey, "faulty");
+      Column caught = fault == DecimalFault.BOUND_AT_POWER ? outside : valid;
+      assertNotNull(checkWords(fault.name(), faulty.entry().newKernel(), caught, declined),
+          fault + " must answer wrongly through the cache");
+      VarkaShapeLookup fresh = cache.getOrEmit(parent, cleanKey, "clean");
+      assertNull(checkWords("clean after " + fault, fresh.entry().newKernel(), outside,
+          declined));
+      assertTrue(declined[0], "the clean kernel declines 10^38");
+      assertNull(checkWords("clean after " + fault, fresh.entry().newKernel(), valid,
+          declined));
+      assertNotEquals(faulty.entry().className(), fresh.entry().className());
+      assertArrayEquals(before, VarkaLoopEmitter.emit(name, roots, 1, 0, null, null, clean),
+          "the clean bytes moved after " + fault);
+    }
   }
 }

@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiFunction;
 
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Cast;
@@ -124,27 +125,32 @@ final class VarkaDecimalCompiler {
    */
   static Optional<Cond> compare(CompareOp op, Expression whole, Expression left,
       Expression right, VarkaSlotTable inputs, DeclineSink sink) {
-    Optional<DecimalType> wide = wideType(left, right);
-    if (wide.isEmpty()) {
-      return operands(whole, left, right, inputs, sink)
-          .map(both -> new Compare(op, both.get(0), both.get(1)));
-    }
-    return pairs(left, right, wide.get(), inputs, sink)
-        .map(p -> DecimalPairLowering.compare(op, p.get(0).lo(), p.get(0).hi(), p.get(1).lo(),
-            p.get(1).hi()));
+    return condition(whole, left, right, inputs, sink, (l, r) -> new Compare(op, l, r),
+        (x, y) -> DecimalPairLowering.compare(op, x.lo(), x.hi(), y.lo(), y.hi()));
   }
 
   /** {@code left <=> right} over two decimals, as {@link #compare} takes them. */
   static Optional<Cond> nullSafeEqual(Expression whole, Expression left, Expression right,
       VarkaSlotTable inputs, DeclineSink sink) {
+    return condition(whole, left, right, inputs, sink, NullSafeEqual::new,
+        (x, y) -> DecimalPairLowering.nullSafeEqual(x.lo(), x.hi(), y.lo(), y.hi()));
+  }
+
+  /**
+   * A condition over two decimals: {@code overLongs} of the unscaled longs up to 18 digits, or
+   * {@code overPairs} of the two pairs above ({@link #wideType}); or empty with the reason noted.
+   */
+  private static Optional<Cond> condition(Expression whole, Expression left, Expression right,
+      VarkaSlotTable inputs, DeclineSink sink,
+      BiFunction<VarkaVectorIR, VarkaVectorIR, Cond> overLongs,
+      BiFunction<Pair, Pair, Cond> overPairs) {
     Optional<DecimalType> wide = wideType(left, right);
     if (wide.isEmpty()) {
       return operands(whole, left, right, inputs, sink)
-          .map(both -> new NullSafeEqual(both.get(0), both.get(1)));
+          .map(both -> overLongs.apply(both.get(0), both.get(1)));
     }
     return pairs(left, right, wide.get(), inputs, sink)
-        .map(p -> DecimalPairLowering.nullSafeEqual(p.get(0).lo(), p.get(0).hi(),
-            p.get(1).lo(), p.get(1).hi()));
+        .map(p -> overPairs.apply(p.get(0), p.get(1)));
   }
 
   /**
@@ -211,16 +217,7 @@ final class VarkaDecimalCompiler {
           new DecimalWord(ordinal, Word.HIGH, precision)));
     }
     if (isLiteralTree(e)) {
-      Object value;
-      try {
-        value = e.eval(null);
-      } catch (RuntimeException failed) {
-        return sink.decline("a decimal literal whose cast fails", e);
-      }
-      if (!(value instanceof Decimal d)) {
-        return sink.decline("a null decimal literal", e);
-      }
-      return literalPair(e, d, type, sink);
+      return foldLiteral(e, sink).flatMap(d -> literalPair(e, d, type, sink));
     }
     return sink.decline("a decimal operand that is not a column or a literal: its operators "
         + "are rows 348 to 350's", e);
@@ -329,12 +326,12 @@ final class VarkaDecimalCompiler {
   }
 
   /**
-   * A literal operand's unscaled value at {@code scale}, in a slot of the long table. A null
-   * literal declines: the optimizer has folded the comparison to null before a real query gets
-   * here. A cast that fails, or a value that does not fit 18 digits, declines too, and leaves the
-   * row engine to raise or answer.
+   * The value of {@code e}, a literal under zero or more casts ({@link #isLiteralTree}), folded
+   * by evaluating the casts as Spark's constant folding does; or empty with the reason noted. A
+   * null literal declines: the optimizer has folded the comparison to null before a real query
+   * gets here. A cast that fails declines too, and leaves the row engine to raise.
    */
-  private static Optional<VarkaVectorIR> literal(Expression e, int scale, DeclineSink sink) {
+  private static Optional<Decimal> foldLiteral(Expression e, DeclineSink sink) {
     Object value;
     try {
       value = e.eval(null);
@@ -344,7 +341,21 @@ final class VarkaDecimalCompiler {
     if (!(value instanceof Decimal d)) {
       return sink.decline("a null decimal literal", e);
     }
-    BigDecimal exact = d.toJavaBigDecimal();
+    return Optional.of(d);
+  }
+
+  /**
+   * A literal operand's unscaled value at {@code scale}, in a slot of the long table. A null
+   * literal declines: the optimizer has folded the comparison to null before a real query gets
+   * here. A cast that fails, or a value that does not fit 18 digits, declines too, and leaves the
+   * row engine to raise or answer.
+   */
+  private static Optional<VarkaVectorIR> literal(Expression e, int scale, DeclineSink sink) {
+    Optional<Decimal> folded = foldLiteral(e, sink);
+    if (folded.isEmpty()) {
+      return Optional.empty();
+    }
+    BigDecimal exact = folded.get().toJavaBigDecimal();
     long unscaled;
     try {
       unscaled = exact.setScale(scale).unscaledValue().longValueExact();

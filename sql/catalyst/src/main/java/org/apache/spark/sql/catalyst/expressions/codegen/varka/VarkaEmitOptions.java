@@ -493,6 +493,11 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * @param decimalStore how a {@code WidenDecimal} root interleaves its words into Arrow's
  *        sixteen-byte decimal slots (VARKA-157 2.2): see {@link DecimalStore}. No other root reads
  *        it, so every shape without a decimal output emits the same bytes under either value.
+ * @param decimalFault a wrong lowering planted in the 128-bit decimal's load, so a test can show
+ *        that the checks over it fail (milestone 8 row 504): see {@link DecimalFault}. An option
+ *        rather than a JVM-wide switch, so that a faulty class is cached under a key of its own
+ *        and never served to a clean emission of the same shape. {@link DecimalFault#NONE} in
+ *        production.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -543,7 +548,8 @@ public record VarkaEmitOptions(
     boolean dropStackMaps,
     int misdescribeDataBytes,
     boolean fromLongMasks,
-    DecimalStore decimalStore) {
+    DecimalStore decimalStore,
+    DecimalFault decimalFault) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -586,6 +592,27 @@ public record VarkaEmitOptions(
    * host.
    */
   public enum DecimalStore { REARRANGE, SELECT_FROM }
+
+  /**
+   * The faults a test plants in the 128-bit decimal's load (milestone 8 row 504,
+   * {@code m8/VARKA-359.md} 11.7), each a plausible wrong emission that agrees with Spark on most
+   * inputs. The comparisons' fault changes the IR rather than the emission, and so is planted
+   * through {@link VarkaDecimalFault} instead.
+   */
+  public enum DecimalFault {
+    /** No fault: the load as built. */
+    NONE,
+    /**
+     * The load's check against {@code 10^p} rather than {@code 10^p - 1}, which passes a slot
+     * holding {@code 10^p} or {@code -10^p}, one past the precision, where Spark's reader raises.
+     */
+    BOUND_AT_POWER,
+    /**
+     * The sibling word parked from the visited word's own rearrange, so that both words of a
+     * column read the same half of its slots.
+     */
+    SIBLING_FROM_WRONG_REARRANGE
+  }
 
   /*
    * A note this enum cannot express, kept beside it rather than inside its javadoc, which
@@ -675,7 +702,7 @@ public record VarkaEmitOptions(
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
           true, true, true, true, true, true, true, 0, 0, 0, false, false, false, 0, false,
-          DecimalStore.REARRANGE);
+          DecimalStore.REARRANGE, DecimalFault.NONE);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -711,6 +738,9 @@ public record VarkaEmitOptions(
     }
     if (decimalStore == null) {
       throw VarkaErrors.illegalArgument("decimalStore must not be null");
+    }
+    if (decimalFault == null) {
+      throw VarkaErrors.illegalArgument("decimalFault must not be null");
     }
     if (lanesOverride != 0 && (lanesOverride < 1 || Integer.bitCount(lanesOverride) != 1)) {
       throw VarkaErrors.illegalArgument(
@@ -782,6 +812,7 @@ public record VarkaEmitOptions(
       b.misdescribeDataBytes = misdescribeDataBytes;
       b.fromLongMasks = fromLongMasks;
       b.decimalStore = decimalStore;
+      b.decimalFault = decimalFault;
     return b;
   }
 
@@ -836,6 +867,7 @@ public record VarkaEmitOptions(
     private int misdescribeDataBytes;
     private boolean fromLongMasks;
     private DecimalStore decimalStore;
+    private DecimalFault decimalFault;
 
     private Builder() {
     }
@@ -1085,6 +1117,11 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder decimalFault(DecimalFault fault) {
+      this.decimalFault = fault;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -1098,7 +1135,7 @@ public record VarkaEmitOptions(
           severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
           misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction, dropStackMaps,
-          misdescribeDataBytes, fromLongMasks, decimalStore);
+          misdescribeDataBytes, fromLongMasks, decimalStore, decimalFault);
     }
   }
 
@@ -1294,6 +1331,10 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withDecimalStore(DecimalStore form) {
     return toBuilder().decimalStore(form).build();
+  }
+
+  public VarkaEmitOptions withDecimalFault(DecimalFault fault) {
+    return toBuilder().decimalFault(fault).build();
   }
 
   /**

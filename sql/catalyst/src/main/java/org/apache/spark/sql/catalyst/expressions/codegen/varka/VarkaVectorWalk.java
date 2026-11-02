@@ -28,6 +28,7 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.DecimalFault;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
@@ -629,9 +630,12 @@ final class VarkaVectorWalk {
    * negation's {@code (nhi, nlo)}: {@code v > B} is
    * {@code hi > bhi | (hi == bhi & lo >u blo)} and {@code v < -B} is
    * {@code hi < nhi | (hi == nhi & lo <u nlo)}, the words ordering as the value does when the
-   * high words compare signed and the low ones unsigned ({@code decimal128.smt2}). Eleven lane
-   * calls, ORed into one mask that {@link #emitGuardCollect} qualifies by the column's validity
-   * word in a masked body, so a null slot never declines.
+   * high words compare signed and the low ones unsigned ({@code decimal128.smt2}). Ten lane
+   * calls - the two slot loads, the two rearranges and the six compares - of which the budget
+   * charges the nine past the first load, a group paying that one as every column's
+   * ({@code VarkaEmitBudget.DECIMAL_PAIR_LOAD_WEIGHT}). Five mask calls join the compares into
+   * one mask that {@link #emitGuardCollect} qualifies by the column's validity word in a masked
+   * body, so a null slot never declines.
    */
   private static void emitDecimalWord(CodeBuilder cb, DecimalWord w, boolean dense,
       Analysis analysis, Slots s) {
@@ -653,15 +657,15 @@ final class VarkaVectorWalk {
     if (s.pairLoaded.add(key)) {
       emitDecimalSlotLoads(cb, s, w.ordinal(), tmp);
       // The planted fault parks the other word from the visited word's own rearrange.
-      boolean wrongSibling =
-          VarkaDecimalFault.planted() == VarkaDecimalFault.SIBLING_FROM_WRONG_REARRANGE;
+      DecimalFault fault = analysis.options.decimalFault();
+      boolean wrongSibling = fault == DecimalFault.SIBLING_FROM_WRONG_REARRANGE;
       int visited = w.word() == VarkaVectorIR.Word.LOW ? 0 : 1;
       emitRearrange(cb, tmp, s.decimalShuffle[wrongSibling ? visited : 0]);
       cb.astore(lo);
       emitRearrange(cb, tmp, s.decimalShuffle[wrongSibling ? visited : 1]);
       cb.astore(hi);
       DecimalWords bound = w.bound();
-      if (VarkaDecimalFault.planted() == VarkaDecimalFault.BOUND_AT_POWER) {
+      if (fault == DecimalFault.BOUND_AT_POWER) {
         // The planted fault: the bound at 10^p, one past the precision's largest value.
         bound = DecimalWords.of(bound.value().add(BigInteger.ONE));
       }

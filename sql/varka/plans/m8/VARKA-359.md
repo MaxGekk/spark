@@ -730,6 +730,31 @@ as a new name in the load or ordering message; no test pins that.
 *11.7's cost prediction, scored*: "of the size of 347's, seconds". The suite took 3.3 s of test
 time in its own JVM (the final run's JUnit total, seven tests), the fork's start aside. Holds.
 
+**A second review (2 November 2026)** found four more on 359a's own code; each was fixed:
+
+- **A planted load fault could poison the class cache.** The bound at `10^p` and the sibling
+  from the wrong rearrange were read from a JVM-wide switch at emit time, which changes the bytes
+  and not the shape key, so a class emitted through the cache while either was planted (by
+  another thread, or by a later test in the same JVM) was cached under the clean key and served
+  to every later kernel of the shape. Both are now an emit option, `decimalFault`
+  (`VarkaEmitOptions.DecimalFault`, a fault injector in the options table, rendered only off its
+  default), so a faulty class is cached under a key of its own, and the defaults' rendering and
+  `emitted_bytes.json` do not move. This corrects 10.3's departure: the planting is no longer
+  one enum read at emit time. `VarkaDecimalFault` keeps the low words compared signed alone,
+  which the lowering reads while it builds the IR, so a kernel under it is a different IR and a
+  different key. `VarkaDecimalPairSuite` gains a test that, through one cache, a faulty key
+  hashes apart from the clean one, answers wrongly, and leaves the clean kernel emitted after it
+  declining `10^38` and reading every word, its bytes those emitted before. The same pattern
+  remains in `VarkaFloatingFault.DIVISOR_POSITIVE_ZERO_ONLY`, read at emit time in
+  `VarkaVectorWalk`; it is row 342's code, left to the lead.
+- **The literal fold was written twice** in `VarkaDecimalCompiler`; `foldLiteral` is the one
+  evaluation, failed-cast decline and null decline the long and the pair operands share.
+- **`compare` and `nullSafeEqual` repeated the `wideType` dispatch**; `condition` takes the
+  long-lane node and the pair lowering and dispatches once.
+- **`emitDecimalWord`'s doc counted eleven lane calls.** The visit emits ten - the two slot
+  loads, the two rearranges and the six compares - and five mask calls; the budget charges nine,
+  the first load being paid once per column as every leaf's, and the weight's doc now says so.
+
 **Still owed.** The suite holds the pair's representation only. The 64-bit one (DECIMAL(10, 2),
 row 347's leaf) reads the same sixteen-byte slots, and `DecimalSlotLane` already reads its leaf.
 It needs a second suite class, which the census's one-name-per-type check does not provide for

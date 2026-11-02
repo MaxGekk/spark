@@ -582,9 +582,12 @@ final class VarkaEmitBudget {
 
   /**
    * The lane calls a 128-bit decimal column's shared load spends a body past the leaf's own
-   * load, on the first visit of either of its {@link VarkaVectorIR.DecimalWord}s: the second of
-   * the two slot loads, the two rearranges that take the low and the high words, and the six
-   * compares of the digit check. A later visit of either word reads a local and spends none.
+   * load, on the first visit of either of its {@link VarkaVectorIR.DecimalWord}s. The visit emits
+   * ten ({@code VarkaVectorWalk.emitDecimalWord}): the two slot loads, the two rearranges that
+   * take the low and the high words, and the six compares of the digit check. The first load is
+   * the one a group pays once per column, as for every leaf, so the weight is the other nine; the
+   * five mask calls that join the compares are not lane calls. A later visit of either word reads
+   * a local and spends none.
    */
   static final int DECIMAL_PAIR_LOAD_WEIGHT = 9;
 

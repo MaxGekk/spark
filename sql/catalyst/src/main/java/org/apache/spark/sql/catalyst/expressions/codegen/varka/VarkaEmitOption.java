@@ -30,6 +30,7 @@ import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.Builder;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.DecimalFault;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.DecimalStore;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.Division;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.FloorMod7;
@@ -538,7 +539,12 @@ public sealed interface VarkaEmitOption
       // default's rendering empty. Only a WidenDecimal root's store reads it.
       new Choice<>("decimalStore", Reason.MACHINE, DecimalStore.class, DecimalStore.REARRANGE,
           VarkaEmitOptions::decimalStore, Builder::decimalStore,
-          new ChoiceTag("decimalStore="), Optional.of(WidenDecimal.class)));
+          new ChoiceTag("decimalStore="), Optional.of(WidenDecimal.class)),
+      // Only the 128-bit decimal's load reads it; a fault injector is never drawn, so it needs
+      // no readOnlyBy to stay out of the general draws.
+      new Choice<>("decimalFault", Reason.FAULT_INJECTOR, DecimalFault.class, DecimalFault.NONE,
+          VarkaEmitOptions::decimalFault, Builder::decimalFault,
+          new ChoiceTag("decimalFault="), Optional.empty()));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {
