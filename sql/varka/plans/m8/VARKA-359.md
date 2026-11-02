@@ -765,6 +765,12 @@ time in its own JVM (the final run's JUnit total, seven tests), the fork's start
   compares, and `VarkaVectorWalk` emits an unsigned compare as its signed form under the option
   (only the pair's low words are unsigned compares). `VarkaDecimalFault` is gone; the defaults'
   key and `emitted_bytes.json` do not move.
+- **`operands` threw for a wide comparison**, kept from it only by a separate `wideType` check in
+  `condition`. `condition` now routes once: one scale above 18 digits to the pairs, two scales to
+  the decline naming the rescale (the reasons unchanged), the rest to the longs; `operands` takes
+  the scale and cannot throw.
+- **`literal`'s doc repeated `foldLiteral`'s**; it names only its own declines now.
+
 **Still owed.** The suite holds the pair's representation only. The 64-bit one (DECIMAL(10, 2),
 row 347's leaf) reads the same sixteen-byte slots, and `DecimalSlotLane` already reads its leaf.
 It needs a second suite class, which the census's one-name-per-type check does not provide for

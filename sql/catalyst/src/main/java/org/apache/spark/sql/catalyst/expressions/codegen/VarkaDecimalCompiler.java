@@ -88,30 +88,17 @@ final class VarkaDecimalCompiler {
   }
 
   /**
-   * The two operands of a comparison of decimals, as unscaled longs of one scale, or empty with
-   * the reason noted. Type coercion gives both operands one type; the check is kept so that a
-   * hand-built tree of two scales declines rather than comparing unscaled values of two scales.
+   * The two operands of a comparison of decimals of 18 digits or fewer at {@code scale}, as
+   * unscaled longs, or empty with the reason noted. {@link #condition} has routed the comparison
+   * here, so both are decimals of that one scale.
    */
-  private static Optional<List<VarkaVectorIR>> operands(Expression whole, Expression left,
-      Expression right, VarkaSlotTable inputs, DeclineSink sink) {
-    DecimalType lt = (DecimalType) left.dataType();
-    boolean wide = widerThanLong(left, right);
-    if (!(right.dataType() instanceof DecimalType rt) || lt.scale() != rt.scale()) {
-      return sink.decline(wide
-          ? "a comparison of decimals of two scales above " + DecimalColumn.MAX_LONG_PRECISION
-              + " digits needs row 360's rescale up and row 363's capped rescale down"
-          : "a comparison of decimals of two scales, which needs a rescale, is row 348's", whole);
-    }
-    if (wide) {
-      // Unreachable: a comparison of one scale above 18 digits is wideType's, compiled as pairs.
-      throw VarkaErrors.illegalState("a comparison wider than "
-          + DecimalColumn.MAX_LONG_PRECISION + " digits is compiled over pairs: " + whole);
-    }
-    Optional<VarkaVectorIR> l = operand(left, lt.scale(), inputs, sink);
+  private static Optional<List<VarkaVectorIR>> operands(Expression left, Expression right,
+      int scale, VarkaSlotTable inputs, DeclineSink sink) {
+    Optional<VarkaVectorIR> l = operand(left, scale, inputs, sink);
     if (l.isEmpty()) {
       return Optional.empty();
     }
-    Optional<VarkaVectorIR> r = operand(right, lt.scale(), inputs, sink);
+    Optional<VarkaVectorIR> r = operand(right, scale, inputs, sink);
     if (r.isEmpty()) {
       return Optional.empty();
     }
@@ -137,44 +124,35 @@ final class VarkaDecimalCompiler {
   }
 
   /**
-   * A condition over two decimals: {@code overLongs} of the unscaled longs up to 18 digits, or
-   * {@code overPairs} of the two pairs above ({@link #wideType}); or empty with the reason noted.
+   * A condition over two decimals, routed once: of one scale and wider than 18 digits,
+   * {@code overPairs} of the two pairs at the wider of the two types, which type coercion has
+   * already cast both to; of one scale otherwise, {@code overLongs} of the unscaled longs. Two
+   * scales decline with the reason noted, naming the rescale the comparison needs: type coercion
+   * gives both operands one type, and the check is kept so that a hand-built tree of two scales
+   * declines rather than comparing unscaled values of two scales.
    */
   private static Optional<Cond> condition(Expression whole, Expression left, Expression right,
       VarkaSlotTable inputs, DeclineSink sink,
       BiFunction<VarkaVectorIR, VarkaVectorIR, Cond> overLongs,
       BiFunction<Pair, Pair, Cond> overPairs) {
-    Optional<DecimalType> wide = wideType(left, right);
-    if (wide.isEmpty()) {
-      return operands(whole, left, right, inputs, sink)
-          .map(both -> overLongs.apply(both.get(0), both.get(1)));
+    DecimalType lt = (DecimalType) left.dataType();
+    boolean wide = isWide(left) || isWide(right);
+    if (!(right.dataType() instanceof DecimalType rt) || lt.scale() != rt.scale()) {
+      return sink.decline(wide
+          ? "a comparison of decimals of two scales above " + DecimalColumn.MAX_LONG_PRECISION
+              + " digits needs row 360's rescale up and row 363's capped rescale down"
+          : "a comparison of decimals of two scales, which needs a rescale, is row 348's", whole);
     }
-    return pairs(left, right, wide.get(), inputs, sink)
-        .map(p -> overPairs.apply(p.get(0), p.get(1)));
-  }
-
-  /**
-   * The common type of a comparison whose operands are two decimals of one scale, one of them
-   * wider than 18 digits: the wider of the two, which type coercion has already cast both to.
-   * Empty for any other comparison, which {@link #operands} takes or declines.
-   */
-  private static Optional<DecimalType> wideType(Expression left, Expression right) {
-    if (left.dataType() instanceof DecimalType lt && right.dataType() instanceof DecimalType rt
-        && lt.scale() == rt.scale() && widerThanLong(left, right)) {
-      return Optional.of(lt.precision() >= rt.precision() ? lt : rt);
+    if (wide) {
+      DecimalType type = lt.precision() >= rt.precision() ? lt : rt;
+      return pairs(left, right, type, inputs, sink)
+          .map(p -> overPairs.apply(p.get(0), p.get(1)));
     }
-    return Optional.empty();
+    return operands(left, right, lt.scale(), inputs, sink)
+        .map(both -> overLongs.apply(both.get(0), both.get(1)));
   }
 
-  /**
-   * Whether either operand is a decimal of more than 18 digits, whatever the scales: the
-   * comparison is a pair's, compiled by {@link #wideType}'s path at one scale and declined
-   * naming the rescales at two.
-   */
-  private static boolean widerThanLong(Expression left, Expression right) {
-    return isWide(left) || isWide(right);
-  }
-
+  /** Whether {@code e} is a decimal of more than 18 digits, whose operand is a pair. */
   private static boolean isWide(Expression e) {
     return e.dataType() instanceof DecimalType t
         && t.precision() > DecimalColumn.MAX_LONG_PRECISION;
@@ -345,10 +323,9 @@ final class VarkaDecimalCompiler {
   }
 
   /**
-   * A literal operand's unscaled value at {@code scale}, in a slot of the long table. A null
-   * literal declines: the optimizer has folded the comparison to null before a real query gets
-   * here. A cast that fails, or a value that does not fit 18 digits, declines too, and leaves the
-   * row engine to raise or answer.
+   * A literal operand's unscaled value at {@code scale}, in a slot of the long table, or empty
+   * with the reason noted: {@link #foldLiteral}'s declines, and a value with no exact long at the
+   * scale or more than 18 digits, which leaves the row engine to answer.
    */
   private static Optional<VarkaVectorIR> literal(Expression e, int scale, DeclineSink sink) {
     Optional<Decimal> folded = foldLiteral(e, sink);
