@@ -502,8 +502,7 @@ public final class VarkaKernelRunner {
         boolean sameData = servedData == null || !bit || (bits
             ? bit(servedData, r) == bit(otherData, r)
             : servedData.asSlice((long) r * w, w)
-                .mismatch(otherData.asSlice((long) r * w, w)) < 0
-                || (dstFloating[o] && bothNaN(servedData, otherData, r, w)));
+                .mismatch(otherData.asSlice((long) r * w, w)) < 0);
         boolean same = bit == bit(otherBits, r) && sameData;
         if (!same) {
           throw VarkaErrors.illegalState(shapeHash + "'s dense and masked bodies disagree on "
