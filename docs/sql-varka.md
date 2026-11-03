@@ -988,10 +988,10 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 48 | 0 | 2 | 0 | 2 | 44 |
-| `bool` | 23 | 0 | 0 | 13 | 0 | 10 |
-| `byte` | 26 | 0 | 0 | 0 | 8 | 18 |
-| `date` | 87 | 17 | 0 | 1 | 0 | 69 |
+| `bigint` | 63 | 0 | 2 | 0 | 2 | 59 |
+| `bool` | 27 | 0 | 0 | 13 | 0 | 14 |
+| `byte` | 30 | 0 | 0 | 0 | 8 | 22 |
+| `date` | 101 | 17 | 0 | 1 | 0 | 83 |
 | `dec` | 39 | 21 | 0 | 0 | 0 | 18 |
 | `double` | 37 | 0 | 0 | 0 | 0 | 37 |
 | `dt` | 25 | 2 | 0 | 0 | 0 | 23 |
