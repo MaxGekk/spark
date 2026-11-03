@@ -1428,7 +1428,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val patternIds = Seq.fill(numInputs)(rnd.nextInt(patternNames.length))
     val patterns = patternIds.map(pattern(rnd, _, length))
     val forceMasked = length > 1 && rnd.nextInt(4) == 0
-    val options = randomOptions(rnd, VarkaMatrix.base)
+    val options = randomOptions(rnd, VarkaMatrix.base, castSeed, iteration)
     val data = Array.tabulate(numInputs, length)((c, _) => VarkaIrGrammar.castValue(rnd, c))
     val nulls = Array.tabulate(numInputs, length)((c, i) => patterns(c)(i))
     val label = s"lane=cast seed=$castSeed iteration=$iteration " +
