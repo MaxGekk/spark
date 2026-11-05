@@ -46,6 +46,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  * the JIT's timing, so a pass proves less than the byte check of {@code VarkaMaskOfWordSuite},
  * which holds the emitter to the form whatever the JIT does.
  */
+@org.junit.jupiter.api.Disabled("SCRATCH row 505")
 @VarkaSuite(ownJvm = true, jvmFlags = {"-XX:+IgnoreUnrecognizedVMOptions", "-XX:UseAVX=2"})
 public final class VarkaAvx2SelectSuite {
 

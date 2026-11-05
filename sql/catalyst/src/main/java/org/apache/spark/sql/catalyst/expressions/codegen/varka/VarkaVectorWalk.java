@@ -1651,7 +1651,7 @@ final class VarkaVectorWalk {
    * word goes to {@code fromLong} as it is.
    */
   static void emitMaskOfWord(CodeBuilder cb, Analysis analysis) {
-    if (!analysis.options.fromLongMasks()) {
+    if (false && !analysis.options.fromLongMasks()) { // SCRATCH row 505: row 491's guard off
       cb.getstatic(MASK_GUARD, "ones", ConstantDescs.CD_long);
       cb.getstatic(MASK_GUARD, "OPEN", ConstantDescs.CD_long);
       cb.lor();

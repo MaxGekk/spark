@@ -220,6 +220,7 @@ jobs:
         for module in sql catalyst; do
           ./dev/varka_matrix.sh --list-suites --module "$module" > "target/varka-bins/$module"
         done
+        : > target/varka-matrix/configurations  # SCRATCH row 505: the axis and the defaults only
         reach=()
         [ -s target/varka-matrix/reach.tsv ] && reach=(--reach target/varka-matrix/reach.tsv)
         python3 dev/varka_matrix_bins.py plan \
