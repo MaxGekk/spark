@@ -47,7 +47,7 @@ on:
 
 jobs:
   canary:
-    name: "${{ inputs.canary || 'MathLaneProbe' }} on ${{ matrix.arch }}"
+    name: "${{ inputs.canary || 'MathHostProbe' }} on ${{ matrix.arch }}"
     strategy:
       fail-fast: false
       matrix:
@@ -69,7 +69,7 @@ jobs:
         java-version: '25'
     - name: Describe the machine
       env:
-        CANARY: ${{ inputs.canary || 'MathLaneProbe' }}
+        CANARY: ${{ inputs.canary || 'MathHostProbe' }}
       # The whole feature line, from the kernel and from the JVM: a filtered list hides the
       # entries that decide what C2 may emit, such as aarch64's svebitperm, which
       # VectorMask.fromLong needs to become a single VectorLongToMask node.
@@ -86,7 +86,7 @@ jobs:
         } | tee "$RUNNER_TEMP/canary-out/machine.txt" | tee -a "$GITHUB_STEP_SUMMARY"
     - name: Run the canary
       env:
-        CANARY: ${{ inputs.canary || 'MathLaneProbe' }}
+        CANARY: ${{ inputs.canary || 'MathHostProbe' }}
         ARGS: ${{ inputs.args || '' }}
       # The vector debug property makes the JDK name the math library it bound each operator
       # to (SVML, SLEEF or the Java fallback) and the symbol, which is the evidence that a
@@ -125,5 +125,5 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: canary-${{ inputs.canary || 'MathLaneProbe' }}-${{ matrix.arch }}
+        name: canary-${{ inputs.canary || 'MathHostProbe' }}-${{ matrix.arch }}
         path: ${{ runner.temp }}/canary-out
