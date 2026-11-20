@@ -613,6 +613,18 @@ origins' windows exclude; and `VarkaDivisorProofSuite` and the proofs' README sa
 `time_bucket`'s divisor is the query's literal, exact by `ConstDivide`'s bound, a proof for any
 long divisor being `m9/SCOPE.md` item 116's.
 
+Predictions: 4.1, no existing shape's bytes move, held for this step: `emitted_bytes.json` gains
+the four rows' shapes and only option-arm digests move. 4.4's "under 20 s" for the differential's
+new rows was not timed apart from the suites; the bucket suite takes 7.7 s and the NTZ suite's new
+test 1.7 s. Unpredicted: `long_divide.smt2` under Z3 takes 19% longer, 174 s against master's 147 s
+run side by side on the shared laptop, for its three new divisors, which leaves less room under
+`dev/varka_prove.sh`'s 300 s run limit per file.
+
+Master at `0b8be5a33e4` is merged. The regeneration after the merge was stopped partway, by the
+owner's order of 20 November 07:30 CET (compiles only from then on). Its coverage and docs steps
+changed nothing; the width audit, bytes and census steps, and the suites on the merged head, are
+owed with the review of the merge.
+
 What is owed: the measurement (step 5, 4.1 to 4.3 scored there), on the runners' EPYC 7763 at 256
 and 128 bits, which the coordinator dispatches; and the option matrix over the new and changed
 suites.
