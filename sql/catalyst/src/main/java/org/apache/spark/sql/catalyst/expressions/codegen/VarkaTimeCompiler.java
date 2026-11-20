@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -590,38 +591,50 @@ final class VarkaTimeCompiler {
     }
     long o = origin.get();
     return VarkaNodeCompiler.longOperand(tb.ts(), inputs, literals, sink)
-        .map(t -> bucketStart(t, b, o, sink));
+        .flatMap(t -> bucketStart(t, b, o, tb, sink));
   }
 
   /**
    * The start of the bucket of width {@code b} from origin {@code o} that the count {@code t}
-   * falls in, raising where Spark's {@code timeBucketFromTimestampDTInterval} raises. Spark
-   * computes {@code diff = subtractExact(t, o)}, {@code k = floorDiv(diff, b)}, then
-   * {@code kb = multiplyExact(k, b)} and {@code addExact(o, kb)}; for {@code b} of a day or more
-   * it also evaluates the next bucket's start, {@code o + multiplyExact(k + 1, b)}, so it raises
-   * where that leaves the long. Here every arm computes the remainder
-   * {@code r = floorMod(diff, b)}, and {@code kb} is {@code diff - r}, whose checked subtraction
-   * overflows exactly where {@code multiplyExact(k, b)} does, since it is the same product; the
-   * next bucket's overflows are guards on {@code kb} and the start of at most
-   * {@code Long.MAX_VALUE - b}. The arms differ in {@code r}:
+   * falls in, raising where Spark's {@code timeBucketFromTimestampDTInterval} raises, or empty
+   * where no count has a bucket Spark answers. Spark computes {@code diff = subtractExact(t, o)},
+   * {@code k = floorDiv(diff, b)}, then {@code kb = multiplyExact(k, b)} and
+   * {@code addExact(o, kb)}; for {@code b} of a day or more it also evaluates the next bucket's
+   * start, {@code o + multiplyExact(k + 1, b)}, so it raises where that leaves the long. Here
+   * every arm computes the remainder {@code r = floorMod(diff, b)}, and {@code kb} is
+   * {@code diff - r}, whose checked subtraction overflows exactly where
+   * {@code multiplyExact(k, b)} does, since it is the same product, and the start {@code o + kb}
+   * is checked. The next bucket's start leaves the long exactly where {@code k} passes the
+   * greatest index whose next start is a long, which is where {@code t} reaches that index's next
+   * start, a constant of {@code o} and {@code b}: a guard on {@code t} ({@link #bucketGuard}).
+   * The arms differ in {@code r}:
    *
    * <ul>
    *   <li>{@code b} divides a day: {@code r1 = floorMod(diff, D)}, the time of day
    *       ({@code microsOfDay}), then {@code r1 - (r1 / b) * b}, a truncating division of a
    *       value in {@code [0, D)}. Exact over every long, since {@code floorMod(x, b) =
    *       floorMod(floorMod(x, D), b)} where {@code b} divides {@code D}.</li>
-   *   <li>{@code b} is {@code n} whole days: {@code q1 = floorDiv(diff, D)}, then
-   *       {@code k = floorDiv(q1, n)} by one bounded division, and
-   *       {@code r = (q1 - k * n) * D + r1}. Exact over every long, by the nested floors.</li>
-   *   <li>any other width: {@code diff} guarded to {@code +-(2^52 - b)}, one bounded floor
-   *       division by {@code b}, and {@code r = diff - k * b}. A batch with a difference past
-   *       the window, about 142 years less a width either side of the origin, goes to the row
-   *       engine.</li>
+   *   <li>{@code b} is {@code n} whole days: {@code k = floorDiv(floorDiv(diff, D), n)} by the
+   *       day's division and one bounded division, and {@code r = diff - k * b} in wrapping
+   *       arithmetic, which is exact, the true remainder being a long in {@code [0, b)}.</li>
+   *   <li>any other width: {@code t} guarded to {@code +-(2^52 - b)} of the origin, one bounded
+   *       floor division of the difference by {@code b}, and {@code r = diff - k * b}. A batch
+   *       with a count past the window, about 142 years less a width either side of the origin,
+   *       goes to the row engine.</li>
    * </ul>
    */
-  private static VarkaVectorIR bucketStart(VarkaVectorIR t, long b, long o, DeclineSink sink) {
+  private static Optional<VarkaVectorIR> bucketStart(
+      VarkaVectorIR t, long b, long o, TimeBucket tb, DeclineSink sink) {
     long day = DateTimeConstants.MICROS_PER_DAY;
-    VarkaVectorIR diff = o == 0 ? t : new IntArith(IntOp.SUB, Overflow.FAIL, t, sink.longSlot(o));
+    boolean windowed = day % b != 0 && b % day != 0;
+    long[] guard = bucketGuard(b, o, windowed);
+    if (guard[0] > guard[1]) {
+      return sink.decline("time_bucket whose every bucket's next start leaves the long", tb);
+    }
+    VarkaVectorIR held = guard[0] == Long.MIN_VALUE && guard[1] == Long.MAX_VALUE ? t
+        : new GuardedRange(t, guard[0], guard[1]);
+    VarkaVectorIR diff = o == 0 ? held
+        : new IntArith(IntOp.SUB, Overflow.FAIL, held, sink.longSlot(o));
     VarkaVectorIR kb;
     if (b == 1) {
       kb = diff;
@@ -631,37 +644,57 @@ final class VarkaTimeCompiler {
         VarkaVectorIR r1 = VarkaNodeCompiler.microsOfDay(diff, sink);
         r = new IntArith(IntOp.SUB, Overflow.WRAP, r1, new IntArith(IntOp.MUL, Overflow.WRAP,
             new ConstDivide(r1, b, day), sink.longSlot(b)));
-      } else if (b % day == 0) {
-        long n = b / day;
-        VarkaVectorIR r1 = VarkaNodeCompiler.microsOfDay(diff, sink);
-        if (n == 1) {
-          r = r1;
-        } else {
-          VarkaVectorIR q1 = VarkaNodeCompiler.floorDivLong(diff, day, sink);
-          VarkaVectorIR k = floorDivBounded(q1, n, DAY_QUOTIENT_MAGNITUDE + n - 1, sink);
-          VarkaVectorIR days = new IntArith(IntOp.SUB, Overflow.WRAP, q1,
-              new IntArith(IntOp.MUL, Overflow.WRAP, k, sink.longSlot(n)));
-          r = new IntArith(IntOp.ADD, Overflow.WRAP,
-              new IntArith(IntOp.MUL, Overflow.WRAP, days, sink.longSlot(day)), r1);
-        }
+      } else if (b == day) {
+        r = VarkaNodeCompiler.microsOfDay(diff, sink);
       } else {
-        long window = ConstDivide.EXACT_DIVIDEND_BOUND - b;
-        VarkaVectorIR inWindow = new GuardedRange(diff, -window, window);
-        VarkaVectorIR k = floorDivBounded(inWindow, b, ConstDivide.EXACT_DIVIDEND_BOUND, sink);
-        r = new IntArith(IntOp.SUB, Overflow.WRAP, inWindow,
+        VarkaVectorIR k;
+        if (windowed) {
+          k = floorDivBounded(diff, b, ConstDivide.EXACT_DIVIDEND_BOUND, sink);
+        } else {
+          long n = b / day;
+          k = floorDivBounded(VarkaNodeCompiler.floorDivLong(diff, day, sink), n,
+              DAY_QUOTIENT_MAGNITUDE + n - 1, sink);
+        }
+        r = new IntArith(IntOp.SUB, Overflow.WRAP, diff,
             new IntArith(IntOp.MUL, Overflow.WRAP, k, sink.longSlot(b)));
       }
       kb = new IntArith(IntOp.SUB, Overflow.FAIL, diff, r);
     }
-    boolean nextBucket = b >= day;
-    if (nextBucket) {
-      kb = new GuardedRange(kb, Long.MIN_VALUE, Long.MAX_VALUE - b);
+    return Optional.of(o == 0 ? kb : new IntArith(IntOp.ADD, Overflow.FAIL, sink.longSlot(o), kb));
+  }
+
+  /**
+   * The counts {@code [lo, hi]} a bucket's guard admits: for a windowed width those within
+   * {@code 2^52 - b} of the origin, and for a width of a day or more those below the first
+   * bucket whose next start leaves the long. That bucket's index is one past
+   * {@code kmax = min(floorDiv(Long.MAX_VALUE - b, b), floorDiv(Long.MAX_VALUE - b - o, b))},
+   * the greatest {@code k} with both {@code (k + 1) * b} and {@code o + (k + 1) * b} a long, so
+   * the counts that reach it are those from {@code o + (kmax + 1) * b} up. The whole long range
+   * where neither applies, and {@code {1, 0}} where no count is admitted.
+   */
+  private static long[] bucketGuard(long b, long o, boolean windowed) {
+    var lo = BigInteger.valueOf(Long.MIN_VALUE);
+    var hi = BigInteger.valueOf(Long.MAX_VALUE);
+    var width = BigInteger.valueOf(b);
+    var origin = BigInteger.valueOf(o);
+    if (windowed) {
+      var window = BigInteger.valueOf(ConstDivide.EXACT_DIVIDEND_BOUND - b);
+      lo = lo.max(origin.subtract(window));
+      hi = hi.min(origin.add(window));
     }
-    if (o == 0) {
-      return kb;
+    if (b >= DateTimeConstants.MICROS_PER_DAY) {
+      var top = BigInteger.valueOf(Long.MAX_VALUE - b);
+      BigInteger kmax = floorDiv(top, width).min(floorDiv(top.subtract(origin), width));
+      hi = hi.min(origin.add(kmax.add(BigInteger.ONE).multiply(width)).subtract(BigInteger.ONE));
     }
-    VarkaVectorIR start = new IntArith(IntOp.ADD, Overflow.FAIL, sink.longSlot(o), kb);
-    return nextBucket ? new GuardedRange(start, Long.MIN_VALUE, Long.MAX_VALUE - b) : start;
+    // An empty range, every count's next start past the long, is {1, 0}.
+    return hi.compareTo(lo) < 0 ? new long[] {1, 0}
+        : new long[] {lo.longValueExact(), hi.longValueExact()};
+  }
+
+  private static BigInteger floorDiv(BigInteger x, BigInteger y) {
+    BigInteger[] qr = x.divideAndRemainder(y);
+    return qr[1].signum() < 0 ? qr[0].subtract(BigInteger.ONE) : qr[0];
   }
 
   /**

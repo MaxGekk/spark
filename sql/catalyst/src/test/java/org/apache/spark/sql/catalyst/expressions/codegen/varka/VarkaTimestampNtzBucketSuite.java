@@ -139,9 +139,9 @@ public final class VarkaTimestampNtzBucketSuite {
       long n = b / DAY;
       long q1 = Math.floorDiv(diff, DAY);
       long k = (q1 + ((q1 >> 63) & (1 - n))) / n;
-      r = (q1 - k * n) * DAY + r1;
+      r = n == 1 ? r1 : diff - k * b;
     } else {
-      if (Math.abs(diff) > window(b)) {
+      if (diff < -window(b) || diff > window(b)) {
         return Optional.empty();
       }
       long k = (diff + ((diff >> 63) & (1 - b))) / b;
@@ -167,7 +167,8 @@ public final class VarkaTimestampNtzBucketSuite {
       return false;
     }
     try {
-      return Math.abs(Math.subtractExact(t, o)) > window(b);
+      long diff = Math.subtractExact(t, o);
+      return diff < -window(b) || diff > window(b);
     } catch (ArithmeticException e) {
       return false;
     }

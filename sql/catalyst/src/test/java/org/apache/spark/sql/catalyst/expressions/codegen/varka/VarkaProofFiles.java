@@ -367,8 +367,8 @@ final class VarkaProofFiles {
    * {@code b}. Whole days {@code n}: the day {@code q1 = floorDiv(x, D)} moved down by
    * {@code n - 1} when negative, so the truncating division by {@code n} is
    * {@code floorDiv(x, n * D)}, its dividend under the bound the compiler states, and the
-   * remainder {@code (q1 - k * n) * D + r1}. Any other width: the difference inside the window
-   * {@code +-(2^52 - b)}, moved down by {@code b - 1} when negative and so still under
+   * remainder {@code x - k * n * D} in wrapping arithmetic. Any other width: the difference inside
+   * the window {@code +-(2^52 - b)}, moved down by {@code b - 1} when negative and so still under
    * {@code 2^52}, which one past the window is not. The start's checked {@code x - r} is then
    * {@code floorDiv(x, b) * b} as an integer, so it overflows where Spark's {@code multiplyExact}
    * does.
@@ -389,7 +389,6 @@ final class VarkaProofFiles {
     for (long n : List.of(7L, 30L, 365L)) {
       var steps = List.of("(declare-const x Int)", "(assert (jlong.in x))",
           "(define-fun q1 () Int (jlong.floorDiv x " + day + "))",
-          "(define-fun r1 () Int (jlong.floorMod x " + day + "))",
           "(define-fun y () Int (jlong.add q1 (* (- (jlong.shr q1 63)) " + lit(1 - n) + ")))",
           "(define-fun k () Int (jlong.div y " + n + "))");
       var quotient = new ArrayList<>(steps);
@@ -401,10 +400,10 @@ final class VarkaProofFiles {
       check(out, "its dividend is under " + (magnitude + n - 1) + ", the bound the compiler "
           + "states", "unsat", bounded);
       var remainder = new ArrayList<>(steps);
-      remainder.add("(assert (not (= (+ (* (- q1 (* k " + n + ")) " + day + ") r1) "
+      remainder.add("(assert (not (= (jlong.sub x (jlong.mul k " + n * day + ")) "
           + "(jlong.floorMod x " + n * day + "))))");
-      check(out, "and (q1 - k * " + n + ") * " + day + " + r1 is floorMod(x, " + n * day + ")",
-          "unsat", remainder);
+      check(out, "and x - k * " + n * day + ", in the long's wrapping arithmetic, is floorMod(x, "
+          + n * day + ")", "unsat", remainder);
     }
     long b = 7 * DateTimeConstants.MICROS_PER_HOUR;
     long window = VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND - b;

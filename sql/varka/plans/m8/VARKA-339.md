@@ -528,3 +528,21 @@ Changed in review: the time family's `timestampadd` arm claimed the month units 
 chain's order kept from the calendar arm, so it now leaves them to it and each node has one
 claimant; `MONTH_COUNT` takes a `NarrowLane` only over a `GuardedRange` inside the int range, so a
 truncating narrowing is refused; a bigint quantity off the long lane declines with a reason.
+
+### 10.2 Step 4: `time_bucket`
+
+Built 20 November 2026 on `varka-339-ntz-arith`, from master at `767dcddce50`, while the owner was
+away (see the decisions below). `varka-339-step3`, the older local branch, holds nothing master
+lacks: its diff from its merge base is #1442's, file for file.
+
+1. **The arm (2.5)** is `VarkaTimeCompiler.ntzTimeBucket` and `bucketStart`, as the plan has it: the
+   difference checked, the remainder `floorMod(diff, b)` in one of three forms, `kb = diff - r`
+   checked, which overflows exactly where `multiplyExact(k, b)` does, and the start `o + kb`
+   checked; from a day up, `kb` and the start under `GuardedRange(_, Long.MIN_VALUE,
+   Long.MAX_VALUE - b)` for the next bucket's two overflows. A width that divides a day takes the
+   time of day (`microsOfDay`, 340's) and one `ConstDivide` under `D`; whole days take the day
+   (`floorDivLong`) and, past one day, a floor division by `n` under `106,751,993 + n - 1`; any
+   other width up to `2^51` guards the difference to `+-(2^52 - b)` and divides once. An origin of
+   0 drops the difference and the sum, a width of 1 the remainder. A year-month width declines by
+   name with `m9/SCOPE.md` item 117, as question 1 settled; a null width or origin, and a windowed
+   width past `2^51`, decline. No node, lowering or option is new.

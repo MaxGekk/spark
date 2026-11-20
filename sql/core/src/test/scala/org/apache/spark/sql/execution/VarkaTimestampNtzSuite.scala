@@ -54,7 +54,9 @@ import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType, L
  * And `timestampadd` and the month forms (VARKA-339): each unit's quantity at its guard's ends
  * runs on the kernel, and one past either end goes to the row engine with its batch alone, which
  * answers or raises `DATETIME_OVERFLOW` as Spark does; the month forms read the date under the
- * fields' guard, and the least month count negated raises.
+ * fields' guard, and the least month count negated raises. And `time_bucket` (VARKA-339): each
+ * form runs on the kernel inside the date guard, and a bucket whose start, or for a width of a
+ * day or more whose next start, leaves the long raises from the row engine its batch goes to.
  */
 class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
 
@@ -241,6 +243,11 @@ class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
         guardHigh - 1))),
       ("varka_ntz_trunc_below", truncSchema, truncAt(Seq(0L, 1L, guardLow - 1, 2L, 3L, 4L))),
       ("varka_ntz_below", ntzSchema, pastGuardRows(guardLow - 1)),
+      // The last day whose midnight is a long: its day bucket starts there, the next past the long.
+      ("varka_ntz_bucket_last", ntzSchema,
+        pastGuardRows(lastDay * DateTimeConstants.MICROS_PER_DAY + 1)),
+      // The least long, whose hour bucket would start below the long.
+      ("varka_ntz_bucket_least", ntzSchema, pastGuardRows(Long.MinValue)),
       ("varka_ntz_above", ntzSchema, pastGuardRows(guardHigh + 1)),
       ("varka_ntz_arith_inside", arithSchema, arithInsideRows),
       ("varka_ntz_make", makeSchema, makeAt(Seq((lastDay, lastTime), (-lastDay, LocalTime.MIN),
@@ -481,6 +488,33 @@ class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
             assert(varkaNode(plan).metrics("numFallbackBatchesDeclined").value === 1L, query)
           case r: Raised =>
             assert(r.condition === "DATETIME_OVERFLOW", s"$query: $r")
+        }
+      }
+    }
+  }
+
+  /** `time_bucket` over `t` in each of its forms, the coverage table's widths. */
+  private val bucketForms = Seq("time_bucket(INTERVAL '15' MINUTE, t)",
+    "time_bucket(INTERVAL '1' DAY, t, TIMESTAMP_NTZ '1970-01-01 06:00:00')",
+    "time_bucket(INTERVAL '30' DAY, t)", "time_bucket(INTERVAL '7' HOUR, t)",
+    "time_bucket(INTERVAL '1' HOUR, t)")
+
+  // varka-session-lint: allow a path: a bucket whose next start leaves the long, raised from the
+  // row engine its batch goes to
+  test("time_bucket runs on the kernel at the date guard's ends; a day bucket whose next start " +
+    "leaves the long raises from the row engine, and an hour bucket of the same value answers") {
+    for (ansi <- Seq(false, true)) withAnsi(ansi) {
+      for (form <- bucketForms) {
+        checkServed(s"SELECT i, $form AS v FROM varka_ntz_guard")
+      }
+      checkServed("SELECT i, time_bucket(INTERVAL '1' HOUR, t) AS v FROM varka_ntz_bucket_last")
+      for ((form, table) <- Seq(("time_bucket(INTERVAL '1' DAY, t)", "varka_ntz_bucket_last"),
+          ("time_bucket(INTERVAL '1' HOUR, t)", "varka_ntz_bucket_least"))) {
+        val query = s"SELECT i, $form AS v FROM $table"
+        assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
+        checkSparkAnswerMaybeThrows(query) match {
+          case _: Raised =>
+          case other => fail(s"$query: Spark answered $other where its start leaves the long")
         }
       }
     }

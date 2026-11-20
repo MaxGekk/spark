@@ -282,6 +282,12 @@ public final class VarkaCatalystGrammar {
     out.add(new Production(n, "($0 + $1)", List.of(n, y), 1));
     out.add(new Production(n, "($0 - $1)", List.of(n, y), 1));
     out.add(new Production(n, "($0 + INTERVAL '1' MONTH)", List.of(n), 1));
+    // time_bucket in its three forms (VARKA-339): a width that divides a day, whole days from an
+    // origin, and the windowed width; a hostile value raises Spark's overflow of the start.
+    out.add(new Production(n, "time_bucket(INTERVAL '15' MINUTE, $0)", List.of(n), 1));
+    out.add(new Production(n,
+        "time_bucket(INTERVAL '1' DAY, $0, TIMESTAMP_NTZ'1970-01-01 06:00:00')", List.of(n), 1));
+    out.add(new Production(n, "time_bucket(INTERVAL '7' HOUR, $0)", List.of(n), 1));
     choices(out, n, n, 1);
     // BOOLEAN: comparisons of one type, of an INT with a BIGINT, and of a DATE with a date
     // string; null tests; IN lists that widen; and the connectives.
