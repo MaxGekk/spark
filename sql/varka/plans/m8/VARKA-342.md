@@ -699,6 +699,17 @@ floating lane to an integral one and the floating guard, which 2.4 waits for.
   ones at level 3. The compiler suite pins the built shape and the reasons; `VarkaFloatingLaneSuite`
   runs `ym * x`, `ym * f`, `x * ym` and two literal forms end to end against the row engine, and
   four products Spark raises on (an overflow each way, NaN, an infinity) with the same error.
+  Its two new tests are headed by the session lint's marker, as path tests, since the suite
+  stood at the lint's limit of 40 answer checks.
+- **What ran (20 November 2026, the laptop).** `build/sbt catalyst/Test/compile` passed (its
+  first run died in the 11:57 CET out-of-memory kill of the laptop's session and was rerun under
+  the shared lock), then one run of `VarkaEmitterIntervalScaleSuite`: 4 of 4 passed, the sbt run
+  44 s in all, every one of the four forms answering Spark's `eval` at each cell and the kernel
+  the reference at every width and body. So the plan held where it was doubted: the kernel plan
+  admits the conversion's int value read by inner nodes of a double-driven kernel.
+- **Predictions, to score when the owed runs come in:** `emitted_bytes.json` gains the three
+  coverage rows' shapes and no committed shape moves (4.1); under `-XX:UseAVX=2` the width audit
+  refuses nothing in the new shapes, `D2I`, `I2D` and the crossings being intrinsic on AVX2.
 
 ### Decisions taken while the owner was away (20 November 2026)
 
