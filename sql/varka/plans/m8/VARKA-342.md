@@ -711,6 +711,26 @@ floating lane to an integral one and the floating guard, which 2.4 waits for.
   coverage rows' shapes and no committed shape moves (4.1); under `-XX:UseAVX=2` the width audit
   refuses nothing in the new shapes, `D2I`, `I2D` and the crossings being intrinsic on AVX2.
 
+### 5.7 The day-time product (20 November 2026)
+
+On part `varka-342e-daytime-scaling`, stacked on 5.6's (`b7945875bb0`) with `varka-343b2b-avx2`
+(343b2b, `d37962551b3`) merged in at `ba13356becb`: `D2L` and `F2L` at every named emit level, by
+one call at level 3 and by 343b2b's exact AVX2 forms below it.
+
+- **`dt * x` and `dt * f` fuse at every named level.** `floatingDecline` admits
+  `MultiplyDTInterval`, and `VarkaIntervalCompiler.dayTimeMultiply` hands a floating factor to
+  5.6's builder over the long lane: `L2D` of the microseconds (rounded to nearest, as Java's
+  `(double)` is), the product, the long guard `[-2^63, nextDown(2^63)]`, `D2L`, `f`, and the step
+  crossed to the long lane by `VectorMask.cast`. The unknown level declines it in the kernel plan,
+  as it declines every conversion between the long and double lanes, so there is no coverage row,
+  as there is none for `CAST(x AS BIGINT)`; the Spark sessions run at the unknown level, so the
+  end-to-end suite still plans no Varka node for it.
+- **2.4's `2^51` decline does not arise at the defaults.** 343b2b's default AVX2 forms
+  (`XOR_SPLIT`, and `SPLIT`) are whole-range; only the `MAGIC` option arm bounds `D2L` to
+  `|x| <= 2^51`, and there a day-time product past it declines its batch, as 2.4 says. The
+  emitter suite holds the forms at level 3 and under both whole-range AVX2 arms.
+- **`dt / x` stays declined**, by decision 8.
+
 ### Decisions taken while the owner was away (20 November 2026)
 
 1. **The FMA node is built now, as its own part, ahead of the rest of step 4.** The brief's

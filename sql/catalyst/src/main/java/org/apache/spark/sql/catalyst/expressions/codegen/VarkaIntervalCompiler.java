@@ -532,11 +532,13 @@ public final class VarkaIntervalCompiler {
   public static final double HALF_UP_LONG_HI = Math.nextDown(0x1p63);
 
   /**
-   * {@code ym * x} for a {@code FLOAT} or {@code DOUBLE} factor {@code x}: Spark's
-   * {@code DoubleMath.roundToInt(months * (double) x, HALF_UP)} in every mode, a bare
-   * {@code ArithmeticException} where the product is NaN, infinite or rounds past the int. The
-   * lowering is {@link #scaledHalfUp}; a lane it declines is a batch the row engine raises on.
-   * {@code lane} is the count's, {@code INT} for months.
+   * {@code ym * x} or {@code dt * x} for a {@code FLOAT} or {@code DOUBLE} factor {@code x}:
+   * Spark's {@code DoubleMath.roundToInt(months * (double) x, HALF_UP)} or {@code roundToLong} of
+   * the microseconds' product in every mode, a bare {@code ArithmeticException} where the
+   * product is NaN, infinite or rounds past the type. The lowering is {@link #scaledHalfUp}; a
+   * lane it declines is a batch the row engine raises on. {@code lane} is the count's,
+   * {@code INT} for months and {@code LONG} for microseconds. The day-time form converts to and
+   * from the long lane, so the kernel plan declines it at the unknown emit level.
    */
   private static Optional<VarkaVectorIR> floatingProduct(
       Expression interval,
@@ -719,8 +721,8 @@ public final class VarkaIntervalCompiler {
    * operand is range-guarded and the multiply wraps: a lane outside the guard declines the batch
    * and the row engine raises. {@code k = 1} is the operand, and {@code k = 0} a wrapping
    * multiply that cannot overflow and keeps the operand's nulls. A column factor needs the
-   * checked long multiply of row 104, a decimal literal is 2.4's later step and a floating one
-   * row 342's lowering; each declines.
+   * checked long multiply of row 104 and a decimal literal is 2.4's later step; each declines.
+   * A {@code FLOAT} or {@code DOUBLE} factor is {@link #floatingProduct}'s.
    */
   private static Optional<VarkaVectorIR> dayTimeMultiply(
       MultiplyDTInterval m,
@@ -728,6 +730,9 @@ public final class VarkaIntervalCompiler {
       VarkaSlotTable literals,
       DeclineSink sink) {
     DataType type = m.num().dataType();
+    if (VarkaFloatingCompiler.floatingLane(type).isPresent()) {
+      return floatingProduct(m.interval(), m.num(), LaneType.LONG, m, inputs, literals, sink);
+    }
     if (!(type instanceof IntegralType)) {
       return sink.decline("day-time interval factor of type " + type.simpleString()
           + " is not an integral literal", m);

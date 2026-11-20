@@ -322,4 +322,13 @@ public final class VarkaEmitterIntervalScaleSuite {
   void dayTimeAtLevelThree() {
     checkDayTime(DQ);
   }
+
+  @Test
+  @DisplayName("dt * x and dt / x round to the microseconds as Spark does at AVX2, under both "
+      + "whole-range conversion forms")
+  void dayTimeAtAvx2() {
+    var avx2 = VarkaMatrixRuns.BASE.withUseAVX(2);
+    checkDayTime(avx2.withWideConversionForm(VarkaEmitOptions.WideConversionForm.XOR_SPLIT));
+    checkDayTime(avx2.withWideConversionForm(VarkaEmitOptions.WideConversionForm.SPLIT));
+  }
 }

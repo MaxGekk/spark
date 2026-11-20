@@ -1640,10 +1640,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
   }
 
-  test("`dt * x` and `dt / x` by a double decline, each with its own reason") {
-    assert(declineReason(MultiplyDTInterval(dt, Literal(2.5d)), withLong) ===
-      "a day-time interval product by a floating factor, which waits for the conversion to " +
-        "the long lane below emit level 3 (part 343b2b)")
+  test("`dt * x` by a double fuses at a named emit level, and `dt / x` declines") {
+    // D2L and L2D are one call at level 3 and exact AVX2 forms below it; the unknown level
+    // declines both, as it declines every conversion between the long and double lanes.
+    for (level <- Seq(2, VarkaEmitOptions.AVX512_LEVEL)) {
+      assert(VarkaExpressionCompiler.compile(Seq(out(MultiplyDTInterval(dt, Literal(2.5d)))),
+        withLong, VarkaMatrix.base.withUseAVX(level)).isPresent, s"level $level")
+    }
     assert(declineReason(DivideDTInterval(dt, Literal(2.5d)), withLong) ===
       quotientByFloatingReason)
   }
