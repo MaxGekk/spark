@@ -358,9 +358,28 @@ public final class VarkaReference {
         : OptionalInt.of((int) exact);
   }
 
-  /** Whether {@code g} nulls a lane holding {@code v}: a {@code NULL} guard, and outside. */
+  /**
+   * Whether {@code g} nulls a lane holding {@code v}: a {@code NULL} guard, and outside. At a
+   * floating lane {@code v} is the lane's bits and the bounds its values, compared by IEEE, so a
+   * NaN is outside.
+   */
   private static boolean nulls(GuardedRange g, long v) {
-    return g.mode() == Overflow.NULL && (v < g.lo() || v > g.hi());
+    return g.mode() == Overflow.NULL && outside(g, v);
+  }
+
+  /** Whether {@code v}, a row of {@code g}'s child's lane, is outside {@code g}'s bounds. */
+  static boolean outside(GuardedRange g, long v) {
+    return switch (g.laneType()) {
+      case FLOAT -> {
+        float f = Float.intBitsToFloat((int) v);
+        yield !(f >= g.loValue() && f <= g.hiValue());
+      }
+      case DOUBLE -> {
+        double d = Double.longBitsToDouble(v);
+        yield !(d >= g.loValue() && d <= g.hiValue());
+      }
+      case BYTE, SHORT, INT, LONG -> v < g.lo() || v > g.hi();
+    };
   }
 
   private static long laneMin(LaneType lane) {

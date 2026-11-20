@@ -27,7 +27,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions
 import org.apache.spark.sql.catalyst.plans.logical.Project
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, DoubleType,
-  FloatType, IntegerType, LongType, ShortType, StructField, StructType, YearMonthIntervalType}
+  FloatType, LongType, ShortType, StringType, StructField, StructType, YearMonthIntervalType}
 
 /**
  * The floating lanes' first nodes, end to end: a `DOUBLE` or `FLOAT` column read from Varka's
@@ -455,13 +455,14 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
     val lines = VarkaFusionReport.lines(Seq(
       Alias(Coalesce(Seq(x1, x2)), "a")(),
       Alias(Greatest(Seq(x1, x2)), "b")(),
-      Alias(org.apache.spark.sql.catalyst.expressions.Cast(f1, IntegerType), "c")(),
+      Alias(org.apache.spark.sql.catalyst.expressions.Cast(f1, StringType), "c")(),
       Alias(org.apache.spark.sql.catalyst.expressions.Remainder(x1, x2), "e")(),
       Alias(org.apache.spark.sql.catalyst.expressions.Add(x1, x2), "g")()), output)
     assert(lines.size == 5, lines)
     assert(lines.head.endsWith(": fused"), lines)
     assert(lines(1).endsWith(": fused"), lines)
-    assert(lines(2).contains("a cast from a floating type (row 343's second part)"), lines)
+    assert(lines(2).contains("a cast from a floating type to string, which no floating "
+      + "lowering serves"), lines)
     assert(lines(3).contains("a floating remainder (row 346)"), lines)
     assert(lines(4).endsWith(": fused"), lines)
   }

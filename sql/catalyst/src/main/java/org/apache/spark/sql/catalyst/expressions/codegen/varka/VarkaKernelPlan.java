@@ -558,12 +558,15 @@ public final class VarkaKernelPlan {
       if (drive.isNarrow()) {
         continue;
       }
-      if (drive.isFloating() && !(drive == LaneType.DOUBLE && narrowColumnsOnly(root))) {
+      if (drive.isFloating() && !(drive == LaneType.DOUBLE
+          && (narrowColumnsOnly(root) || narrowsAnIntAtRoot(root)))) {
         // A floating kernel reads a narrow value only through its int conversion, and a tree
         // holding one drives at the int lane unless it holds a 64-bit value. A double kernel
         // loads a narrow column as a long kernel does, widened into the low half of the int
-        // species (VARKA-332), so CAST(y AS DOUBLE) fuses; any other narrow node there - a
-        // narrowing, narrow arithmetic, a narrow store - has no lowering at the double lane.
+        // species (VARKA-332), so CAST(y AS DOUBLE) fuses, and stores an int value narrowed at
+        // its root as a long kernel does, so CAST(x AS TINYINT) does; any other narrow node
+        // there - narrow arithmetic, a narrowing something reads - has no lowering at the
+        // double lane.
         return Optional.of(new Refusal(Kind.NARROW,
             "a narrow value under a " + drive + " kernel has no lowering (row 343)"));
       }
@@ -606,6 +609,19 @@ public final class VarkaKernelPlan {
   }
 
   /**
+   * Whether {@code root} is an int value narrowed to {@code TINYINT} or {@code SMALLINT} at its
+   * store, over a tree whose narrow nodes {@link #narrowColumnsOnly} admits: the store a double
+   * kernel shares with a long one, from the low half of the int species, as Spark's
+   * {@code CAST(x AS TINYINT)} of a double builds it over the int conversion (`VARKA-343.md`
+   * 2.4). The plan's narrowings at the store are the roots no other node reads, so a narrowing
+   * read by another root is not one; the long kernel's rule refuses it after this.
+   */
+  static boolean narrowsAnIntAtRoot(VarkaVectorIR root) {
+    return root instanceof NarrowLane n && n.target().isNarrow()
+        && n.child().laneType() == LaneType.INT && narrowColumnsOnly(n.child());
+  }
+
+  /**
    * Whether every narrow node of {@code root} is a column, read as a value or for its validity
    * word alone, and the root itself is not narrow: the narrow nodes a double kernel lowers, a
    * value through the long kernel's narrow load and a null test through the word, a bit per row
@@ -645,10 +661,12 @@ public final class VarkaKernelPlan {
    * {@code VarkaConversionLowering} below level 3, where x86 has no rule for either without
    * AVX512DQ; at the unknown level ({@link VarkaEmitOptions#levelUnknown()}), the defaults' and an
    * unset session's, which may be such a host, {@code convertShape} would run as the Vector API's
-   * Java loop and the entry declines. A floating source converted to an
-   * integral lane waits for part 343b2, at every level, but {@code D2I}, which an fdlibm port
-   * takes for its int {@code k}. A boolean whose condition compares longs
-   * is not a conversion from a long: the compiler narrows its one or zero to the int lane first.
+   * Java loop and the entry declines. A floating source converted to the int lane, {@code F2I}
+   * or {@code D2I}, is one {@code convertShape} at every level, intrinsic from AVX2 up; one
+   * converted to the long lane, {@code F2L} or {@code D2L}, has x86's AVX512DQ rule too, and is
+   * admitted at level 3 alone until its AVX2 form is built. A boolean whose condition compares
+   * longs is not a conversion from a long: the compiler narrows its one or zero to the int lane
+   * first.
    *
    * <p>The test reads the options' {@code UseAVX} level and not the CPU: the level is part of
    * the shape key, and a plan that read the host would key one shape two ways. The feature
@@ -671,13 +689,11 @@ public final class VarkaKernelPlan {
         continue;
       }
       if (node instanceof ConvertLane c) {
-        // D2I alone of the conversions to an integral lane: Java's (int) of a double, which the
-        // JDK's convertShape answers on every host and an fdlibm port takes for its int k
-        // (`VARKA-345.md` 10.2); no compiler arm builds it for a SQL cast yet.
-        boolean d2i = c.child().laneType() == LaneType.DOUBLE && c.target() == LaneType.INT;
-        if (!c.target().isFloating() && !d2i) {
-          return Optional.of(new Refusal(Kind.CONVERSION, "a conversion from "
-              + c.child().laneType() + " to " + c.target() + " is not built yet (row 343)"));
+        if (c.target() == LaneType.LONG
+            && (options.levelUnknown() || options.convertsFallBack())) {
+          return Optional.of(new Refusal(Kind.CONVERSION, "a " + c.child().laneType()
+              + " conversion to BIGINT below emit level 3, which may be a host's without"
+              + " AVX512DQ: its AVX2 form is not built yet (row 343)"));
         }
         if (c.child().laneType() == LaneType.LONG && options.levelUnknown()) {
           return Optional.of(new Refusal(Kind.CONVERSION, "a BIGINT conversion to " + c.target()

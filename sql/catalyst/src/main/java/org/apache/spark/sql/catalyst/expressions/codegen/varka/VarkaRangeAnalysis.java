@@ -339,6 +339,8 @@ public final class VarkaRangeAnalysis {
       // one alike; the popcount's bound below is the int lane's alone.
       // Under a NULL guard the bounds hold on live lanes only: a lane outside them is null and
       // keeps its value, which a consumer's validity hides and a guard's word AND excludes.
+      // At a floating lane the bounds are IEEE bits, which bound no integer.
+      case GuardedRange n when n.laneType().isFloating() -> VarkaValueRange.UNKNOWN;
       case GuardedRange n -> VarkaValueRange.of(n.lo(), n.hi());
       // A conversion with a floating side: the lattice tracks no floating value (VARKA-343).
       case ConvertLane _, ReinterpretLane _ -> VarkaValueRange.UNKNOWN;

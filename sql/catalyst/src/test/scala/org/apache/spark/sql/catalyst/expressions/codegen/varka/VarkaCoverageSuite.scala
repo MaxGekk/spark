@@ -1517,6 +1517,22 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("IF(NOT (x > 1.5D OR f > 1.5F), i, 7)", "NOT and OR at the double lane, then down"),
       Row("CASE WHEN f > 1.5F AND i > 3 THEN i END", "a mixed AND at the int lane, as a guard"),
       Row("CAST((f > 1.5F AND i > 3) AS INT)", "the mixed AND as its one or zero"))),
+    // The casts from a floating type to an integral one (VARKA-343 2.4): Java's cast, then
+    // under ANSI a guard of the values Spark's floor-and-ceil test admits, which declines a
+    // batch Spark raises on, and under TRY the same guard nulling the lane. A BIGINT target is
+    // not listed: the rows compile at the defaults' unknown emit level, where D2L declines.
+    Family("Floating casts to integral types", predicates = false, Seq(
+      Row("CAST(x AS INT)", "truncated toward zero; a value past the int range declines its "
+        + "batch, as Spark raises", domain = Some("x BETWEEN -2.0E9 AND 2.0E9")),
+      Row("try_cast(x AS INT)", "the same conversion, null past the int range and at a NaN"),
+      Row("CAST(f AS INT)", "the float twin",
+        domain = Some("f BETWEEN -2.0E9F AND 2.0E9F")),
+      Row("try_cast(f AS INT)", "null at the float values past 2147483520 and below -2^31"),
+      Row("try_cast(x AS SMALLINT)", "the int conversion wrapped, under the short range's "
+        + "guard"),
+      Row("try_cast(f AS TINYINT)", "the byte twin over a float, in a kernel of the int lane"),
+      Row("CAST(x AS TINYINT)", "the int conversion stored as a byte from a double kernel",
+        domain = Some("x BETWEEN -100.0D AND 100.0D")))),
     // Conditions of two kinds in one kernel (VARKA-343 2.2.1): each condition off the meeting
     // lane - LONG, else DOUBLE, else INT, else FLOAT - crossed to it, by VectorMask.cast at one
     // width and through the mask's word between the widths; Spark's inferred null tests among

@@ -886,8 +886,9 @@ public final class VarkaEmitterFloatingCastSuite {
         assertTrue(refusal.isEmpty(), level + ": " + refusal);
       }
     }
-    // A floating source converted to an integral lane waits for 343b2 at every level.
-    assertTrue(VarkaKernelPlan.refusalOf(List.of(convert(F, LaneType.INT)), DQ).isPresent());
+    // A floating source converted to the int lane is admitted at every level, and to the long
+    // lane at level 3 (VarkaEmitterFloatToIntegralSuite).
+    assertTrue(VarkaKernelPlan.refusalOf(List.of(convert(F, LaneType.INT)), DQ).isEmpty());
   }
 
   @Test
@@ -907,21 +908,5 @@ public final class VarkaEmitterFloatingCastSuite {
           refusal.map(VarkaKernelPlan.Refusal::kind), refusal.toString());
       assertTrue(VarkaKernelPlan.refusalOf(List.of(convert(I, target)), unknown).isEmpty());
     }
-  }
-
-  @Test
-  @DisplayName("the plan refuses a floating source converted to an integral lane but D2I, at "
-      + "every level")
-  void conversionRefusal() {
-    for (var c : List.of(convert(F, LaneType.INT), convert(F, LaneType.LONG),
-        convert(X, LaneType.LONG))) {
-      var refusal = VarkaKernelPlan.of(List.of(c), VarkaMatrixRuns.BASE).refusal();
-      assertTrue(refusal.isPresent(), VarkaVectorIR.canonical(c));
-      assertEquals(VarkaKernelPlan.Kind.CONVERSION, refusal.get().kind());
-    }
-    // D2I is an fdlibm port's int k (`VARKA-345.md` 10.2), Java's (int) on every host; no SQL
-    // cast builds it.
-    var d2i = convert(X, LaneType.INT);
-    assertTrue(VarkaKernelPlan.of(List.of(d2i), VarkaMatrixRuns.BASE).refusal().isEmpty());
   }
 }

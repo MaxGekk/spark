@@ -419,8 +419,8 @@ final class VarkaNodeCompiler {
       case Cast c when c.child().dataType() instanceof DecimalType
           || c.dataType() instanceof DecimalType -> "a decimal cast with a floating side (rows "
           + "346, 350, 364 and 366)";
-      case Cast c when isFloating(c.child().dataType()) ->
-          "a cast from a floating type (row 343's second part)";
+      case Cast c when isFloating(c.child().dataType()) -> "a cast from a floating type to "
+          + c.dataType().simpleString() + ", which no floating lowering serves";
       case Cast c when DataTypes.LongType.equals(c.child().dataType()) ->
           "a cast of BIGINT to a floating type, not intrinsic without AVX512DQ (row 343, part "
           + "343a4)";

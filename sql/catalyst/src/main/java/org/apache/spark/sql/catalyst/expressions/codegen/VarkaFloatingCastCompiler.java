@@ -21,12 +21,15 @@ import java.util.Optional;
 import javax.annotation.Nullable;
 import org.apache.spark.sql.catalyst.expressions.Cast;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConvertLane;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
@@ -45,10 +48,18 @@ import org.apache.spark.sql.types.DataTypes;
  * to, and a boolean is the {@code INT} one or zero its condition gives as a {@link CondValue},
  * narrowed from the long lane where its condition compares longs, then converted, which is exact.
  *
- * <p>The conversions from a floating type, from {@code BIGINT}, the {@code DATE} pairs (always
- * null under LEGACY, the floating lane's typed null) and every other source decline by
- * {@link VarkaNodeCompiler}'s {@code floatingDecline}, which admits exactly the pairs
- * {@link #admits} names.
+ * <p>From a floating type to an integral one ({@link #toIntegral}), Spark's LEGACY answer is
+ * Java's cast, JLS 5.1.3: NaN to 0, saturation at the int or long range, and a {@code TINYINT}
+ * or {@code SMALLINT} as the int conversion wrapped. ANSI raises {@code CAST_OVERFLOW} unless
+ * {@code Math.floor(v) <= MAX && Math.ceil(v) >= MIN} in double arithmetic, NaN failing both
+ * ({@code FloatExactNumeric}, {@code DoubleExactNumeric}, {@code CastUtils.floatToByteExact}
+ * and its kin), and TRY answers null where ANSI raises. So each is the same conversion over a
+ * {@link GuardedRange} of the source's values that pass that test
+ * ({@link VarkaTypes#castBounds}), failing under ANSI and nulling under TRY (`VARKA-343.md` 2.4).
+ *
+ * <p>The {@code DATE} pairs (always null under LEGACY, the floating lane's typed null) and every
+ * other source decline by {@link VarkaNodeCompiler}'s {@code floatingDecline}, which admits
+ * exactly the pairs {@link #admits} names.
  */
 final class VarkaFloatingCastCompiler {
 
@@ -64,6 +75,9 @@ final class VarkaFloatingCastCompiler {
     if (!(e instanceof Cast c) || !admits(c)) {
       return null;
     }
+    if (integralTarget(c.dataType()).isPresent()) {
+      return () -> toIntegral(c, inputs, literals, sink);
+    }
     LaneType target = DataTypes.DoubleType.equals(c.dataType()) ? LaneType.DOUBLE : LaneType.FLOAT;
     return () -> convert(c, target, inputs, literals, sink);
   }
@@ -78,14 +92,62 @@ final class VarkaFloatingCastCompiler {
    */
   static boolean admits(Cast c) {
     DataType to = c.dataType();
+    DataType from = c.child().dataType();
+    if (integralTarget(to).isPresent()) {
+      return DataTypes.FloatType.equals(from) || DataTypes.DoubleType.equals(from);
+    }
     if (!DataTypes.FloatType.equals(to) && !DataTypes.DoubleType.equals(to)) {
       return false;
     }
-    DataType from = c.child().dataType();
     return DataTypes.ByteType.equals(from) || DataTypes.ShortType.equals(from)
         || DataTypes.IntegerType.equals(from) || DataTypes.LongType.equals(from)
         || DataTypes.BooleanType.equals(from)
         || DataTypes.FloatType.equals(from) || DataTypes.DoubleType.equals(from);
+  }
+
+  /** The lane of an integral cast target, {@code TINYINT} to {@code BIGINT}, or empty. */
+  private static Optional<LaneType> integralTarget(DataType to) {
+    if (DataTypes.ByteType.equals(to)) {
+      return Optional.of(LaneType.BYTE);
+    }
+    if (DataTypes.ShortType.equals(to)) {
+      return Optional.of(LaneType.SHORT);
+    }
+    if (DataTypes.IntegerType.equals(to)) {
+      return Optional.of(LaneType.INT);
+    }
+    return DataTypes.LongType.equals(to) ? Optional.of(LaneType.LONG) : Optional.empty();
+  }
+
+  /**
+   * A {@code FLOAT} or {@code DOUBLE} value cast to an integral type: {@code ConvertLane} to the
+   * int lane, or the long lane for {@code BIGINT}, which is Java's cast; a narrow target is the
+   * int answer wrapped by a {@link NarrowLane}, which is JLS 5.1.3's {@code (byte) (int) v}. Under
+   * ANSI and TRY the conversion reads a {@link GuardedRange} of {@link VarkaTypes#castBounds}, in
+   * the mode {@code FAIL} or {@code NULL}: inside the bounds Spark's answer is the LEGACY one.
+   */
+  private static Optional<VarkaVectorIR> toIntegral(
+      Cast c, VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+    LaneType target = integralTarget(c.dataType()).orElseThrow();
+    LaneType source = DataTypes.FloatType.equals(c.child().dataType())
+        ? LaneType.FLOAT : LaneType.DOUBLE;
+    Overflow mode = VarkaNodeCompiler.overflowOf(c.evalMode());
+    Optional<VarkaVectorIR> x = VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
+    if (x.isEmpty()) {
+      return x;
+    }
+    VarkaVectorIR value = x.get();
+    if (value.laneType() != source) {
+      return sink.decline("a " + c.child().dataType().simpleString() + " operand on the "
+          + value.laneType() + " lane", c);
+    }
+    if (mode != Overflow.WRAP) {
+      double[] b = VarkaTypes.castBounds(source, target);
+      value = GuardedRange.floating(value, b[0], b[1], mode);
+    }
+    VarkaVectorIR converted =
+        new ConvertLane(value, target == LaneType.LONG ? LaneType.LONG : LaneType.INT);
+    return Optional.of(target.isNarrow() ? new NarrowLane(converted, target) : converted);
   }
 
   private static Optional<VarkaVectorIR> convert(

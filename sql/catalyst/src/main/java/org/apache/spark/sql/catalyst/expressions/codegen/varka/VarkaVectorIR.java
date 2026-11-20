@@ -911,11 +911,24 @@ public sealed interface VarkaVectorIR
    * There is no {@code WRAP} guard: a guard that let every value through would guard nothing.
    * The mode is part of the node's identity, rendered by {@link #canonical}, so a failing and
    * a nulling guard never share a kernel. The three-argument form is {@code FAIL}.
+   *
+   * <p>At a floating lane the bounds are the lane's own bits, a float's sign-extended, built by
+   * {@link #floating} and read back by {@link #loValue} and {@link #hiValue}: an IEEE value, never
+   * a NaN, compared by IEEE, so that a NaN lane is outside every bound and both zeros are inside
+   * any bound that holds one (`VARKA-343.md` 2.4). The integral lanes' bytes and renderings are
+   * the ones they were.
    */
   record GuardedRange(VarkaVectorIR child, long lo, long hi, Overflow mode, int hash)
       implements VarkaVectorIR {
     public GuardedRange {
-      if (lo > hi) {
+      if (child.laneType().isFloating()) {
+        double low = valueOf(child.laneType(), lo);
+        double high = valueOf(child.laneType(), hi);
+        if (Double.isNaN(low) || Double.isNaN(high) || !(low <= high)) {
+          throw VarkaErrors.illegalArgument("a floating range guard takes two ordered values, "
+              + "not [" + low + ", " + high + "]");
+        }
+      } else if (lo > hi) {
         throw VarkaErrors.illegalArgument("an empty range guards nothing: [" + lo + ", " + hi
             + "]");
       }
@@ -935,6 +948,57 @@ public sealed interface VarkaVectorIR
     /** {@code child} guarded by {@code [lo, hi]}, the batch declined where a lane is outside. */
     public GuardedRange(VarkaVectorIR child, long lo, long hi) {
       this(child, lo, hi, Overflow.FAIL);
+    }
+
+    /**
+     * {@code child}, on a floating lane, guarded by the values {@code [lo, hi]}, each exactly a
+     * value of the child's lane: a {@code FLOAT} bound that a float does not hold is refused
+     * rather than rounded, since a rounded bound would move the guard.
+     */
+    public static GuardedRange floating(VarkaVectorIR child, double lo, double hi,
+        Overflow mode) {
+      LaneType lane = child.laneType();
+      return new GuardedRange(child, bitsOf(lane, lo), bitsOf(lane, hi), mode);
+    }
+
+    /** The lower bound's value at a floating lane. */
+    public double loValue() {
+      return valueOf(child.laneType(), lo);
+    }
+
+    /** The upper bound's value at a floating lane. */
+    public double hiValue() {
+      return valueOf(child.laneType(), hi);
+    }
+
+    private static long bitsOf(LaneType lane, double v) {
+      return switch (lane) {
+        case FLOAT -> {
+          if ((double) (float) v != v && !Double.isNaN(v)) {
+            throw VarkaErrors.illegalArgument("a FLOAT range guard's bound " + v
+                + " is not a float");
+          }
+          yield Float.floatToRawIntBits((float) v);
+        }
+        case DOUBLE -> Double.doubleToRawLongBits(v);
+        case BYTE, SHORT, INT, LONG ->
+            throw VarkaErrors.illegalArgument("value bounds at the integral " + lane + " lane");
+      };
+    }
+
+    private static double valueOf(LaneType lane, long bits) {
+      return switch (lane) {
+        case FLOAT -> {
+          if (bits != (int) bits) {
+            throw VarkaErrors.illegalArgument("a FLOAT range guard's bound is not a float's "
+                + "bits: " + bits);
+          }
+          yield Float.intBitsToFloat((int) bits);
+        }
+        case DOUBLE -> Double.longBitsToDouble(bits);
+        case BYTE, SHORT, INT, LONG ->
+            throw VarkaErrors.illegalArgument("value bounds at the integral " + lane + " lane");
+      };
     }
   }
 

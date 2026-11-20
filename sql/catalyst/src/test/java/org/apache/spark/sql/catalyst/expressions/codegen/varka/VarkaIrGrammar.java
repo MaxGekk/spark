@@ -2408,10 +2408,10 @@ public final class VarkaIrGrammar {
 
   /**
    * The generator of {@link #drawFloatingCastShape}: a value at a lane is a leaf of it, a
-   * {@link ConvertLane} into it (a floating lane only, from an integral lane or the other
-   * floating one), a wrapping {@code +}, {@code -} or {@code *}, a pick, or a conditional over a
-   * comparison at the same lane or at another one, crossed. No division and no checked mode, so
-   * no draw declines.
+   * {@link ConvertLane} into it (into a floating lane from an integral lane or the other
+   * floating one, into an integral lane from a floating one), a wrapping {@code +}, {@code -} or
+   * {@code *}, a pick, or a conditional over a comparison at the same lane or at another one,
+   * crossed. No division and no checked mode, so no draw declines.
    */
   static final class FloatingCastShapes {
     private final Random rnd;
@@ -2433,7 +2433,7 @@ public final class VarkaIrGrammar {
         return leaf(lane);
       }
       budget--;
-      int pick = rnd.nextInt(lane.isFloating() ? 7 : 5);
+      int pick = rnd.nextInt(lane.isFloating() ? 7 : 6);
       return switch (pick) {
         case 0 -> new IntArith(IntOp.values()[rnd.nextInt(3)], Overflow.WRAP,
             value(lane, depth - 1), value(lane, depth - 1));
@@ -2444,6 +2444,10 @@ public final class VarkaIrGrammar {
         case 3 -> leaf(lane);
         case 4 -> new IfElse(crossed(lane, depth - 1), value(lane, depth - 1),
             value(lane, depth - 1));
+        // An integral lane converts from a floating one, F2I, D2I, F2L or D2L (part 343b2).
+        case 5 -> lane.isFloating() ? new ConvertLane(value(source(lane), depth - 1), lane)
+            : new ConvertLane(value(rnd.nextBoolean() ? LaneType.FLOAT : LaneType.DOUBLE,
+                depth - 1), lane);
         default -> new ConvertLane(value(source(lane), depth - 1), lane);
       };
     }

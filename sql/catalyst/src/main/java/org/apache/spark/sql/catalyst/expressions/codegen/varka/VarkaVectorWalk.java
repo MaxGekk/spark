@@ -852,16 +852,15 @@ final class VarkaVectorWalk {
 
   /**
    * The value on the stack, of lane {@code from}, as lane {@code to}: {@code I2L} and
-   * {@code L2I}, and the six conversions to a floating lane and between the two, part 0, each
-   * into the target species of the width the emission bakes. A narrow value is widened once at
-   * its load and narrowed once at its store, so a conversion node over one names the lane it is
-   * already emitted at and emits nothing, and any other pair is a lowering this emitter has not
-   * built: of the conversions from a floating lane to an integral one only {@code D2I}, Java's
-   * {@code (int)} of a double, which an fdlibm port takes (`VARKA-345.md` 10.2), and the rest are
-   * row 343's second part.
+   * {@code L2I}, and the ten conversions with a floating side, part 0, each into the target
+   * species of the width the emission bakes. A narrow value is widened once at its load and
+   * narrowed once at its store, so a conversion node over one names the lane it is already
+   * emitted at and emits nothing, and any other pair is a lowering this emitter has not built.
    * {@code L2F} and {@code L2D} come here at level 3 alone, where x86 has AVX512DQ, the level an
    * aarch64 host resolves to as well; below it they take {@link VarkaConversionLowering}'s
-   * forms.
+   * forms. {@code F2L} and {@code D2L} have the same rule on x86, and the kernel plan admits
+   * them at level 3 alone; {@code F2I} and {@code D2I} are intrinsic from AVX2 up, NaN to 0 and
+   * saturating as Java's cast.
    * The one form of the conversion: a long kernel's narrowing store converts through it too
    * ({@code VarkaBodyEmitter.emitNarrowStore}), into the low half of the int species.
    */
@@ -878,7 +877,10 @@ final class VarkaVectorWalk {
         : from == Lane.LONG && to == Lane.DOUBLE ? "L2D"
         : from == Lane.FLOAT && to == Lane.DOUBLE ? "F2D"
         : from == Lane.DOUBLE && to == Lane.FLOAT ? "D2F"
+        : from == Lane.FLOAT && to == Lane.INT ? "F2I"
         : from == Lane.DOUBLE && to == Lane.INT ? "D2I"
+        : from == Lane.FLOAT && to == Lane.LONG ? "F2L"
+        : from == Lane.DOUBLE && to == Lane.LONG ? "D2L"
         : null;
     if (op == null) {
       throw VarkaErrors.illegalArgument(
@@ -1679,6 +1681,10 @@ final class VarkaVectorWalk {
   private static void emitRangeMask(CodeBuilder cb, VarkaVectorIR node, int guardTmp,
       Analysis analysis, long lo, long hi) {
     Lane lane = guardLane(node, analysis);
+    if (lane.laneType.isFloating()) {
+      emitFloatingRangeMask(cb, (GuardedRange) node, guardTmp, lane);
+      return;
+    }
     cb.dup();
     cb.astore(guardTmp);
     cb.aload(guardTmp);
@@ -1690,6 +1696,34 @@ final class VarkaVectorWalk {
     lane.pushScalar(cb, hi);
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+  }
+
+  /**
+   * {@link #emitRangeMask} at a floating lane: the lanes not inside {@code [lo, hi]}, as the
+   * complement of {@code v >= lo & v <= hi} under IEEE, so that a NaN, which compares false to
+   * either bound, is outside, where {@code v < lo | v > hi} would let it through. The bounds are
+   * the lane's own values ({@link GuardedRange#floating}). The complement also sets the lanes past
+   * the group's rows that a 32-bit value has in a 64-bit kernel; every reader takes the group's
+   * lanes alone - the collect crosses to the drive through the mask's word, and the word the
+   * nulling arm narrows is read as a mask of the drive's lanes, its higher bits unread.
+   */
+  private static void emitFloatingRangeMask(CodeBuilder cb, GuardedRange node, int guardTmp,
+      Lane lane) {
+    cb.dup();
+    cb.astore(guardTmp);
+    for (int k = 0; k < 2; k++) {
+      cb.aload(guardTmp);
+      cb.getstatic(VECTOR_OPERATORS, k == 0 ? "GE" : "LE", VO_COMPARISON);
+      double bound = k == 0 ? node.loValue() : node.hiValue();
+      if (lane.laneType == VarkaVectorIR.LaneType.FLOAT) {
+        cb.loadConstant((float) bound);
+      } else {
+        cb.loadConstant(bound);
+      }
+      cb.invokevirtual(lane.vector, "compare", lane.compareVI);
+    }
+    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
   }
 
   /**

@@ -546,6 +546,50 @@ public final class VarkaTypes {
   }
 
   /**
+   * The values of lane {@code source} that Spark's ANSI cast to {@code target} admits, as an
+   * inclusive {@code [lo, hi]}: those with {@code Math.floor(v) <= MAX && Math.ceil(v) >= MIN},
+   * the target's range read as doubles, as Spark's test reads it ({@code Long.MaxValue} is
+   * {@code 2^63} there, so {@code 2^63} passes and saturates). The test is monotone in {@code v},
+   * so the set is one interval; each end starts from the double just inside {@code MAX + 1} or
+   * {@code MIN - 1}, rounded to the source type, and steps the one or two values to the last that
+   * passes. NaN fails both compares and lies outside every interval. For a
+   * {@code DOUBLE} source to {@code INT} it is {@code [nextUp(-2^31 - 1), nextDown(2^31)]}, for a
+   * {@code FLOAT} one {@code [-2^31, 2147483520]}, and {@code [-2^63, 2^63]} to {@code BIGINT}
+   * from either (`VARKA-343.md` 2.4).
+   */
+  public static double[] castBounds(LaneType source, LaneType target) {
+    IntegralRange range = integralRange(target);
+    double max = (double) range.max();
+    double min = (double) range.min();
+    return new double[] {edge(source, Math.nextUp(min - 1), false, min, max),
+        edge(source, Math.nextDown(max + 1), true, min, max)};
+  }
+
+  /** Spark's ANSI test of {@code v} against the range {@code [min, max]} read as doubles. */
+  public static boolean passes(double v, double min, double max) {
+    return Math.floor(v) <= max && Math.ceil(v) >= min;
+  }
+
+  /** The last value of {@code source}'s type from about {@code start} outward that passes. */
+  private static double edge(LaneType source, double start, boolean up, double min, double max) {
+    double v = source == LaneType.FLOAT ? (double) (float) start : start;
+    while (!passes(v, min, max)) {
+      v = step(source, v, !up);
+    }
+    while (passes(step(source, v, up), min, max)) {
+      v = step(source, v, up);
+    }
+    return v;
+  }
+
+  private static double step(LaneType source, double v, boolean up) {
+    if (source == LaneType.FLOAT) {
+      return up ? Math.nextUp((float) v) : Math.nextDown((float) v);
+    }
+    return up ? Math.nextUp(v) : Math.nextDown(v);
+  }
+
+  /**
    * Why a column of {@code dataType} is not read as values, naming the type, for a type the table
    * holds that no lane reads: the row that builds an owed one, the decision for a declined one.
    * Empty for a type a lane reads and for a type the table does not hold, whose column keeps the

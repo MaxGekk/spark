@@ -144,7 +144,7 @@ class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSe
         assert(legacy.getLong(5) > rows / 4 && legacy.getLong(6) === legacy.getLong(5))
       }
 
-      val sections = VarkaFloatingCastBaselineBenchmark.sections(false, false).asScala.toSeq
+      val sections = VarkaFloatingCastBaselineBenchmark.sections(false, false, false).asScala.toSeq
       assert(sections.size === 2 * resultTypes.size)
       for ((s, index) <- sections.zipWithIndex) {
         withClue(s.title) {
@@ -206,8 +206,13 @@ class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSe
           val emit = VarkaSessionEmit.of(varkaSpark.sessionState.conf)
           assert(VarkaFloatingCastBaselineBenchmark.fusesLongCasts(emit) === fuses,
             s"level $level")
+          // D2L fuses at level 3 alone until its AVX2 form is built.
+          val toBigint = level == 3
+          assert(VarkaFloatingCastBaselineBenchmark.fusesToBigint(emit) === toBigint,
+            s"level $level")
           forEachTwoLaneRefusal { declines =>
-            for (s <- VarkaFloatingCastBaselineBenchmark.sections(declines, fuses).asScala) {
+            for (s <- VarkaFloatingCastBaselineBenchmark.sections(declines, fuses, toBigint)
+                .asScala) {
               withClue(s"${s.title}, level $level, refusal $declines") {
                 withSettings(s) {
                   val plan = varkaSpark.sql(s.query).queryExecution.executedPlan

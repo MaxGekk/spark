@@ -1677,9 +1677,10 @@ final class Analysis {
       // VARKA-332); a validity-only narrow column, which the plan does not see, beside them.
       case LONG -> !type.isNarrow() || validityOnlyNarrow.contains(node)
           || VarkaKernelPlan.longNarrowRole(node) != VarkaKernelPlan.LongNarrowRole.NONE;
-      // A narrow column alone of the narrow nodes, loaded as the long lane loads it (the plan's
-      // narrowRefusal admits no other there).
-      case DOUBLE -> (!type.isNarrow() || node instanceof ColumnRef)
+      // A narrow column, loaded as the long lane loads it, and an int value narrowed at its
+      // store, of the narrow nodes (the plan's narrowRefusal admits no other there).
+      case DOUBLE -> (!type.isNarrow() || node instanceof ColumnRef
+          || VarkaKernelPlan.narrowsAnIntAtRoot(node))
           && type != VarkaVectorIR.LaneType.LONG;
     };
     if (!fits) {
@@ -1758,8 +1759,9 @@ final class Analysis {
       case GuardedRange n -> {
         // At a narrow or the int lane the bounds have to be what the lane can compare against;
         // the long lane holds any bound. Refused here, where the tree is, rather than at the
-        // push, which would narrow a bound silently.
-        if (n.laneType() != VarkaVectorIR.LaneType.LONG) {
+        // push, which would narrow a bound silently. A floating lane's bounds are its own
+        // values, which the node's constructor checks.
+        if (n.laneType() != VarkaVectorIR.LaneType.LONG && !n.laneType().isFloating()) {
           Lane of = Lane.of(n.laneType());
           if (n.lo() < of.mostNegative() || n.hi() > of.mostPositive()) {
             String name = switch (n.laneType()) {

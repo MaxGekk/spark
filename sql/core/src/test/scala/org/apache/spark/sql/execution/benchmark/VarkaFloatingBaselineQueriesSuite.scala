@@ -53,7 +53,7 @@ class VarkaFloatingBaselineQueriesSuite extends QueryTest with VarkaSharedSessio
         "select count_if(w = 0 or wf = 0), count_if(wn is null), count_if(wfn is null) " +
           "from varka_floating").head()
       assert(zeros.getLong(0) === 0 && zeros.getLong(1) === 200 && zeros.getLong(2) === 200)
-      val sections = VarkaFloatingBaselineBenchmark.sections(false).asScala
+      val sections = VarkaFloatingBaselineBenchmark.sections(false, false).asScala
       assert(sections.size === 30)
       for (s <- sections) {
         withClue(s.title) {
@@ -75,7 +75,7 @@ class VarkaFloatingBaselineQueriesSuite extends QueryTest with VarkaSharedSessio
       s"-D${VarkaSqlBenchmarkBase.FUSE_CHECK_PROPERTY}=false times the sections fused")
     withTable(100) {
       forEachTwoLaneRefusal { declines =>
-        for (s <- VarkaFloatingBaselineBenchmark.sections(declines).asScala) {
+        for (s <- VarkaFloatingBaselineBenchmark.sections(declines, false).asScala) {
           withClue(s"${s.title}, refusal $declines") {
             val plan = varkaSpark.sql(s.query).queryExecution.executedPlan
             assert(VarkaSqlBenchmarkBase.fusion(plan) === Optional.of(s.fusion))

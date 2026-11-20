@@ -119,9 +119,11 @@ public class VarkaFloatingBaselineBenchmark extends VarkaSqlBenchmarkBase {
   /**
    * Every section, in the order they run: each type, then each null density, then each shape, and
    * then row 346's sections at each density. The DOUBLE filters are {@code NONE} when the session
-   * refuses their condition ({@code declinesLongConditions}).
+   * refuses their condition ({@code declinesLongConditions}), and the DOUBLE cast to BIGINT is
+   * {@code WHOLE} where the session's emit level admits it ({@code fusesToBigint},
+   * {@code VarkaFloatingCastBaselineBenchmark.fusesToBigint}).
    */
-  static List<Section> sections(boolean declinesLongConditions) {
+  static List<Section> sections(boolean declinesLongConditions, boolean fusesToBigint) {
     List<Section> out = new ArrayList<>();
     String[][] types = {{"DOUBLE", "x", "y", "z", "BIGINT", "1.5D"},
         {"FLOAT", "f", "g", "h", "DOUBLE", "1.5F"}};
@@ -139,10 +141,11 @@ public class VarkaFloatingBaselineBenchmark extends VarkaSqlBenchmarkBase {
         out.add(new Section(type + " arithmetic chain, " + density,
             "SELECT (" + x + " + " + y + ") * " + z + " - " + x + " AS a FROM varka_floating",
             Fusion.WHOLE));
-        // The FLOAT to DOUBLE cast fuses (VARKA-343, part 343a3); DOUBLE to BIGINT is 343b2's.
+        // The FLOAT to DOUBLE cast fuses (VARKA-343, part 343a3), and DOUBLE to BIGINT where the
+        // level admits D2L (part 343b2).
         out.add(new Section(type + " cast to " + t[4] + ", " + density,
             "SELECT CAST(" + x + " AS " + t[4] + ") AS a FROM varka_floating",
-            "DOUBLE".equals(t[4]) ? Fusion.WHOLE : Fusion.NONE));
+            "DOUBLE".equals(t[4]) || fusesToBigint ? Fusion.WHOLE : Fusion.NONE));
         out.add(new Section(type + " choice, " + density,
             "SELECT CASE WHEN " + x + " < " + y + " THEN " + x + " ELSE " + y
                 + " END AS a FROM varka_floating", Fusion.WHOLE));
@@ -190,8 +193,9 @@ public class VarkaFloatingBaselineBenchmark extends VarkaSqlBenchmarkBase {
         VarkaArrowSessions.cache(session, "varka_floating");
       }
       // The two-lane refusal as the Varka session resolves it.
-      List<Section> sections = sections(
-          VarkaSessionEmit.of(varka.sessionState().conf()).declineTwoLaneConditions());
+      VarkaSessionEmit emit = VarkaSessionEmit.of(varka.sessionState().conf());
+      List<Section> sections = sections(emit.declineTwoLaneConditions(),
+          VarkaFloatingCastBaselineBenchmark.fusesToBigint(emit));
       for (Section s : sections) {
         requireBaseline(varka, s.title(), s.query(), s.fusion());
       }
