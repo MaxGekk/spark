@@ -274,7 +274,7 @@ unix_millis	UnixMillis	datetimeExpressions	out	TIMESTAMP with local time zone: o
 unix_micros	UnixMicros	datetimeExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026								
 unix_nanos	UnixNanos	datetimeExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026								
 convert_timezone	ConvertTimezone	datetimeExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026								
-time_bucket	TimeBucketExpressionBuilder	datetimeExpressions	in		ntz,ym,dt	ntz		ntz	semantics	339	a floor division of the micros by the bucket	
+time_bucket	TimeBucketExpressionBuilder	datetimeExpressions	in	declined ym: owner's decision, 14 October 2026	ntz,dt	ntz	ntz,dt	ntz	done	339	the bucket's remainder by the time of day, the day or one bounded division; a year-month width is out of milestone 8 by the owner's answer of 27 October 2026 (VARKA-339.md 8, m9/SCOPE.md item 117)	
 crc32	Crc32	hashExpressions	out	BINARY input: outside the type set								
 md5	Md5	hashExpressions	out	STRING input or output: owner's decision, 14 October 2026								
 hash	Murmur3Hash	hashExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	int		bool,byte,short,float,double,dec,ntz	semantics	337,359,368	Murmur3 over each column's bytes, NaN and -0.0 canonicalised first; precision above 18 declined at first (its hash is a variable-length byte array)	

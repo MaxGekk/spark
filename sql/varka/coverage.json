@@ -5415,6 +5415,54 @@
     "note" : "",
     "verified" : "differential"
   }, {
+    "sql" : "time_bucket(INTERVAL '15' MINUTE, ntz)",
+    "executable" : "time_bucket(INTERVAL '15' MINUTE, ntz)",
+    "family" : "TIMESTAMP_NTZ arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeBucket" ],
+    "casts" : [ ],
+    "operands" : [ "TimeBucket:dt", "TimeBucket:ntz" ],
+    "switches" : [ "spark.sql.codegen.varka.family.time.enabled" ],
+    "domain" : "ntz >= TIMESTAMP_NTZ '1970-01-01 00:00:00' - INTERVAL '106751991 04:00:00.000000' DAY TO SECOND",
+    "note" : "a width that divides a day takes the remainder through the time of day, exact over every long",
+    "verified" : "proof: long_divide.smt2"
+  }, {
+    "sql" : "time_bucket(INTERVAL '1' DAY, ntz, TIMESTAMP_NTZ '1970-01-01 06:00:00')",
+    "executable" : "time_bucket(INTERVAL '1' DAY, ntz, TIMESTAMP_NTZ '1970-01-01 06:00:00')",
+    "family" : "TIMESTAMP_NTZ arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeBucket" ],
+    "casts" : [ ],
+    "operands" : [ "TimeBucket:dt", "TimeBucket:ntz" ],
+    "switches" : [ "spark.sql.codegen.varka.family.time.enabled" ],
+    "domain" : "ntz >= CAST(date_from_unix_date(-106751991) AS TIMESTAMP_NTZ) + INTERVAL '6' HOUR AND ntz < CAST(date_from_unix_date(106751990) AS TIMESTAMP_NTZ) + INTERVAL '6' HOUR",
+    "note" : "a width of whole days through the day, an origin's start checked, the next bucket's guarded",
+    "verified" : "proof: long_divide.smt2"
+  }, {
+    "sql" : "time_bucket(INTERVAL '30' DAY, ntz)",
+    "executable" : "time_bucket(INTERVAL '30' DAY, ntz)",
+    "family" : "TIMESTAMP_NTZ arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeBucket" ],
+    "casts" : [ ],
+    "operands" : [ "TimeBucket:dt", "TimeBucket:ntz" ],
+    "switches" : [ "spark.sql.codegen.varka.family.time.enabled" ],
+    "domain" : "ntz >= CAST(date_from_unix_date(-106751970) AS TIMESTAMP_NTZ) AND ntz < CAST(date_from_unix_date(106751970) AS TIMESTAMP_NTZ)",
+    "note" : "the day's floor division by the days",
+    "verified" : "proof: long_divide.smt2"
+  }, {
+    "sql" : "time_bucket(INTERVAL '7' HOUR, ntz)",
+    "executable" : "time_bucket(INTERVAL '7' HOUR, ntz)",
+    "family" : "TIMESTAMP_NTZ arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeBucket" ],
+    "casts" : [ ],
+    "operands" : [ "TimeBucket:dt", "TimeBucket:ntz" ],
+    "switches" : [ "spark.sql.codegen.varka.family.time.enabled" ],
+    "domain" : "ntz - TIMESTAMP_NTZ '1970-01-01 00:00:00' BETWEEN INTERVAL '-52124 16:53:47.370496' DAY TO SECOND AND INTERVAL '52124 16:53:47.370496' DAY TO SECOND",
+    "note" : "any other width by one division, the difference from the origin held to the window that division is exact over",
+    "verified" : "proof: long_divide.smt2"
+  }, {
     "sql" : "year(ntz)",
     "executable" : "year(ntz)",
     "family" : "TIMESTAMP_NTZ fields",
@@ -9219,5 +9267,5 @@
     "note" : "a DECIMAL(8, 6), s * 10^6 + (n % 10^9) / 1000; Spark rounds a Double back to six digits, which lands on the same value for every (s, g)",
     "verified" : "exhaustive: VarkaTimeFractionSuite, the fraction agrees with Spark's double round trip on every (s, g) of TIME(0) "
   } ],
-  "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "BitwiseAnd", "BitwiseCount", "BitwiseNot", "BitwiseOr", "BitwiseXor", "CaseWhen", "Cast", "Ceil", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "Divide", "DivideYMInterval", "EqualNullSafe", "EqualTo", "ExtractANSIIntervalDays", "ExtractANSIIntervalMonths", "ExtractANSIIntervalYears", "Floor", "GreaterThan", "GreaterThanOrEqual", "Greatest", "Hour", "If", "In", "InSet", "IsNaN", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Minute", "Month", "Multiply", "MultiplyDTInterval", "MultiplyYMInterval", "NaNvl", "NextDay", "Not", "Or", "Quarter", "Rint", "Second", "ShiftLeft", "ShiftRight", "ShiftRightUnsigned", "Signum", "Sqrt", "Subtract", "SubtractDates", "SubtractTimestamps", "TimestampAdd", "TimestampAddInterval", "TimestampAddYMInterval", "ToDegrees", "ToRadians", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
+  "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "BitwiseAnd", "BitwiseCount", "BitwiseNot", "BitwiseOr", "BitwiseXor", "CaseWhen", "Cast", "Ceil", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "Divide", "DivideYMInterval", "EqualNullSafe", "EqualTo", "ExtractANSIIntervalDays", "ExtractANSIIntervalMonths", "ExtractANSIIntervalYears", "Floor", "GreaterThan", "GreaterThanOrEqual", "Greatest", "Hour", "If", "In", "InSet", "IsNaN", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Minute", "Month", "Multiply", "MultiplyDTInterval", "MultiplyYMInterval", "NaNvl", "NextDay", "Not", "Or", "Quarter", "Rint", "Second", "ShiftLeft", "ShiftRight", "ShiftRightUnsigned", "Signum", "Sqrt", "Subtract", "SubtractDates", "SubtractTimestamps", "TimeBucket", "TimestampAdd", "TimestampAddInterval", "TimestampAddYMInterval", "ToDegrees", "ToRadians", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
 }

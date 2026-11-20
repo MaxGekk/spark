@@ -555,3 +555,68 @@ lacks: its diff from its merge base is #1442's, file for file.
    `kmax = min(floorDiv(MAX - b, b), floorDiv(MAX - b - o, b))`, which is where `t` reaches
    `o + (kmax + 1) * b`. One guard on the leaf replaces two on the root path, and the whole-days
    remainder's wrapping `diff - k * b` replaces 2.5's `(q1 - k * n) * D + r1`, four ops fewer.
+3. **The proofs (3.6).** `long_divide.smt2` gains `LONG_DIVISORS`' three new divisors (15 minutes,
+   30 and seven hours, each proven exact under `2^52` in both division forms, as every long divisor
+   is) and a `time_bucket` section: the divides-a-day remainder at 15 minutes as two linear lemmas
+   (the steps over a time of day wrap nowhere, and `floorMod(floorMod(x, D), b) = floorMod(x, b)`),
+   for 7, 30 and 365 days the quotient, its dividend bound and the wrapping remainder, and at seven
+   hours the window's bound, the quotient and remainder, and the bound refuted one past the window.
+   As first written, four checks stated over the wrapping steps of `x` answered unknown under cvc5
+   (Z3 proved them); restated over the floor quotient the first check proves, as `floorDivDay`
+   states the time of day, all 2,281 checks hold under both, Z3 in 118 s to 209 s for the file on
+   the shared laptop and cvc5 in 67 s to 81 s, the new section 0.2 s of it. The 504 divisors of a
+   day are the JVM's (below), not the solver's.
+4. **`VarkaTimestampNtzBucketSuite`**, new. The scalar form of the three arms is held to Spark's
+   `timeBucketDTInterval` at UTC for every divisor of a day, the whole days 1, 7, 30, 365 and
+   106,751,991 and five windowed widths (seven hours, 36 hours, 1,000,003, a day and one, `2^51`), at
+   five origins (the epoch, a held value, -1 and the long's ends five in), over the long's ends, the
+   ends of the buckets around the origin, the long's ends and the window's, and a seeded draw:
+   equal where both answer, declining exactly where Spark raises or outside the window. The emitted
+   kernels of 35 of those widths at the five origins run the same values: one batch of everything
+   Spark answers inside the window must be served, and each value it raises on, or outside the
+   window, declines in a batch of its own. The third test pins the declines. 7.7 s for the suite
+   at the defaults with bare sbt.
+5. **Coverage (3.3)**: four rows in the NTZ arithmetic family, `time_bucket` at 15 minutes, a day
+   from 06:00, 30 days and seven hours, each `Proved("long_divide.smt2")` and with its domain: the
+   first bucket start that is a long for 15 minutes, whose outside no fixture value reaches, so it
+   is listed as a total domain; for a day from 06:00 and for 30 days the counts below the first
+   bucket whose next start leaves the long (and, at 30 days, above the last whose start is a long),
+   written as `date_from_unix_date` midnights; for seven hours the window. The three guarded rows
+   join the false-AND list, for the reason `ntz + dt` is on it.
+6. **The edges (3.4)**, in `VarkaTimestampNtzSuite`, LEGACY and ANSI: each form and an hour over
+   the date guard's ends on the kernel; the last day whose midnight is a long, plus a microsecond,
+   whose day bucket starts in range and whose next does not, raising from the row engine, and the
+   same value's hour bucket served; the least long's hour bucket, whose start is below the long,
+   raising.
+7. **The baseline**: both `time_bucket` sections are `WHOLE`, so every section of
+   `VarkaTimestampNtzArithmeticBaselineBenchmark` now fuses and its queries suite holds them to it.
+8. **The Spark fuzzer**'s grammar gains `time_bucket` at 15 minutes, a day from 06:00 and seven
+   hours; `expected_errors.tsv` adds the family to `ARITHMETIC_OVERFLOW`, which Spark raises in
+   every mode where a start leaves the long (`MathUtils`), the next start's bare overflow through
+   `instantToMicros` being the family's listed `java.lang.ArithmeticException`.
+9. **The census** marks `time_bucket` done for `dt` and `ntz`, `ym!` for the declined width, and
+   `dev/varka_census.py` maps the name to `TimeBucket`.
+10. **The option matrix.** Under `checkIntOverflow=false` the checked subtract and add wrap where
+    Spark raises, so the NTZ suite's bucket test and the bucket suite's emitted test take the
+    `ntz + dt` skip line's reason. Which coverage-harness tests of the four rows need one is the
+    dispatched matrix's to say, owed with the measurement.
+
+What is owed: the measurement (step 5, 4.1 to 4.3 scored there), on the runners' EPYC 7763 at 256
+and 128 bits, which the coordinator dispatches; and the option matrix over the new and changed
+suites.
+
+### Decisions taken while the owner was away (20 November 2026)
+
+1. **A new branch from master, not `varka-339-step3`.** Its diff from its merge base is #1442's,
+   file for file, so nothing there is unmerged.
+2. **The guards moved onto the count** (10.2 item 2) rather than raising `MAX_CHAIN_DEPTH` or
+   splitting the output: the budget is the emitter's policy for every shape, and the guard on the
+   leaf is the same predicate, computed once at compile time.
+3. **The coverage rows' widths are the plan's; the origin is 06:00.** A day from the epoch would
+   put its next-start bound past every fixture value; 06:00 brings the last day's afternoon outside
+   the domain, so the row's guard is exercised both ways.
+4. **The year-month decline keeps the census's `!` mark**, whose generated reason carries the
+   decimal decision's date of 14 October; the note gives this one's, 27 October, rather than the
+   script growing a per-entry date for one entry.
+5. **Only the two skip lines the code makes certain are added**; a harness line that might not
+   fail would be stale, so the rest wait for the matrix.
