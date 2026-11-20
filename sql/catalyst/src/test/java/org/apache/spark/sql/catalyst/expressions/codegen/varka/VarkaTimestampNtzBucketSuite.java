@@ -326,9 +326,12 @@ public final class VarkaTimestampNtzBucketSuite {
             .filter(t -> spark(b, t, o).isPresent() && !outsideWindow(b, t, o)).toArray();
         assertTrue(answers(plan, className, bytes, b, o, answered),
             "time_bucket(" + b + ", ntz, " + o + ") declined a batch Spark answers");
+        // Each declining value beside two the kernel serves, so that the value alone declines.
+        assertTrue(answered.length >= 2, "time_bucket(" + b + ", ntz, " + o + ") serves no pair");
         for (long t : values) {
           if (spark(b, t, o).isEmpty() || outsideWindow(b, t, o)) {
-            assertFalse(answers(plan, className, bytes, b, o, new long[] {0, t, 1}),
+            assertFalse(answers(plan, className, bytes, b, o,
+                new long[] {answered[0], t, answered[1]}),
                 "time_bucket(" + b + ", ntz, " + o + ") answered a batch holding " + t);
           }
         }

@@ -627,9 +627,9 @@ final class VarkaTimeCompiler {
   private static VarkaVectorIR bucketStart(VarkaVectorIR t, long b, long o, DeclineSink sink) {
     long day = DateTimeConstants.MICROS_PER_DAY;
     boolean windowed = day % b != 0 && b % day != 0;
-    long[] guard = bucketGuard(b, o, windowed);
-    VarkaVectorIR held = guard[0] == Long.MIN_VALUE && guard[1] == Long.MAX_VALUE ? t
-        : new GuardedRange(t, guard[0], guard[1]);
+    CountRange guard = bucketGuard(b, o, windowed);
+    VarkaVectorIR held = guard.lo() == Long.MIN_VALUE && guard.hi() == Long.MAX_VALUE ? t
+        : new GuardedRange(t, guard.lo(), guard.hi());
     VarkaVectorIR diff = o == 0 ? held
         : new IntArith(IntOp.SUB, Overflow.FAIL, held, sink.longSlot(o));
     VarkaVectorIR kb;
@@ -661,7 +661,7 @@ final class VarkaTimeCompiler {
   }
 
   /**
-   * The counts {@code [lo, hi]} a bucket's guard admits: for a windowed width those within
+   * The counts a bucket's guard admits: for a windowed width those within
    * {@code 2^52 - b} of the origin, and for a width of a day or more those below the first
    * bucket whose next start leaves the long. That bucket's index is one past
    * {@code kmax = min(floorDiv(Long.MAX_VALUE - b, b), floorDiv(Long.MAX_VALUE - b - o, b))},
@@ -671,7 +671,7 @@ final class VarkaTimeCompiler {
    * {@code Long.MAX_VALUE - b - o >= -b}, so {@code hi >= o - 1}, and {@code lo} is below the
    * origin unless the origin is the least long, whose {@code kmax} is at least 0.
    */
-  private static long[] bucketGuard(long b, long o, boolean windowed) {
+  private static CountRange bucketGuard(long b, long o, boolean windowed) {
     var lo = BigInteger.valueOf(Long.MIN_VALUE);
     var hi = BigInteger.valueOf(Long.MAX_VALUE);
     var width = BigInteger.valueOf(b);
@@ -686,11 +686,16 @@ final class VarkaTimeCompiler {
       BigInteger kmax = floorDiv(top, width).min(floorDiv(top.subtract(origin), width));
       hi = hi.min(origin.add(kmax.add(BigInteger.ONE).multiply(width)).subtract(BigInteger.ONE));
     }
-    if (hi.compareTo(lo) < 0) {
-      throw VarkaErrors.illegalArgument("time_bucket's guard on the count is empty for width "
-          + b + " and origin " + o);
+    return new CountRange(lo.longValueExact(), hi.longValueExact());
+  }
+
+  /** The counts {@code [lo, hi]} a {@code time_bucket} guard admits, never empty. */
+  private record CountRange(long lo, long hi) {
+    CountRange {
+      if (lo > hi) {
+        throw VarkaErrors.illegalArgument("an empty time_bucket guard [" + lo + ", " + hi + "]");
+      }
     }
-    return new long[] {lo.longValueExact(), hi.longValueExact()};
   }
 
   private static BigInteger floorDiv(BigInteger x, BigInteger y) {

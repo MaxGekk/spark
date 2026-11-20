@@ -581,8 +581,9 @@ lacks: its diff from its merge base is #1442's, file for file.
    first bucket start that is a long for 15 minutes, whose outside no fixture value reaches, so it
    is listed as a total domain; for a day from 06:00 and for 30 days the counts below the first
    bucket whose next start leaves the long (and, at 30 days, above the last whose start is a long),
-   written as `date_from_unix_date` midnights; for seven hours the window. The three guarded rows
-   join the false-AND list, for the reason `ntz + dt` is on it.
+   written as `date_from_unix_date` midnights; for seven hours the window. The seven-hour row joins
+   the false-AND list, for the reason `ntz + dt` is on it; the first review put the day and 30-day
+   rows there too, and the harness found both served at that position, their entries stale.
 6. **The edges (3.4)**, in `VarkaTimestampNtzSuite`, LEGACY and ANSI: each form and an hour over
    the date guard's ends on the kernel; the last day whose midnight is a long, plus a microsecond,
    whose day bucket starts in range and whose next does not, raising from the row engine, and the
@@ -592,14 +593,25 @@ lacks: its diff from its merge base is #1442's, file for file.
    `VarkaTimestampNtzArithmeticBaselineBenchmark` now fuses and its queries suite holds them to it.
 8. **The Spark fuzzer**'s grammar gains `time_bucket` at 15 minutes, a day from 06:00 and seven
    hours; `expected_errors.tsv` adds the family to `ARITHMETIC_OVERFLOW`, which Spark raises in
-   every mode where a start leaves the long (`MathUtils`), the next start's bare overflow through
-   `instantToMicros` being the family's listed `java.lang.ArithmeticException`.
+   every mode where the difference, the offset `k * b` or a start under a day leaves the long
+   (`MathUtils`); a start of a day or more goes through `instantToMicros`, whose bare overflow is
+   the family's listed `java.lang.ArithmeticException`.
 9. **The census** marks `time_bucket` done for `dt` and `ntz`, `ym!` for the declined width, and
    `dev/varka_census.py` maps the name to `TimeBucket`.
 10. **The option matrix.** Under `checkIntOverflow=false` the checked subtract and add wrap where
     Spark raises, so the NTZ suite's bucket test and the bucket suite's emitted test take the
     `ntz + dt` skip line's reason. Which coverage-harness tests of the four rows need one is the
     dispatched matrix's to say, owed with the measurement.
+
+Changed in review (`/code-review high`, a first round over the work in progress and a second over
+the result): the generated files and the proof file regenerated; the fuzzer's expected error and
+the false-AND list extended (by the seven-hour row only, as the harness then showed); the coverage rows marked proven; the guard's unreachable empty case an
+invariant of a record rather than a decline; a null origin pinned; the NTZ suite's seven-hour form
+served over its window, not the date guard's ends, which lie far outside it; the emitted test's
+declining values set beside two values the kernel serves, not beside 0 and 1, which the far
+origins' windows exclude; and `VarkaDivisorProofSuite` and the proofs' README saying that
+`time_bucket`'s divisor is the query's literal, exact by `ConstDivide`'s bound, a proof for any
+long divisor being `m9/SCOPE.md` item 116's.
 
 What is owed: the measurement (step 5, 4.1 to 4.3 scored there), on the runners' EPYC 7763 at 256
 and 128 bits, which the coordinator dispatches; and the option matrix over the new and changed

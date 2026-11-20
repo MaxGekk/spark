@@ -54,10 +54,8 @@ import org.apache.spark.sql.VarkaBenchmark;
  * <p>A baseline is only one while nothing fuses: before anything is timed, the run checks each
  * section's plan on the Varka session against the section's {@link Fusion} class, the record of
  * how much of it a step of VARKA-339 has fused, and fails when the plan's class differs
- * ({@link VarkaSqlBenchmarkBase#requireBaseline(SparkSession, String, String, Fusion)}). Step 2
- * fuses the chain and the interval column sum, at both densities, step 3 the month form and
- * {@code timestampadd}, step 4 both {@code time_bucket} widths, so every section is
- * {@code WHOLE}. Each step set the class of the sections it fused, so the same class and the same
+ * ({@link VarkaSqlBenchmarkBase#requireBaseline(SparkSession, String, String, Fusion)}). Every
+ * section is {@code WHOLE}: the steps of VARKA-339 fuse them all, so the same class and the same
  * labels time the fused code. A {@code WHOLE} section must also run as a
  * kernel over every batch, none handed back to the row path ({@link VarkaSizeLadder#varkaFused}),
  * or the run fails rather than time the row path under the {@code varka on} label. That holds

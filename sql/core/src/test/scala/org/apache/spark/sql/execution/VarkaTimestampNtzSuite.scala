@@ -91,6 +91,9 @@ class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
     values.zipWithIndex.map { case (v, i) => Row(i, micros(v)) } :+ Row(values.size, null)
   }
 
+  /** How far from the epoch a seven-hour bucket's window reaches, `2^52` less the width. */
+  private val bucketWindow = (1L << 52) - 7 * DateTimeConstants.MICROS_PER_HOUR
+
   /** The first microsecond the date guard admits. */
   private val guardLow = VarkaRangeAnalysis.NTZ_MIN_DAYS.toLong * DateTimeConstants.MICROS_PER_DAY
   /** The last microsecond the date guard admits. */
@@ -248,6 +251,10 @@ class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
         pastGuardRows(lastDay * DateTimeConstants.MICROS_PER_DAY + 1)),
       // The least long, whose hour bucket would start below the long.
       ("varka_ntz_bucket_least", ntzSchema, pastGuardRows(Long.MinValue)),
+      // A seven-hour bucket's window from the epoch: its ends inside, and one past it.
+      ("varka_ntz_bucket_window", ntzSchema, ntzAt(Seq(-bucketWindow, bucketWindow, 0L, -1L,
+        1L, bucketWindow - 1))),
+      ("varka_ntz_bucket_past_window", ntzSchema, pastGuardRows(bucketWindow + 1)),
       ("varka_ntz_above", ntzSchema, pastGuardRows(guardHigh + 1)),
       ("varka_ntz_arith_inside", arithSchema, arithInsideRows),
       ("varka_ntz_make", makeSchema, makeAt(Seq((lastDay, lastTime), (-lastDay, LocalTime.MIN),
@@ -493,20 +500,31 @@ class VarkaTimestampNtzSuite extends VarkaMaybeThrows with VarkaTestWatchdog {
     }
   }
 
-  /** `time_bucket` over `t` in each of its forms, the coverage table's widths. */
+  /**
+   * `time_bucket` over `t` in each form exact over the whole long range, the coverage table's
+   * widths and an hour; the seven-hour form's window is far narrower than the date guard.
+   */
   private val bucketForms = Seq("time_bucket(INTERVAL '15' MINUTE, t)",
     "time_bucket(INTERVAL '1' DAY, t, TIMESTAMP_NTZ '1970-01-01 06:00:00')",
-    "time_bucket(INTERVAL '30' DAY, t)", "time_bucket(INTERVAL '7' HOUR, t)",
-    "time_bucket(INTERVAL '1' HOUR, t)")
+    "time_bucket(INTERVAL '30' DAY, t)", "time_bucket(INTERVAL '1' HOUR, t)")
+
+  private val sevenHours = "time_bucket(INTERVAL '7' HOUR, t)"
 
   // varka-session-lint: allow a path: a bucket whose next start leaves the long, raised from the
   // row engine its batch goes to
-  test("time_bucket runs on the kernel at the date guard's ends; a day bucket whose next start " +
-    "leaves the long raises from the row engine, and an hour bucket of the same value answers") {
+  test("time_bucket runs on the kernel at the date guard's ends, and the seven-hour bucket at " +
+    "its window's; a day bucket whose next start leaves the long raises from the row engine, " +
+    "and an hour bucket of the same value answers") {
     for (ansi <- Seq(false, true)) withAnsi(ansi) {
       for (form <- bucketForms) {
         checkServed(s"SELECT i, $form AS v FROM varka_ntz_guard")
       }
+      checkServed(s"SELECT i, $sevenHours AS v FROM varka_ntz_bucket_window")
+      val past = s"SELECT i, $sevenHours AS v FROM varka_ntz_bucket_past_window"
+      val pastPlan = varkaSpark.sql(past)
+      checkAnswer(pastPlan, expectedSql(past, pastPlan))
+      assert(varkaNode(pastPlan.queryExecution.executedPlan)
+        .metrics("numFallbackBatchesDeclined").value === 1L, past)
       checkServed("SELECT i, time_bucket(INTERVAL '1' HOUR, t) AS v FROM varka_ntz_bucket_last")
       for ((form, table) <- Seq(("time_bucket(INTERVAL '1' DAY, t)", "varka_ntz_bucket_last"),
           ("time_bucket(INTERVAL '1' HOUR, t)", "varka_ntz_bucket_least"))) {

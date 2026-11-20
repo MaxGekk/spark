@@ -72,6 +72,14 @@ import org.apache.spark.sql.types.TimeType;
  * {@code int_mulhi_divide.smt2} proves the lanes' arithmetic for a sample of them. The calendar's
  * divisions ({@code chrono_divide.smt2}) are a closed table, {@code ChronoDivide}, which the proof
  * iterates whole. A proof of the int lane for any divisor is {@code m9/SCOPE.md} item 116.
+ *
+ * <p>One long-lane division is open too: {@code time_bucket} over a {@code TIMESTAMP_NTZ} divides
+ * by its width, or by its number of days, both the query's own literal (VARKA-339,
+ * {@code VarkaTimeCompiler.bucketStart}). The coverage rows' widths are held here like any other
+ * divisor; what makes every width exact is {@link ConstDivide}'s bound, which its javadoc derives
+ * for any divisor (a true divide's relative error cannot carry truncation across an integer
+ * under {@code 2^53}, nor break the magic form's identity under {@code 2^52}) and which the
+ * compiler states on each of these divisions. A proof for any long divisor is item 116's too.
  */
 @VarkaSuite
 public final class VarkaDivisorProofSuite {
