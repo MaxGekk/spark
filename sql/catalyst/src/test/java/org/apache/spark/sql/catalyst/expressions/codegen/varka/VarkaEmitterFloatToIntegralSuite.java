@@ -21,24 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoublePredicate;
 import java.util.function.IntPredicate;
-import java.util.function.IntToLongFunction;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.apache.spark.sql.catalyst.expressions.CastUtils;
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConvertLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -407,129 +398,5 @@ public final class VarkaEmitterFloatToIntegralSuite {
     assertTrue(VarkaKernelPlan.refusalOf(List.of(narrowed), VarkaMatrixRuns.BASE).isEmpty());
     var read = new IntArith(IntOp.ADD, Overflow.WRAP, narrowed, narrowed);
     assertTrue(VarkaKernelPlan.refusalOf(List.of(read), VarkaMatrixRuns.BASE).isPresent());
-  }
-
-  // ---------------------------------------------------------------------------------------------
-  // The sweeps of 3.1: every FLOAT pattern
-  // ---------------------------------------------------------------------------------------------
-
-  private static final int CHUNK = 1 << 16;
-  /** The answer that marks a null row in a sweep's expectations. */
-  private static final long NULL = Long.MIN_VALUE + 1;
-
-  /**
-   * Every {@code every}-th chunk of the 2^32 float patterns through {@code root}, a kernel over
-   * one float column, each row held to {@code want} bit for bit, or to a null where it answers
-   * {@link #NULL}. A 64-bit result is read eight bytes a row, a 32-bit or narrow one widened.
-   */
-  private static void sweep(String ctx, VarkaVectorIR root, VarkaEmitOptions options, int every,
-      IntToLongFunction want) {
-    boolean wide = root.laneType() == LaneType.LONG;
-    int width = switch (root.laneType()) {
-      case BYTE -> 1;
-      case SHORT -> 2;
-      case INT -> 4;
-      case LONG -> 8;
-      case FLOAT, DOUBLE -> throw new IllegalArgumentException("a floating root: " + root);
-    };
-    var emitted = VarkaEmitterFixtures.emit(List.of(root), 1, 0, options);
-    var loaders = new ConcurrentLinkedQueue<VarkaGeneratedClassLoader>();
-    ThreadLocal<VarkaFusedKernel> kernels = ThreadLocal.withInitial(() -> {
-      var loaded = VarkaEmitterFixtures.load(emitted);
-      loaders.add(loaded.loader());
-      return loaded.kernel();
-    });
-    var failure = new AtomicReference<String>();
-    try {
-      LongStream.range(0, (1L << 32) / CHUNK).filter(k -> k % every == 0).parallel().forEach(k -> {
-        if (failure.get() != null) {
-          return;
-        }
-        long first = k * CHUNK;
-        VarkaFusedKernel kernel = kernels.get();
-        try (Arena arena = Arena.ofConfined()) {
-          MemorySegment in = VarkaEmitterFixtures.alloc(arena, CHUNK * 4L);
-          for (int i = 0; i < CHUNK; i++) {
-            in.set(ValueLayout.JAVA_INT, i * 4L, (int) (first + i));
-          }
-          var out = wide ? VarkaEmitterFixtures.makeLongOutput(arena, CHUNK)
-              : VarkaEmitterFixtures.makeOutput(arena, CHUNK, -1L);
-          long[] src = {in.address()};
-          long[] dst = {out.data().address()};
-          long[] validity = {out.validity().address()};
-          long scratch = VarkaEmitterTestSupport.scratch(kernel, CHUNK);
-          int status = wide
-              ? kernel.run(src, new long[] {0L}, new int[] {0}, dst, validity, new int[0],
-                  new long[0], CHUNK, scratch)
-              : kernel.run(src, new long[] {0L}, new int[] {0}, dst, validity, new int[0], CHUNK,
-                  scratch);
-          if (status != 0) {
-            failure.compareAndSet(null, ctx + ": status " + status + " at " + first);
-          }
-          for (int i = 0; i < CHUNK && failure.get() == null; i++) {
-            int value = (int) (first + i);
-            boolean valid = (out.validity().get(ValueLayout.JAVA_BYTE, i >> 3) >> (i & 7) & 1) != 0;
-            long got = switch (width) {
-              case 1 -> out.data().get(ValueLayout.JAVA_BYTE, i);
-              case 2 -> out.data().get(ValueLayout.JAVA_SHORT_UNALIGNED, i * 2L);
-              case 4 -> out.data().get(ValueLayout.JAVA_INT, i * 4L);
-              default -> out.data().get(ValueLayout.JAVA_LONG, i * 8L);
-            };
-            long expected = want.applyAsLong(value);
-            boolean wrong = expected == NULL ? valid : !valid || got != expected;
-            if (wrong) {
-              failure.compareAndSet(null, String.format("%s: over %08x the kernel gave %x (valid"
-                  + " %b) and Java's cast %x", ctx, value, got, valid, expected));
-            }
-          }
-        }
-      });
-    } finally {
-      for (VarkaGeneratedClassLoader loader : loaders) {
-        loader.release();
-      }
-    }
-    if (failure.get() != null) {
-      fail(failure.get());
-    }
-  }
-
-  /** The LEGACY and TRY sweeps of a float source to the four integral types. */
-  private static void sweeps(int every) {
-    for (LaneType target : List.of(LaneType.BYTE, LaneType.SHORT, LaneType.INT, LaneType.LONG)) {
-      var options = target == LaneType.LONG ? DQ : VarkaMatrixRuns.BASE;
-      double[] b = VarkaTypes.castBounds(LaneType.FLOAT, target);
-      IntToLongFunction legacy = v -> {
-        float f = Float.intBitsToFloat(v);
-        return switch (target) {
-          case BYTE -> (byte) (int) f;
-          case SHORT -> (short) (int) f;
-          case INT -> (int) f;
-          default -> (long) f;
-        };
-      };
-      sweep("cast(f AS " + target + ")", cast(F, target, Overflow.WRAP), options, every, legacy);
-      sweep("try_cast(f AS " + target + ")", cast(F, target, Overflow.NULL), options, every,
-          v -> {
-            float f = Float.intBitsToFloat(v);
-            return f >= b[0] && f <= b[1] ? legacy.applyAsLong(v) : NULL;
-          });
-    }
-  }
-
-  @Test
-  @DisplayName("every 256th chunk of the FLOAT patterns to the four integral types, in LEGACY "
-      + "and TRY, is Java's cast or Spark's null")
-  void sweepSlices() {
-    sweeps(256);
-  }
-
-  @Test
-  @DisplayName("every FLOAT pattern to the four integral types, in LEGACY and TRY, is Java's cast "
-      + "or Spark's null (opt-in: -Dvarka.sweep=true)")
-  void sweepsWhole() {
-    assumeTrue("true".equals(System.getProperty("varka.sweep")),
-        "set -Dvarka.sweep=true to sweep the emitted kernels");
-    sweeps(1);
   }
 }

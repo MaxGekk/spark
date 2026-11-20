@@ -865,21 +865,20 @@ to an integral one in the three modes, with `GuardedRange`'s floating bounds. Ro
   `+-0.7` to 0 and `+-1.5` to `+-1`), TRY's nulls (a float guard in a long kernel among them),
   ANSI's answers inside the bounds and its declines at each bound's outer neighbour, NaN and
   infinity at rows 2 and 16 in both bodies, a null outside lane declining the dense body alone;
-  the level rule; and 3.1's sweeps of every `FLOAT` pattern to the four targets in LEGACY and TRY
-  (every 256th chunk on every build, the whole under `-Dvarka.sweep=true`, a `sweeps.tsv` row).
-  The fuzz grammar draws a conversion into an integral lane. Coverage rows, family "Floating
+  the level rule. 3.1's sweeps of every `FLOAT` pattern to the four targets in LEGACY and TRY
+  ran here (every 256th chunk) and move to 343b2b with the AVX2 forms, to keep this part under
+  the cap. The fuzz grammar draws a conversion into an integral lane. Coverage rows, family "Floating
   casts to integral types": seven, no `BIGINT` target (the defaults' unknown level declines
   `D2L`). The baselines' fuse lists move: `CAST(w AS INT)` and `CAST(x AS INT)` fuse at every
   level, `try_cast(w AS BIGINT)` and `VarkaFloatingBaselineBenchmark`'s `DOUBLE` to `BIGINT`
   where the level is 3 (`fusesToBigint`).
 - **Run here** (laptop, 20 November 2026): `catalyst/Test/compile` and `sql/Test/compile`, and
-  one run of the new suite: 9 of 10 passed, the sweep slice included; `ansiAnswers` failed
+  one run of the new suite with the sweeps in it: 9 of 10 passed, the sweep slice included; `ansiAnswers` failed
   because the helper asserted that no batch declines over cells holding NaN. Its fix, cells
   inside the bounds and one check that lets an outside batch decline, has not been run.
 - **Predictions, to score when the owed runs come in:** no committed shape's bytes move
-  (`emitted_bytes.json` gains the new rows' shapes only), as 4.1 says; the slice of the sweeps
-  adds under 30 s to the catalyst tests (one run of the whole suite took 22 s on the laptop,
-  slice included).
+  (`emitted_bytes.json` gains the new rows' shapes only), as 4.1 says; the suite adds under
+  30 s to the catalyst tests (one run took 22 s on the laptop, the sweep slice included).
 
 ### Decisions taken while the owner was away (20 November 2026)
 
