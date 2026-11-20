@@ -33,7 +33,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAdmission, 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isStage
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, BoolCompare, BoolOutput, CanonicalFloat, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, NullSafeEqual => IRNullSafeEqual, Or => IROr, Overflow, Quarter => IRQuarter, RoundMode, RoundToIntegral, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, WidenLane, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, BoolCompare, BoolOutput, CanonicalFloat, ColumnRef, Compare, CompareOp, ConstDivide, ConvertLane, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, NullSafeEqual => IRNullSafeEqual, Or => IROr, Overflow, Quarter => IRQuarter, RoundMode, RoundToIntegral, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, WidenLane, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.optimizer.{ConstantFolding, NormalizeNaNAndZero, ReplaceExpressions, UnwrapCastInBinaryComparison}
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, OneRowRelation, Project}
@@ -1559,11 +1559,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(declineReason(DivideYMInterval(ymm, Literal(2L)), withIntervals) ===
       "interval divisor of type bigint takes LongMath.divide, which the int lane does not " +
         "lower")
-    // A floating divisor is rounded to the interval's integer, which waits for row
-    // 343's conversions to an integral lane.
+    // A floating divisor raises with the expression's origin, which the fallback reads empty
+    // until the upstream fix is synced (VARKA-414).
     assert(declineReason(DivideYMInterval(ymm, Literal(2.5d)), withIntervals) ===
-      "an interval product or quotient by a floating factor, which waits for the conversions " +
-        "to an integral lane (row 342 after part 343b2)")
+      quotientByFloatingReason)
     assert(declineReason(DivideYMInterval(ymm, Literal(BigDecimal("2.5"))), withIntervals) ===
       "interval divisor of type decimal(2,1) is not an integral literal")
     assert(declineReason(DivideYMInterval(ymm, i), withIntervals) ===
@@ -1617,21 +1616,41 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "checked int multiply whose operands do not rule out overflow")
     assert(declineReason(MultiplyYMInterval(ymm, Literal(3L)), withIntervals) ===
       "interval multiplier of type bigint is not an int32 lane")
-    // A floating factor is rounded to the interval's integer, which waits for row
-    // 343's conversions to an integral lane.
-    assert(declineReason(MultiplyYMInterval(ymm, Literal(2.5d)), withIntervals) ===
-      "an interval product or quotient by a floating factor, which waits for the conversions " +
-        "to an integral lane (row 342 after part 343b2)")
   }
 
-  test("`dt * x` and `dt / x` by a double decline with the year-month forms' reason") {
-    // The day-time forms round to the long as the year-month ones round to the int, so they
-    // wait for the same conversions.
-    val reason = "an interval product or quotient by a floating factor, which waits for the " +
-      "conversions to an integral lane (row 342 after part 343b2)"
-    assert(declineReason(MultiplyDTInterval(dt, Literal(2.5d)), withLong) === reason)
-    assert(declineReason(DivideDTInterval(dt, Literal(2.5d)), withLong) === reason)
+  test("`ym * x` by a floating factor rounds the double product to the months by HALF_UP") {
+    // VARKA-342 2.4: the product on the double lane, guarded to the doubles whose HALF_UP fits
+    // the int, truncated, and the fractional part's step added back on the int lane.
+    for (factor <- Seq(Literal(2.5d), Literal(2.5f))) {
+      val compiled = VarkaExpressionCompiler.compile(
+        Seq(out(MultiplyYMInterval(ymm, factor))), withIntervals).get
+      assert(compiled.outputTypes.asScala.toSeq === Seq(YearMonthIntervalType()))
+      compiled.outputs.asScala.toSeq match {
+        case Seq(sum: IntArith) =>
+          assert(sum.op() === IntOp.ADD && sum.mode() === Overflow.WRAP)
+          assert(sum.right().isInstanceOf[IfElse])
+          sum.left() match {
+            case t: ConvertLane =>
+              assert(t.target() === LaneType.INT)
+              assert(t.child().isInstanceOf[GuardedRange])
+            case other => fail(s"expected the truncation, got $other")
+          }
+        case other => fail(s"expected the HALF_UP sum over a truncation, got $other")
+      }
+    }
   }
+
+  test("`dt * x` and `dt / x` by a double decline, each with its own reason") {
+    assert(declineReason(MultiplyDTInterval(dt, Literal(2.5d)), withLong) ===
+      "a day-time interval product by a floating factor, which waits for the conversion to " +
+        "the long lane below emit level 3 (part 343b2b)")
+    assert(declineReason(DivideDTInterval(dt, Literal(2.5d)), withLong) ===
+      quotientByFloatingReason)
+  }
+
+  private val quotientByFloatingReason = "an interval quotient by a floating factor, whose " +
+    "declined batch would raise without its SQL context until the sync that brings " +
+    "SPARK-61352 (VARKA-414)"
 
   test("a literal day shift fuses at the bound and declines one day past it") {
     assert(fuses(Year(DateAdd(d, Literal(shiftHi)))))

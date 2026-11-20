@@ -382,8 +382,8 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
   }
 
   // -----------------------------------------------------------------------------------------
-  // Signum over the interval types, and the interval products and quotients by a floating
-  // factor, which decline until the conversions to an integral lane exist (VARKA-342 5.2).
+  // Signum over the interval types, the year-month product by a floating factor (VARKA-342
+  // 5.6), and the quotients and the day-time product, which still decline.
   // -----------------------------------------------------------------------------------------
 
   private val intervals = "varka_float_intervals"
@@ -402,7 +402,21 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
     session.createDataFrame(spark.sparkContext.parallelize(rows, 1), schema)
       .createOrReplaceTempView(intervals)
     session.catalog.cacheTable(intervals)
+    // 3.7's cells for ym * x: the ties at +-0.5 and +-2.5, the int's ends at a factor of one,
+    // the greatest month's half a tie, a FLOAT factor beside each.
+    val scaled = Seq[(Integer, java.lang.Double)]((1, 0.5), (-1, 0.5), (5, 0.5), (-5, 0.5),
+      (1, 2.5), (-1, 2.5), (3, 0.3), (7, -1.5), (Int.MaxValue, 1.0), (Int.MinValue, 1.0),
+      (Int.MaxValue, -1.0), (Int.MaxValue, 0.5), (Int.MinValue, 0.5), (0, -0.0),
+      (1000, 1e-9), (null, 2.0), (4, null), (null, null))
+    session.createDataFrame(spark.sparkContext.parallelize(scaled.map { case (m, x) =>
+      Row(if (m == null) null else ym(m), x, if (x == null) null else x.floatValue())
+    }, 1), StructType(Seq(StructField("ym", YearMonthIntervalType()),
+      StructField("x", DoubleType), StructField("f", FloatType))))
+      .createOrReplaceTempView(scaledIntervals)
+    session.catalog.cacheTable(scaledIntervals)
   }
+
+  private val scaledIntervals = "varka_float_scaled_intervals"
 
   test("signum over both interval types fuses and answers the row engine's doubles bit for bit "
       + "at each type's ends, at zero and on nulls, generated and interpreted alike") {
@@ -428,11 +442,46 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
     }
   }
 
-  test("an interval product or quotient by a floating factor plans no Varka node") {
+  // varka-session-lint: allow the interval product's one path test, through the cached scan
+  test("ym * x and ym * f fuse and round to the months as the row engine does, a tie away "
+      + "from zero") {
+    // One projection of the five spellings, so the answers are one check through the path; the
+    // cells themselves are VarkaEmitterIntervalScaleSuite's.
+    val q = "SELECT ym * x AS a, ym * f AS b, x * ym AS c, ym * 0.5D AS d, ym * 2.5F AS e " +
+      s"FROM $scaledIntervals"
+    val actual = varkaSpark.sql(q)
+    assertFused(actual.queryExecution.executedPlan)
+    checkAnswer(actual, spark.sql(q))
+    assertKernelsRan(actual.queryExecution.executedPlan)
+  }
+
+  // varka-session-lint: allow the error the fallback raises, as the user sees it
+  test("ym * x past the int, or by a NaN or an infinite factor, declines its batch and raises "
+      + "the row engine's error") {
+    // The fixture's ends overflow the product at a factor of two, -1.5 at the least month and
+    // NaN; Guava's roundToInt raises a bare ArithmeticException, so both engines raise the same.
+    for (e <- Seq("ym * 2.0D", "ym * -1.5D", "ym * CAST('NaN' AS DOUBLE)",
+        "ym * CAST('Infinity' AS DOUBLE)")) {
+      val q = s"SELECT $e AS v FROM $intervals"
+      withClue(q) {
+        val actual = varkaSpark.sql(q)
+        assertFused(actual.queryExecution.executedPlan)
+        val got = intercept[Exception](actual.collect())
+        val want = intercept[Exception](spark.sql(q).collect())
+        assert(rootCause(got).getClass === rootCause(want).getClass)
+        assert(rootCause(got).getMessage === rootCause(want).getMessage)
+      }
+    }
+  }
+
+  private def rootCause(t: Throwable): Throwable =
+    if (t.getCause == null || (t.getCause eq t)) t else rootCause(t.getCause)
+
+  test("an interval quotient or a day-time product by a floating factor plans no Varka node") {
     // Planned only, not run: the fixture's ends overflow the quotients, which the row engine
     // raises on. The compiler suite pins the reason each declines with; a literal factor
     // declines as a column does.
-    for (e <- Seq("ym * x", "ym / x", "dt * x", "dt / x", "ym / 4.0D")) {
+    for (e <- Seq("ym / x", "dt * x", "dt / x", "ym / 4.0D")) {
       val q = s"SELECT $e AS v FROM $intervals"
       withClue(q) {
         assertNotFused(varkaSpark.sql(q).queryExecution.executedPlan)

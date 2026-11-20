@@ -19,6 +19,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.math.BigInteger;
 import java.util.Optional;
+import java.util.function.DoubleFunction;
+import java.util.function.LongFunction;
 
 import org.apache.spark.sql.catalyst.expressions.Abs;
 import org.apache.spark.sql.catalyst.expressions.Add;
@@ -43,6 +45,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConvertLane;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CrossLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -407,15 +411,19 @@ public final class VarkaIntervalCompiler {
    * bounded before the check comes off, and a stored interval column never is, so a literal
    * multiplier alone does not buy it: {@code ym * 2} declines, while
    * {@code make_ym_interval(year(d), month(d)) * 2} fuses over a bounded interval. The
-   * {@code Long}, {@code Decimal} and {@code Double} arms are not int32 lanes and decline by type
-   * rather than reaching {@code intOperand}, which would report them as "not an int column or
-   * literal" and hide which of the two is wrong.
+   * {@code Long} and {@code Decimal} arms are not int32 lanes and decline by type rather than
+   * reaching {@code intOperand}, which would report them as "not an int column or
+   * literal" and hide which of the two is wrong. A {@code FLOAT} or {@code DOUBLE} factor is
+   * {@link #floatingProduct}'s.
    */
   private static Optional<VarkaVectorIR> multiply(
       MultiplyYMInterval m,
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
+    if (VarkaFloatingCompiler.floatingLane(m.num().dataType()).isPresent()) {
+      return floatingProduct(m.interval(), m.num(), LaneType.INT, m, inputs, literals, sink);
+    }
     if (!m.num().dataType().equals(DataTypes.IntegerType)) {
       return sink.decline("interval multiplier of type " + m.num().dataType().simpleString()
           + " is not an int32 lane", m);
@@ -515,14 +523,105 @@ public final class VarkaIntervalCompiler {
    * factor rounds the double product or quotient {@code p} to the interval's int or long
    * (`VARKA-342.md` 2.4): the inclusive bounds of the doubles whose HALF_UP lands in the int,
    * {@code (-2^31 - 0.5, 2^31 - 0.5)} exclusive, and in the long, {@code [-2^63, 2^63)}. The
-   * lowering waits for the conversions from a floating lane to an integral one (row 343's part
-   * 343b2); {@code VarkaProofFiles} renders {@code fp_half_up.smt2} from these values, which is
-   * why they and this class are public.
+   * lowering is {@link #scaledHalfUp}; {@code VarkaProofFiles} renders {@code fp_half_up.smt2}
+   * from these values, which is why they and this class are public.
    */
   public static final double HALF_UP_INT_LO = Math.nextUp(-0x1p31 - 0.5);
   public static final double HALF_UP_INT_HI = Math.nextDown(0x1p31 - 0.5);
   public static final double HALF_UP_LONG_LO = -0x1p63;
   public static final double HALF_UP_LONG_HI = Math.nextDown(0x1p63);
+
+  /**
+   * {@code ym * x} for a {@code FLOAT} or {@code DOUBLE} factor {@code x}: Spark's
+   * {@code DoubleMath.roundToInt(months * (double) x, HALF_UP)} in every mode, a bare
+   * {@code ArithmeticException} where the product is NaN, infinite or rounds past the int. The
+   * lowering is {@link #scaledHalfUp}; a lane it declines is a batch the row engine raises on.
+   * {@code lane} is the count's, {@code INT} for months.
+   */
+  private static Optional<VarkaVectorIR> floatingProduct(
+      Expression interval,
+      Expression factor,
+      LaneType lane,
+      Expression whole,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    int mark = literals.size();
+    int longMark = sink.longMark();
+    Optional<VarkaVectorIR> count = lane == LaneType.INT
+        ? intervalOperand(interval, "the multiplied interval", inputs, literals, sink)
+        : dayTimeOperand(interval, "the multiplied interval", inputs, literals, sink);
+    if (count.isEmpty()) {
+      return rolledBack(count, literals, mark, sink, longMark);
+    }
+    Optional<VarkaVectorIR> x = VarkaNodeCompiler.compileNode(factor, inputs, literals, sink);
+    if (x.isPresent() && !x.get().laneType().isFloating()) {
+      x = sink.decline("an interval factor computed on the " + x.get().laneType() + " lane",
+          factor);
+    }
+    if (x.isEmpty()) {
+      return rolledBack(x, literals, mark, sink, longMark);
+    }
+    return Optional.of(scaledHalfUp(IntOp.MUL, count.get(), x.get(),
+        v -> VarkaNodeCompiler.doubleSlot(v, sink),
+        v -> VarkaNodeCompiler.bitsSlot(v, lane, literals, sink)));
+  }
+
+  /**
+   * Spark's HALF_UP of an interval count {@code m} times ({@code MUL}) or over ({@code DIV}) a
+   * floating factor {@code x}, `VARKA-342.md` 2.4: Guava's {@code roundToInt} or
+   * {@code roundToLong} of {@code (double) m * (double) x} or {@code (double) m / (double) x},
+   * where a NaN, an infinity or a value rounding past the count's type raises. The count is
+   * converted to a double exactly for a month count and rounded to nearest for a microsecond one,
+   * as Java's {@code (double)} is; a {@code FLOAT} factor is widened exactly. Then
+   *
+   * <pre>
+   *   p = m * x  or  m / x       a DIV in FAIL: a live zero divisor declines, in every mode
+   *   g = guard(p)               FAIL outside {@link #HALF_UP_INT_LO} to {@link #HALF_UP_INT_HI}
+   *                              (or the long's pair), NaN and the infinities among them
+   *   t = (int or long) g        the truncation, exact inside the guard
+   *   f = g - (double) t         the fractional part, exact
+   *   r = t + (f >= 0.5 ? 1 : f <= -0.5 ? -1 : 0)
+   * </pre>
+   *
+   * <p>The tie moves away from zero, as Guava's {@code x + copySign(0.5, x)} does, and
+   * {@code fp_half_up.smt2} proves {@code r} equal to Guava's answer at every double inside each
+   * guard. The two tests of {@code f} are IEEE compares, since {@code f} is never NaN on a lane
+   * the guard admits, crossed to the count's lane so that the step is added there: a choice's
+   * condition and values share one lane. {@code r} cannot overflow: it is Guava's answer, which
+   * the guard keeps in the type. {@code doubleLit} and {@code countLit} make the literals, a
+   * double and a value of the count's lane, which is {@code INT} or {@code LONG}.
+   */
+  public static VarkaVectorIR scaledHalfUp(IntOp op, VarkaVectorIR m, VarkaVectorIR x,
+      DoubleFunction<VarkaVectorIR> doubleLit, LongFunction<VarkaVectorIR> countLit) {
+    LaneType lane = m.laneType();
+    if (lane != LaneType.INT && lane != LaneType.LONG) {
+      throw VarkaErrors.illegalArgument("an interval count is on the int or the long lane, not "
+          + lane);
+    }
+    if (op != IntOp.MUL && op != IntOp.DIV) {
+      throw VarkaErrors.illegalArgument("an interval is scaled by MUL or DIV, not " + op);
+    }
+    VarkaVectorIR factor = switch (x.laneType()) {
+      case DOUBLE -> x;
+      case FLOAT -> new ConvertLane(x, LaneType.DOUBLE);
+      default -> throw VarkaErrors.illegalArgument("an interval's floating factor is on a "
+          + "floating lane, not " + x.laneType());
+    };
+    boolean months = lane == LaneType.INT;
+    VarkaVectorIR p = new IntArith(op, op == IntOp.DIV ? Overflow.FAIL : Overflow.WRAP,
+        new ConvertLane(m, LaneType.DOUBLE), factor);
+    VarkaVectorIR g = GuardedRange.floating(p, months ? HALF_UP_INT_LO : HALF_UP_LONG_LO,
+        months ? HALF_UP_INT_HI : HALF_UP_LONG_HI, Overflow.FAIL);
+    VarkaVectorIR t = new ConvertLane(g, lane);
+    VarkaVectorIR f = new IntArith(IntOp.SUB, Overflow.WRAP, g,
+        new ConvertLane(t, LaneType.DOUBLE));
+    var up = new CrossLane(new Compare(CompareOp.IEEE_LE, doubleLit.apply(0.5), f), lane);
+    var down = new CrossLane(new Compare(CompareOp.IEEE_LE, f, doubleLit.apply(-0.5)), lane);
+    VarkaVectorIR step = new IfElse(up, countLit.apply(1),
+        new IfElse(down, countLit.apply(-1), countLit.apply(0)));
+    return new IntArith(IntOp.ADD, Overflow.WRAP, t, step);
+  }
 
   /**
    * The shared body of the binary interval arms. Spark computes {@code ym + ym} and

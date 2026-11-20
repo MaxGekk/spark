@@ -377,8 +377,9 @@ final class VarkaNodeCompiler {
    * {@code IN}, {@code isnan} and {@code nanvl} - and are lowered in Spark's order, in which NaN
    * equals NaN and is greater than every other value and {@code -0.0} equals {@code 0.0}, not
    * the vector compare's or {@code max}'s. The arithmetic the floating family lowers is named
-   * here too, as are the floating casts family's pairs and a floating value's cast to BOOLEAN;
-   * the other casts, the remainders and the interval forms by a floating factor are not. So the
+   * here too, as are the floating casts family's pairs, a floating value's cast to BOOLEAN and
+   * a year-month interval times a floating factor; the other casts, the remainders, the interval
+   * quotients and the day-time product by a floating factor are not. So the
    * list is of what is served, not of what is refused, and a node no one has thought of declines.
    * Both compile entries ask it before any arm claims, so no arm sees a floating operand it was
    * not written for. A {@link RuntimeReplaceable} passes, to be asked again as its replacement.
@@ -402,6 +403,8 @@ final class VarkaNodeCompiler {
         || e instanceof NormalizeNaNAndZero
         || (e instanceof Signum s && (isFloating(s.child().dataType())
             || VarkaFloatingCompiler.intervalLane(s.child().dataType()).isPresent()))
+        // A year-month interval times a floating factor, rounded to the months by HALF_UP.
+        || e instanceof MultiplyYMInterval
         // The rounding family's forms (VARKA-344): rint, and floor and ceil, whose arm builds
         // the int operand's widening and declines a double or any other cast by name.
         || e instanceof Rint || e instanceof Floor || e instanceof Ceil
@@ -428,13 +431,17 @@ final class VarkaNodeCompiler {
       case Remainder _, Pmod _ -> "a floating remainder (row 346)";
       case Round _, BRound _, Truncate _ -> "round, bround or truncate over a floating value "
           + "(row 346)";
-      // The interval products and quotients by a floating factor round the double result to
-      // the interval's integer, which needs the conversions from a floating lane to an integral
-      // one (row 343, part 343b2). UnaryPositive is RuntimeReplaceable, so it never reaches this
-      // switch: it passes above and is asked again as its child.
-      case MultiplyYMInterval _, DivideYMInterval _, MultiplyDTInterval _, DivideDTInterval _ ->
-          "an interval product or quotient by a floating factor, which waits for the "
-          + "conversions to an integral lane (row 342 after part 343b2)";
+      // The quotients raise INTERVAL_DIVIDED_BY_ZERO and the overflow with the expression's
+      // origin, which a declined batch's fallback, compiled on the executor, reads empty until
+      // the sync that brings SPARK-61352 (VARKA-414). UnaryPositive is RuntimeReplaceable, so it
+      // never reaches this switch: it passes above and is asked again as its child.
+      case DivideYMInterval _, DivideDTInterval _ -> "an interval quotient by a floating "
+          + "factor, whose declined batch would raise without its SQL context until the sync "
+          + "that brings SPARK-61352 (VARKA-414)";
+      // The day-time product rounds to the long, whose conversion below emit level 3 is the
+      // AVX2 form of part 343b2b.
+      case MultiplyDTInterval _ -> "a day-time interval product by a floating factor, which "
+          + "waits for the conversion to the long lane below emit level 3 (part 343b2b)";
       // Signum passes above over each type it takes. The arithmetic the family lowers passes too
       // and every other BinaryArithmetic takes no floating operand once types are coerced, so
       // this arm is met only by a tree the analyzer has not coerced.

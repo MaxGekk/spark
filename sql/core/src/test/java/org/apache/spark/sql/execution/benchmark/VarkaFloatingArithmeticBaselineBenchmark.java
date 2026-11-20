@@ -48,8 +48,9 @@ import org.apache.spark.sql.internal.SQLConf;
  * record of how much of it a row has fused, and fails when the plan's class differs
  * ({@link VarkaSqlBenchmarkBase#requireBaseline(SparkSession, String, String, Fusion)}); the
  * results file notes the class of each section that fuses. The sections over {@code DOUBLE}
- * alone are {@code WHOLE}, since row 342's floating arithmetic fuses them (`VARKA-342.md` 5.1);
- * the two interval forms are {@code NONE}, waiting for 343's conversions. A row that fuses more
+ * alone are {@code WHOLE}, since row 342's floating arithmetic fuses them (`VARKA-342.md` 5.1),
+ * and so is {@code ym * x} (5.6); {@code dt / x} is {@code NONE}, the quotient declining until its
+ * error keeps the query context (VARKA-414). A row that fuses more
  * of a section sets its new class, so that its fusion cannot turn a baseline section into a
  * fused one unnoticed.
  *
@@ -150,7 +151,7 @@ public class VarkaFloatingArithmeticBaselineBenchmark extends VarkaSqlBenchmarkB
       out.add(new Section("DOUBLE degrees(x)" + density,
           "SELECT degrees(" + x + ")" + from, Map.of(), Fusion.WHOLE));
       out.add(new Section("year-month interval ym * x" + density,
-          "SELECT " + ym + " * " + x + from, Map.of(), Fusion.NONE));
+          "SELECT " + ym + " * " + x + from, Map.of(), Fusion.WHOLE));
       out.add(new Section("day-time interval dt / x" + density,
           "SELECT " + dt + " / " + x + from, Map.of(), Fusion.NONE));
     }

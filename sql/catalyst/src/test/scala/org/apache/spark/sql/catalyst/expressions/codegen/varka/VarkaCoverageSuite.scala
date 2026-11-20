@@ -1385,7 +1385,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     // The same forms over another type (VARKA-342 3.9): Spark's division and math functions take
     // DOUBLE only, so type coercion casts any other numeric operand to double, which the floating
     // casts family lowers exactly (VARKA-343); a BIGINT operand is not listed, since L2D declines
-    // below AVX512DQ. Signum over an interval answers the double of its count's sign.
+    // below AVX512DQ. Signum over an interval answers the double of its count's sign, and a
+    // year-month interval times a floating factor the HALF_UP of the double product (2.4).
     Family("Floating arithmetic over other types", predicates = false, Seq(
       Row("y1 / i", "both operands cast to double, then the double division; a zero divisor of "
         + "the cast raises under ANSI and is null under the legacy mode",
@@ -1406,7 +1407,14 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("signum(ym)", "the months' sign as a double: (m > 0) - (m < 0) on the int lane, then "
         + "I2D, so a zero is +0.0 and a null null"),
       Row("signum(dt)", "the microseconds' sign on the long lane, narrowed to the int lane, then "
-        + "I2D: no conversion from a long"))),
+        + "I2D: no conversion from a long"),
+      Row("ym * x", "the double product, guarded to the doubles whose HALF_UP fits the int, "
+        + "truncated by D2I and stepped away from zero at a half; outside the guard, NaN and the "
+        + "infinities among it, the batch declines, as Spark raises",
+        domain = Some("x BETWEEN -0.5D AND 0.5D")),
+      Row("ym * f", "the float factor widened exactly, then the same rounding",
+        domain = Some("f BETWEEN -0.5F AND 0.5F")),
+      Row("ym * 0.5D", "a literal factor, every odd month count a tie"))),
     // The rounding functions (VARKA-344): rint is the 2^52 construction, exact in every mode;
     // floor and ceil of a bigint are the operand and of an int its widening to a bigint, exact
     // in every mode; round, bround and truncate at a negative scale over the int lane are the

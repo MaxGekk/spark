@@ -662,6 +662,44 @@ twelve cells at 128, 256 and 512 bits, all 36 intrinsic with no allocation, and 
 else but the host's JDK build string (25.0.5.0.3 to 25.0.5.1). Prediction 4.2, laptop half:
 held. The census workflow on the EPYC 7763 and the Neoverse N2 is owed, its half of 4.2 with it.
 
+### 5.6 Step 4's second piece, the interval forms (20 November 2026)
+
+On part `varka-342d-interval-scaling`, cut from `varka-342c-census` (`c7b2d46faaa`) with
+`varka-343-conversions` (343b2a, `3ad1738e41a`) merged in at `4a1b8091ff5`: the conversions from a
+floating lane to an integral one and the floating guard, which 2.4 waits for.
+
+- **The lowering** is `VarkaIntervalCompiler.scaledHalfUp(op, m, x, ...)`, one builder for the four
+  forms, `MUL` or `DIV` over a count on the int or long lane: 2.4's construction, with `p` a
+  `DIV` in `FAIL` for the quotients (a live zero divisor of either sign declines, in every mode),
+  the guard `GuardedRange.floating` over `HALF_UP_INT_LO` to `HALF_UP_INT_HI` or the long's pair in
+  `FAIL`, `t` a `ConvertLane` to the count's lane, `f = g - (double) t`, and the step added on the
+  count's lane. `fp_half_up.smt2` states this form, so the proof is the lowering's.
+- **Where 2.4 was wrong: the step's condition cannot be on the double lane in a choice over the
+  count's values.** `IfElse` takes its condition and its arms on one lane, and `f` is a double.
+  The two tests of `f` are crossed to the count's lane by `CrossLane` (343a3b's node, which the
+  compiler's value choice uses for the same meeting), by the word from the double lane to the int
+  one and by `VectorMask.cast` to the long one. The alternative, the step as a double added before
+  one conversion of `t + step`, would convert twice, which on AVX2 is a second 38-call `D2L`.
+- **The tests of `f` are IEEE compares** (`IEEE_LE` against `0.5` and `-0.5`): `f` is never NaN
+  on a lane the guard admits, so Spark's order, which places NaN, buys nothing there.
+- **The compiler.** `ym * x` and `ym * f` (and `x * ym`, which the analyzer builds as the same
+  node) fuse: `floatingDecline` admits `MultiplyYMInterval`, and `VarkaIntervalCompiler.multiply`
+  hands a floating factor to the builder. `dt * x` keeps declining on this part, naming 343b2b's
+  conversion below level 3 (5.7 builds it). The two quotients keep declining, with their own
+  reason (decision 8). Three coverage rows join "Floating arithmetic over other types": `ym * x`
+  and `ym * f` over a domain that keeps the product inside the int, and `ym * 0.5D`, where every
+  odd count is a tie. `VarkaFloatingArithmeticBaselineBenchmark`'s `ym * x` sections are `WHOLE`.
+- **Tests.** `VarkaEmitterIntervalScaleSuite` (JUnit, own JVM) holds the builder's trees to
+  Spark's own `eval` of the four expressions through the reference, over the cross product of
+  edge counts and factors and 3.7's pinned cells at a count of one (the ties, `2^31 - 1.5`, each
+  guard's ends and their outer neighbours, `2^52 + 0.5`, row 103's long cells), and the kernels to
+  the reference at three widths, seven lengths, three null patterns and both bodies; every cell
+  Spark raises on declines both bodies among answered cells, and declines neither the masked body
+  nor the answer when null. The quotients and the day-time forms run there at the IR, the day-time
+  ones at level 3. The compiler suite pins the built shape and the reasons; `VarkaFloatingLaneSuite`
+  runs `ym * x`, `ym * f`, `x * ym` and two literal forms end to end against the row engine, and
+  four products Spark raises on (an overflow each way, NaN, an infinity) with the same error.
+
 ### Decisions taken while the owner was away (20 November 2026)
 
 1. **The FMA node is built now, as its own part, ahead of the rest of step 4.** The brief's
@@ -693,6 +731,21 @@ held. The census workflow on the EPYC 7763 and the Neoverse N2 is owed, its half
 7. **The fuzz sequences are a stacked part although both parts fit the cap together** (750 and
    183 counted lines, and 33 for 5.5's part): the brief asks for the FMA node as its own small part, so that row 346a can
    stack on it without the fuzz change.
+8. **The two quotients by a floating factor stay declined** (5.6). `IntervalMathUtils.divide`
+   raises `INTERVAL_DIVIDED_BY_ZERO` and the overflow with `origin.context`, which a declined
+   batch's fallback, compiled on the executor, reads empty until the sync that brings SPARK-61352
+   (`VARKA-414.md` 9 and 10). The owner kept `ym / -1` declined on 10 November 2026 for exactly
+   this, so that a query whose error is right today does not lose its `== SQL ==` block; the
+   floating quotients raise on a zero divisor and on an overflow, so the same rule holds them.
+   Their lowering is built and tested at the IR, and fusing them after the sync is
+   `floatingDecline`'s two classes and their two arms, nothing else. 5.2's "still owed" predates
+   414's outcome, which is where the plan was wrong.
+9. **The step is crossed to the count's lane rather than converted** (5.6): one conversion of the
+   truncation instead of two, which is the cheaper form on AVX2 for the day-time forms; the
+   arithmetic is 2.4's and the proof's.
+10. **The day-time product is its own stacked part**, `varka-342e-daytime-scaling`, with
+   `varka-343b2b-avx2` merged in, as the brief orders: on this part `D2L` is one call at level 3
+   alone, so `dt * x` would fuse at level 3 and decline below it, and the forms land once, whole.
 
 ## 6. Out of this row
 
