@@ -823,3 +823,77 @@ below it the AVX2 forms of 2.3 in `VarkaConversionLowering`. Not built: 3.2's tw
   call but the traps and no `vcvtqq2pd`; `L2F` ends in `vcvtpd2ps`. The tool's timing, not a
   benchmark: 322 ns a round of 1024 rows for the split, 218 for the magic, 542 for `L2F`; step
   8's measurement on the EPYC runners decides.
+
+### 343b2a as built (20 November 2026, branch `varka-343-conversions`)
+
+The first half of 343b2 (4's table), cut at the AVX2 `D2L`: the conversions from a floating lane
+to an integral one in the three modes, with `GuardedRange`'s floating bounds. Row 342's
+`ym * x` and `ym / x` need only this half (`D2I` and the guard); `dt * x` and `dt / x` need
+`D2L` below level 3, which is 343b2b's.
+
+- **The conversions.** `F2I` and `D2I` are one `convertShape` at every level, intrinsic from AVX2
+  up (item 0.5); `F2L` and `D2L` are one `convertShape` where the level assures AVX512DQ, and
+  `VarkaKernelPlan.conversionRefusal` declines them below level 3 and at the unknown level, by
+  name, as it declined `L2D` between 343a4 and 343b1. `emitShapeConversion` names the four.
+- **The guard.** `GuardedRange` at a floating lane holds the lane's own bits, a float's
+  sign-extended, built by `GuardedRange.floating` and read by `loValue` and `hiValue`; the
+  constructor refuses a NaN bound, unordered bounds, and a `FLOAT` bound a float does not hold.
+  The mask is the complement of `v >= lo & v <= hi`, so NaN is outside: the integral form
+  `v < lo | v > hi` lets NaN through, which is why the floating arm is its own
+  (`emitFloatingRangeMask`). The range analysis answers `UNKNOWN` for it. Both modes reuse the
+  integral guard's tails: `FAIL` collects through `emitGuardCollect`, crossing a 32-bit mask to a
+  64-bit drive through the word, and `NULL` clears the node's word by `~mask.toLong()`. A float
+  guard in a long kernel (`try_cast(f AS BIGINT)`) has twice the drive's lanes; its upper lanes
+  are past the group's rows, and every reader of the word or the crossed mask reads the drive's
+  lanes alone.
+- **The bounds** are computed, not typed: `VarkaTypes.castBounds` starts at the double just inside
+  `MAX + 1` or `MIN - 1`, rounded to the source type, and steps to the last value that passes
+  Spark's own test, `Math.floor(v) <= MAX && Math.ceil(v) >= MIN` with the range read as
+  doubles. They come out as 2.4's table; the test holds them to it and to Spark's own
+  `FloatExactNumeric`, `DoubleExactNumeric` and `CastUtils.*Exact` at each bound and its outer
+  neighbour, for both sources and all four targets.
+- **The compiler.** `VarkaFloatingCastCompiler` admits a `FLOAT` or `DOUBLE` source to `TINYINT`,
+  `SMALLINT`, `INT` and `BIGINT`: `ConvertLane` to the int or long lane, under ANSI and TRY over
+  the guard in `FAIL` or `NULL`, and a narrow target as a `NarrowLane` of the int answer.
+  `floatingDecline`'s remaining reason for a floating source names the target type.
+- **A narrow target from a double.** The plan refused every narrow node but a column under a double
+  drive. A root `NarrowLane` of an int value is stored from the low half of the int species in a
+  double kernel as in a long one, so `VarkaKernelPlan.narrowsAnIntAtRoot` admits it and
+  `Analysis`' fit rule with it; a narrowing another node reads still declines.
+- **Tests.** `VarkaEmitterFloatToIntegralSuite` (JUnit, own JVM): the bounds against Spark, the
+  guard's refusals, LEGACY to all four targets (NaN to 0, saturation, `(byte) 300.7` is 44,
+  `+-0.7` to 0 and `+-1.5` to `+-1`), TRY's nulls (a float guard in a long kernel among them),
+  ANSI's answers inside the bounds and its declines at each bound's outer neighbour, NaN and
+  infinity at rows 2 and 16 in both bodies, a null outside lane declining the dense body alone;
+  the level rule; and 3.1's sweeps of every `FLOAT` pattern to the four targets in LEGACY and TRY
+  (every 256th chunk on every build, the whole under `-Dvarka.sweep=true`, a `sweeps.tsv` row).
+  The fuzz grammar draws a conversion into an integral lane. Coverage rows, family "Floating
+  casts to integral types": seven, no `BIGINT` target (the defaults' unknown level declines
+  `D2L`). The baselines' fuse lists move: `CAST(w AS INT)` and `CAST(x AS INT)` fuse at every
+  level, `try_cast(w AS BIGINT)` and `VarkaFloatingBaselineBenchmark`'s `DOUBLE` to `BIGINT`
+  where the level is 3 (`fusesToBigint`).
+- **Run here** (laptop, 20 November 2026): `catalyst/Test/compile` and `sql/Test/compile`, and
+  one run of the new suite: 9 of 10 passed, the sweep slice included; `ansiAnswers` failed
+  because the helper asserted that no batch declines over cells holding NaN. Its fix, cells
+  inside the bounds and one check that lets an outside batch decline, has not been run.
+- **Predictions, to score when the owed runs come in:** no committed shape's bytes move
+  (`emitted_bytes.json` gains the new rows' shapes only), as 4.1 says; the slice of the sweeps
+  adds under 30 s to the catalyst tests (one run of the whole suite took 22 s on the laptop,
+  slice included).
+
+### Decisions taken while the owner was away (20 November 2026)
+
+1. **343b2 is two parts.** The plan sized 343b2 at 900 lines with the AVX2 `D2L`; the floating
+   guard, the three modes and their tests came to most of that alone. 343b2a is the conversions
+   at the levels where they are one instruction, and 343b2b (stacked on it) the AVX2 `D2L` and
+   `F2L`, the truncated magic arm and their proofs. Row 342's interval forms over `D2I` need only
+   343b2a, which is why it comes first.
+2. **`F2L` and `D2L` decline below level 3 in 343b2a**, by the rule 343a4 set for `L2D` before
+   343b1: a scalar Java loop inside a vector kernel is the error to avoid.
+3. **The bounds are derived from Spark's predicate** rather than typed from 2.4's table, and the
+   table is the test: the table had no `SMALLINT` and `TINYINT` cell for a `FLOAT` source beyond
+   "the float neighbours", which the derivation answers.
+4. **A narrow target from `DOUBLE` fuses** by admitting the long kernel's narrowing at the root
+   under a double drive, rather than declining it to a later part: the store is the same code.
+5. **The branch is `varka-343-conversions`**, the brief's name, and the stacked part
+   `varka-343b2b-avx2`.
