@@ -535,14 +535,23 @@ Built 20 November 2026 on `varka-339-ntz-arith`, from master at `767dcddce50`, w
 away (see the decisions below). `varka-339-step3`, the older local branch, holds nothing master
 lacks: its diff from its merge base is #1442's, file for file.
 
-1. **The arm (2.5)** is `VarkaTimeCompiler.ntzTimeBucket` and `bucketStart`, as the plan has it: the
-   difference checked, the remainder `floorMod(diff, b)` in one of three forms, `kb = diff - r`
-   checked, which overflows exactly where `multiplyExact(k, b)` does, and the start `o + kb`
-   checked; from a day up, `kb` and the start under `GuardedRange(_, Long.MIN_VALUE,
-   Long.MAX_VALUE - b)` for the next bucket's two overflows. A width that divides a day takes the
-   time of day (`microsOfDay`, 340's) and one `ConstDivide` under `D`; whole days take the day
-   (`floorDivLong`) and, past one day, a floor division by `n` under `106,751,993 + n - 1`; any
-   other width up to `2^51` guards the difference to `+-(2^52 - b)` and divides once. An origin of
-   0 drops the difference and the sum, a width of 1 the remainder. A year-month width declines by
-   name with `m9/SCOPE.md` item 117, as question 1 settled; a null width or origin, and a windowed
-   width past `2^51`, decline. No node, lowering or option is new.
+1. **The arm (2.5)** is `VarkaTimeCompiler.ntzTimeBucket` and `bucketStart`: the difference
+   checked, the remainder `floorMod(diff, b)` in one of three forms, `kb = diff - r` checked, which
+   overflows exactly where `multiplyExact(k, b)` does, and the start `o + kb` checked. A width that
+   divides a day takes the time of day (`microsOfDay`, 340's) and one `ConstDivide` under `D`; a day
+   is the time of day itself; `n` whole days take the day (`floorDivLong`), a floor division by `n`
+   under `106,751,993 + n - 1`, and `r = diff - k * b` in wrapping arithmetic, exact because the true
+   remainder is a long; any other width up to `2^51` divides the difference once under `2^52`. An
+   origin of 0 drops the difference and the sum, a width of 1 the remainder. A year-month width
+   declines by name with `m9/SCOPE.md` item 117, as question 1 settled; a null width or origin, and
+   a windowed width past `2^51`, decline. No node, lowering or option is new.
+2. **Where the plan was wrong: the guards sit on the count, not on `kb` and the start.** 2.5 put
+   the next bucket's two overflows under `GuardedRange(_, Long.MIN_VALUE, Long.MAX_VALUE - b)` on
+   `kb` and on the start, and the window on the difference. Built so, the whole-days arm with an
+   origin is 19 ops deep, past `MAX_CHAIN_DEPTH` = 16, and `time_bucket(INTERVAL '7' DAY, ntz, o)`
+   declined as over the fused budget (the emitted test found it). Both are a range of `t` instead,
+   constants of `o` and `b` (`bucketGuard`): the window is `t` within `2^52 - b` of the origin,
+   clamped to the long, and the next start leaves the long exactly where `k` passes
+   `kmax = min(floorDiv(MAX - b, b), floorDiv(MAX - b - o, b))`, which is where `t` reaches
+   `o + (kmax + 1) * b`. One guard on the leaf replaces two on the root path, and the whole-days
+   remainder's wrapping `diff - k * b` replaces 2.5's `(q1 - k * n) * D + r1`, four ops fewer.

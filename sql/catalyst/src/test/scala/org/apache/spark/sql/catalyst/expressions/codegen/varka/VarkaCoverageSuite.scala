@@ -2238,6 +2238,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "CAST(ntz AS TIME(6))" -> Proved("long_divide.smt2"),
     "CAST(ntz AS TIME(3))" -> Proved("long_divide.smt2"),
     "CAST(ntz AS TIME(0))" -> Proved("long_divide.smt2"),
+    // time_bucket (VARKA-339): each remainder form proven for its width beside the divisions it
+    // runs and the window's bound; VarkaTimestampNtzBucketSuite holds the arms to Spark.
+    "time_bucket(INTERVAL '15' MINUTE, ntz)" -> Proved("long_divide.smt2"),
+    "time_bucket(INTERVAL '1' DAY, ntz, TIMESTAMP_NTZ '1970-01-01 06:00:00')" ->
+      Proved("long_divide.smt2"),
+    "time_bucket(INTERVAL '30' DAY, ntz)" -> Proved("long_divide.smt2"),
+    "time_bucket(INTERVAL '7' HOUR, ntz)" -> Proved("long_divide.smt2"),
     "b" -> connectives,
     "NOT b" -> connectives,
     // A boolean beside a date, int or long comparison: the connective is swept over the

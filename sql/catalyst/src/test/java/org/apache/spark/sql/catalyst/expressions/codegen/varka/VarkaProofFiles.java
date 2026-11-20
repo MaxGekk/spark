@@ -378,13 +378,20 @@ final class VarkaProofFiles {
     out.append("\n; time_bucket: r = floorMod(x, b), x = t - o, in the three forms of "
         + "VarkaTimeCompiler.bucketStart\n");
     long quarter = 15 * DateTimeConstants.MICROS_PER_MINUTE;
-    check(out, "a width of " + quarter + " dividing a day: the time of day less its quotient by "
-        + "the width times the width is floorMod(x, " + quarter + ") for every long x", "unsat",
-        List.of("(declare-const x Int)", "(assert (jlong.in x))",
-            "(define-fun r1 () Int (jlong.floorMod x " + day + "))",
+    // Two lemmas, each linear: the steps over the time of day, a value in [0, D) as proven
+    // above, wrap nowhere; and floorMod(floorMod(x, D), b) = floorMod(x, b) where b divides D.
+    check(out, "a width of " + quarter + " dividing a day: over a time of day r1 in [0, " + day
+        + "), r1 - (r1 / " + quarter + ") * " + quarter + " in the long's arithmetic is "
+        + "floorMod(r1, " + quarter + ")", "unsat",
+        List.of("(declare-const r1 Int)", "(assert (and (<= 0 r1) (< r1 " + day + ")))",
             "(define-fun r () Int (jlong.sub r1 (jlong.mul (jlong.div r1 " + quarter + ") "
                 + quarter + ")))",
-            "(assert (not (= r (jlong.floorMod x " + quarter + "))))"));
+            "(assert (not (= r (jlong.floorMod r1 " + quarter + "))))"));
+    check(out, "and floorMod(floorMod(x, " + day + "), " + quarter + ") is floorMod(x, "
+        + quarter + ") for every long x", "unsat",
+        List.of("(declare-const x Int)", "(assert (jlong.in x))",
+            "(assert (not (= (jlong.floorMod (jlong.floorMod x " + day + ") " + quarter + ") "
+                + "(jlong.floorMod x " + quarter + "))))"));
     long magnitude = -Math.floorDiv(Long.MIN_VALUE, day) + 1;
     for (long n : List.of(7L, 30L, 365L)) {
       var steps = List.of("(declare-const x Int)", "(assert (jlong.in x))",
@@ -399,7 +406,9 @@ final class VarkaProofFiles {
       bounded.add("(assert (not (< (abs y) " + (magnitude + n - 1) + ")))");
       check(out, "its dividend is under " + (magnitude + n - 1) + ", the bound the compiler "
           + "states", "unsat", bounded);
-      var remainder = new ArrayList<>(steps);
+      // Over the floor quotient the first check proves k is, which keeps the claim linear.
+      var remainder = new ArrayList<>(List.of("(declare-const x Int)", "(assert (jlong.in x))",
+          "(define-fun k () Int (jlong.floorDiv x " + n * day + "))"));
       remainder.add("(assert (not (= (jlong.sub x (jlong.mul k " + n * day + ")) "
           + "(jlong.floorMod x " + n * day + "))))");
       check(out, "and x - k * " + n * day + ", in the long's wrapping arithmetic, is floorMod(x, "

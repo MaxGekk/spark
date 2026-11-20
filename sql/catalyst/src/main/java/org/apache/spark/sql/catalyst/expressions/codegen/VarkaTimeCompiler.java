@@ -548,8 +548,8 @@ final class VarkaTimeCompiler {
 
   /**
    * A foldable long operand's value - a {@code timestampadd} quantity, a {@code time_bucket} width
-   * or origin - or empty where it is null or its evaluation raises, which the row engine then
-   * raises on every row.
+   * or origin - or empty where it is null or its evaluation raises; the row engine then answers
+   * null on every row or raises on every row, and the caller declines.
    */
   static Optional<Long> foldedQuantity(Expression q) {
     try {
@@ -558,6 +558,7 @@ final class VarkaTimeCompiler {
       return Optional.empty();
     }
   }
+
   /**
    * {@code time_bucket(b, t, o)} over an NTZ value by a day-time width ({@code VARKA-339.md} 2.5):
    * Spark's {@code timeBucketDTInterval} at UTC, the start {@code o + floorDiv(t - o, b) * b} of
@@ -578,7 +579,7 @@ final class VarkaTimeCompiler {
     Optional<Long> width = foldedQuantity(tb.bucketSize());
     Optional<Long> origin = foldedQuantity(tb.originTs());
     if (width.isEmpty() || origin.isEmpty()) {
-      return sink.decline("time_bucket's width or origin folds to null", tb);
+      return sink.decline("time_bucket's width or origin folds to null or raises", tb);
     }
     long b = width.get();
     if (b <= 0) {
@@ -591,13 +592,13 @@ final class VarkaTimeCompiler {
     }
     long o = origin.get();
     return VarkaNodeCompiler.longOperand(tb.ts(), inputs, literals, sink)
-        .flatMap(t -> bucketStart(t, b, o, tb, sink));
+        .map(t -> bucketStart(t, b, o, sink));
   }
 
   /**
    * The start of the bucket of width {@code b} from origin {@code o} that the count {@code t}
-   * falls in, raising where Spark's {@code timeBucketFromTimestampDTInterval} raises, or empty
-   * where no count has a bucket Spark answers. Spark computes {@code diff = subtractExact(t, o)},
+   * falls in, raising where Spark's {@code timeBucketFromTimestampDTInterval} raises. Spark
+   * computes {@code diff = subtractExact(t, o)},
    * {@code k = floorDiv(diff, b)}, then {@code kb = multiplyExact(k, b)} and
    * {@code addExact(o, kb)}; for {@code b} of a day or more it also evaluates the next bucket's
    * start, {@code o + multiplyExact(k + 1, b)}, so it raises where that leaves the long. Here
@@ -623,14 +624,10 @@ final class VarkaTimeCompiler {
    *       goes to the row engine.</li>
    * </ul>
    */
-  private static Optional<VarkaVectorIR> bucketStart(
-      VarkaVectorIR t, long b, long o, TimeBucket tb, DeclineSink sink) {
+  private static VarkaVectorIR bucketStart(VarkaVectorIR t, long b, long o, DeclineSink sink) {
     long day = DateTimeConstants.MICROS_PER_DAY;
     boolean windowed = day % b != 0 && b % day != 0;
     long[] guard = bucketGuard(b, o, windowed);
-    if (guard[0] > guard[1]) {
-      return sink.decline("time_bucket whose every bucket's next start leaves the long", tb);
-    }
     VarkaVectorIR held = guard[0] == Long.MIN_VALUE && guard[1] == Long.MAX_VALUE ? t
         : new GuardedRange(t, guard[0], guard[1]);
     VarkaVectorIR diff = o == 0 ? held
@@ -660,7 +657,7 @@ final class VarkaTimeCompiler {
       }
       kb = new IntArith(IntOp.SUB, Overflow.FAIL, diff, r);
     }
-    return Optional.of(o == 0 ? kb : new IntArith(IntOp.ADD, Overflow.FAIL, sink.longSlot(o), kb));
+    return o == 0 ? kb : new IntArith(IntOp.ADD, Overflow.FAIL, sink.longSlot(o), kb);
   }
 
   /**
@@ -670,7 +667,9 @@ final class VarkaTimeCompiler {
    * {@code kmax = min(floorDiv(Long.MAX_VALUE - b, b), floorDiv(Long.MAX_VALUE - b - o, b))},
    * the greatest {@code k} with both {@code (k + 1) * b} and {@code o + (k + 1) * b} a long, so
    * the counts that reach it are those from {@code o + (kmax + 1) * b} up. The whole long range
-   * where neither applies, and {@code {1, 0}} where no count is admitted.
+   * where neither applies. The range is never empty: {@code kmax} is at least -1, since
+   * {@code Long.MAX_VALUE - b - o >= -b}, so {@code hi >= o - 1}, and {@code lo} is below the
+   * origin unless the origin is the least long, whose {@code kmax} is at least 0.
    */
   private static long[] bucketGuard(long b, long o, boolean windowed) {
     var lo = BigInteger.valueOf(Long.MIN_VALUE);
@@ -687,9 +686,11 @@ final class VarkaTimeCompiler {
       BigInteger kmax = floorDiv(top, width).min(floorDiv(top.subtract(origin), width));
       hi = hi.min(origin.add(kmax.add(BigInteger.ONE).multiply(width)).subtract(BigInteger.ONE));
     }
-    // An empty range, every count's next start past the long, is {1, 0}.
-    return hi.compareTo(lo) < 0 ? new long[] {1, 0}
-        : new long[] {lo.longValueExact(), hi.longValueExact()};
+    if (hi.compareTo(lo) < 0) {
+      throw VarkaErrors.illegalArgument("time_bucket's guard on the count is empty for width "
+          + b + " and origin " + o);
+    }
+    return new long[] {lo.longValueExact(), hi.longValueExact()};
   }
 
   private static BigInteger floorDiv(BigInteger x, BigInteger y) {
@@ -709,7 +710,6 @@ final class VarkaTimeCompiler {
         sink.longSlot(1 - divisor));
     return new ConstDivide(new IntArith(IntOp.ADD, Overflow.WRAP, x, down), divisor, bound);
   }
-
 
   /** Whether {@code si} is the replacement of one of Spark's TIME expressions. */
   static boolean isTimeTarget(StaticInvoke si) {

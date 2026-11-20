@@ -349,6 +349,10 @@ public final class VarkaTimestampNtzBucketSuite {
     Expression nullWidth = new TimeBucket(new Literal(null, DayTimeIntervalType.apply()), ntz,
         new Literal(0L, DataTypes.TimestampNTZType), Option.empty());
     assertTrue(compile(nullWidth).isEmpty(), "a null width fused");
+    Expression nullOrigin = new TimeBucket(new Literal(DAY, DayTimeIntervalType.apply()), ntz,
+        new Literal(null, DataTypes.TimestampNTZType), Option.empty());
+    assertTrue(compile(nullOrigin).isEmpty(), "a null origin fused");
+    assertTrue(declineOf(nullOrigin).contains("folds to null"), declineOf(nullOrigin));
     long widest = WIDEST_WINDOWED;
     assertTrue(compile(bucket(widest, 0)).isPresent(), "the widest windowed width declined");
     Expression past = bucket(widest + 1, 0);

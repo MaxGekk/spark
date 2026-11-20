@@ -173,7 +173,7 @@ date_part|date,ntz,time,ym,dt|int,byte,dec|date,ym,ntz|semantics|340,103,351|as 
 datepart|date,ntz,time,ym,dt|int,byte,dec|date,ym,ntz|semantics|340,103,351|as extract
 date_from_unix_date|int|date|int~|done||fused in `date_from_unix_date(unix_date(d))`
 unix_date|date|int|date|done||
-time_bucket|ym!,dt,ntz|ntz|dt,ntz|done|339|the bucket's remainder by the time of day, the day or one bounded division; a year-month width is out of milestone 8 (m9/SCOPE.md item 117)
+time_bucket|ym!,dt,ntz|ntz|dt,ntz|done|339|the bucket's remainder by the time of day, the day or one bounded division; a year-month width is out of milestone 8 by the owner's answer of 27 October 2026 (VARKA-339.md 8, m9/SCOPE.md item 117)
 hash|ALL|int||semantics|337,359,368|Murmur3 over each column's bytes, NaN and -0.0 canonicalised first; precision above 18 declined at first (its hash is a variable-length byte array)
 xxhash64|ALL|bigint||semantics|337,359,368|XxHash64 over each column's bytes, NaN and -0.0 canonicalised first; precision above 18 declined at first
 cast|ALL|ALL|matrix|semantics|332,343,350,338,28,364,365,366,368|the matrix in m8/PLAN.md 2.2

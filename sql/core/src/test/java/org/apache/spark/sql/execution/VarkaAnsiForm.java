@@ -276,7 +276,9 @@ public final class VarkaAnsiForm {
         "timestampadd(QUARTER, l, ntz)", "timestampadd(YEAR, i, ntz)",
         "timestampadd(YEAR, l, ntz)", "add_months(ntz, i)", "round(i, -1)", "bround(i, -1)",
         "round(y1, -1)", "bround(y1, -1)", "round(s1, -1)", "bround(s1, -2)", "l + 1",
-        "l - l2", "dt - dt2", "dt + INTERVAL '1' DAY", "dt * 3", "-2 * dt")) {
+        "l - l2", "dt - dt2", "dt + INTERVAL '1' DAY", "dt * 3", "-2 * dt",
+        "time_bucket(INTERVAL '1' DAY, ntz, TIMESTAMP_NTZ '1970-01-01 06:00:00')",
+        "time_bucket(INTERVAL '30' DAY, ntz)", "time_bucket(INTERVAL '7' HOUR, ntz)")) {
       out.put(sql + "\t" + FALSE_AND, unqualified);
     }
     // A bigint narrowed to a narrow type as a COALESCE argument beside a narrow column: a narrow
