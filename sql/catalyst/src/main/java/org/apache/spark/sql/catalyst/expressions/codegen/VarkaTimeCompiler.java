@@ -45,6 +45,7 @@ import org.apache.spark.sql.catalyst.expressions.SecondsOfTimeWithFraction;
 import org.apache.spark.sql.catalyst.expressions.SubtractTimes;
 import org.apache.spark.sql.catalyst.expressions.SubtractTimestamps;
 import org.apache.spark.sql.catalyst.expressions.TimeAddInterval;
+import org.apache.spark.sql.catalyst.expressions.TimeBucket;
 import org.apache.spark.sql.catalyst.expressions.TimeDiff;
 import org.apache.spark.sql.catalyst.expressions.TimeFromMicros;
 import org.apache.spark.sql.catalyst.expressions.TimeFromMillis;
@@ -60,6 +61,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOpKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -84,7 +87,8 @@ import org.apache.spark.unsafe.types.UTF8String;
  * the TIME functions, which reach the compiler as the {@code StaticInvoke} their
  * {@code RuntimeReplaceable} rewrote into and are matched by the method they invoke through
  * {@link #TIME_TARGETS}; and the {@code TIMESTAMP_NTZ} arithmetic that is long arithmetic, the
- * difference of two NTZ values and an NTZ value plus or minus a day-time interval.
+ * difference of two NTZ values, an NTZ value plus or minus a day-time interval,
+ * {@code timestampadd} up to a week and {@code time_bucket} by a day-time width.
  *
  * <p>{@link #arm} is the family's one entry from the chain {@code VarkaExpressionCompiler}
  * dispatches through, in the form {@code VarkaIntervalCompiler} set: a {@code switch} that tests
@@ -143,6 +147,22 @@ final class VarkaTimeCompiler {
       "DAY", DateTimeConstants.MICROS_PER_DAY,
       "DAYOFYEAR", DateTimeConstants.MICROS_PER_DAY,
       "WEEK", DateTimeConstants.MICROS_PER_DAY * DateTimeConstants.DAYS_PER_WEEK);
+
+  /**
+   * The widest {@code time_bucket} width the windowed arm takes ({@link #bucketStart}): its window
+   * of differences, {@code 2^52 - b} either side of the origin, is then at least {@code 2^51}
+   * microseconds, about 71 years. A wider width that neither divides a day nor is whole days
+   * declines.
+   */
+  static final long BUCKET_WINDOW_MAX_WIDTH = 1L << 51;
+
+  /**
+   * One past the magnitude of the day of every long count of microseconds,
+   * {@code -floorDiv(Long.MIN_VALUE, D)}: the floor division by a day leaves a quotient in
+   * {@code [-106,751,992, 106,751,991]}.
+   */
+  private static final long DAY_QUOTIENT_MAGNITUDE =
+      -Math.floorDiv(Long.MIN_VALUE, DateTimeConstants.MICROS_PER_DAY) + 1;
 
   /** The class a {@code TIME} function's replacement invokes, and the method it calls. */
   private record TimeTarget(Class<?> owner, String function) {
@@ -321,6 +341,10 @@ final class VarkaTimeCompiler {
       case TimestampAdd n when VarkaTypes.isNtz(n.timestamp().dataType())
           && !VarkaChronoCompiler.isMonthUnit(n.unit()) ->
           () -> ntzTimestampAdd(n, inputs, literals, sink);
+      // `time_bucket` over an NTZ value: the start of the bucket its count falls in, by long
+      // arithmetic at UTC, the raise points Spark's checked; a year-month width declines.
+      case TimeBucket tb when VarkaTypes.isNtz(tb.ts().dataType()) ->
+          () -> ntzTimeBucket(tb, inputs, literals, sink);
       // The time of day of a TIMESTAMP_NTZ (VARKA-340): the count read at UTC, so the fields are
       // the TIME lowerings over the microsecond of the day. The analyzer fills in the session
       // zone these expressions carry, and an NTZ value does not read it.
@@ -522,8 +546,9 @@ final class VarkaTimeCompiler {
   }
 
   /**
-   * A foldable {@code timestampadd} quantity's value, or empty where it is null or its
-   * evaluation raises, which the row engine then raises on every row.
+   * A foldable long operand's value - a {@code timestampadd} quantity, a {@code time_bucket} width
+   * or origin - or empty where it is null or its evaluation raises, which the row engine then
+   * raises on every row.
    */
   static Optional<Long> foldedQuantity(Expression q) {
     try {
@@ -532,6 +557,126 @@ final class VarkaTimeCompiler {
       return Optional.empty();
     }
   }
+  /**
+   * {@code time_bucket(b, t, o)} over an NTZ value by a day-time width ({@code VARKA-339.md} 2.5):
+   * Spark's {@code timeBucketDTInterval} at UTC, the start {@code o + floorDiv(t - o, b) * b} of
+   * the bucket {@code t} falls in. The width and the origin are foldable, as the analyzer requires;
+   * a null one declines, as does a year-month width, which needs the month of the date
+   * ({@code m9/SCOPE.md} item 117), and a width the windowed arm of {@link #bucketStart} cannot
+   * take.
+   */
+  private static Optional<VarkaVectorIR> ntzTimeBucket(
+      TimeBucket tb,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    if (!(tb.bucketSize().dataType() instanceof DayTimeIntervalType)) {
+      return sink.decline("time_bucket by a year-month width, which needs the month of the "
+          + "date (m9/SCOPE.md item 117)", tb);
+    }
+    Optional<Long> width = foldedQuantity(tb.bucketSize());
+    Optional<Long> origin = foldedQuantity(tb.originTs());
+    if (width.isEmpty() || origin.isEmpty()) {
+      return sink.decline("time_bucket's width or origin folds to null", tb);
+    }
+    long b = width.get();
+    if (b <= 0) {
+      return sink.decline("time_bucket by a width that is not positive", tb);
+    }
+    long day = DateTimeConstants.MICROS_PER_DAY;
+    if (day % b != 0 && b % day != 0 && b > BUCKET_WINDOW_MAX_WIDTH) {
+      return sink.decline("time_bucket by a width past 2^51 microseconds that neither divides "
+          + "a day nor is whole days", tb);
+    }
+    long o = origin.get();
+    return VarkaNodeCompiler.longOperand(tb.ts(), inputs, literals, sink)
+        .map(t -> bucketStart(t, b, o, sink));
+  }
+
+  /**
+   * The start of the bucket of width {@code b} from origin {@code o} that the count {@code t}
+   * falls in, raising where Spark's {@code timeBucketFromTimestampDTInterval} raises. Spark
+   * computes {@code diff = subtractExact(t, o)}, {@code k = floorDiv(diff, b)}, then
+   * {@code kb = multiplyExact(k, b)} and {@code addExact(o, kb)}; for {@code b} of a day or more
+   * it also evaluates the next bucket's start, {@code o + multiplyExact(k + 1, b)}, so it raises
+   * where that leaves the long. Here every arm computes the remainder
+   * {@code r = floorMod(diff, b)}, and {@code kb} is {@code diff - r}, whose checked subtraction
+   * overflows exactly where {@code multiplyExact(k, b)} does, since it is the same product; the
+   * next bucket's overflows are guards on {@code kb} and the start of at most
+   * {@code Long.MAX_VALUE - b}. The arms differ in {@code r}:
+   *
+   * <ul>
+   *   <li>{@code b} divides a day: {@code r1 = floorMod(diff, D)}, the time of day
+   *       ({@code microsOfDay}), then {@code r1 - (r1 / b) * b}, a truncating division of a
+   *       value in {@code [0, D)}. Exact over every long, since {@code floorMod(x, b) =
+   *       floorMod(floorMod(x, D), b)} where {@code b} divides {@code D}.</li>
+   *   <li>{@code b} is {@code n} whole days: {@code q1 = floorDiv(diff, D)}, then
+   *       {@code k = floorDiv(q1, n)} by one bounded division, and
+   *       {@code r = (q1 - k * n) * D + r1}. Exact over every long, by the nested floors.</li>
+   *   <li>any other width: {@code diff} guarded to {@code +-(2^52 - b)}, one bounded floor
+   *       division by {@code b}, and {@code r = diff - k * b}. A batch with a difference past
+   *       the window, about 142 years less a width either side of the origin, goes to the row
+   *       engine.</li>
+   * </ul>
+   */
+  private static VarkaVectorIR bucketStart(VarkaVectorIR t, long b, long o, DeclineSink sink) {
+    long day = DateTimeConstants.MICROS_PER_DAY;
+    VarkaVectorIR diff = o == 0 ? t : new IntArith(IntOp.SUB, Overflow.FAIL, t, sink.longSlot(o));
+    VarkaVectorIR kb;
+    if (b == 1) {
+      kb = diff;
+    } else {
+      VarkaVectorIR r;
+      if (b < day && day % b == 0) {
+        VarkaVectorIR r1 = VarkaNodeCompiler.microsOfDay(diff, sink);
+        r = new IntArith(IntOp.SUB, Overflow.WRAP, r1, new IntArith(IntOp.MUL, Overflow.WRAP,
+            new ConstDivide(r1, b, day), sink.longSlot(b)));
+      } else if (b % day == 0) {
+        long n = b / day;
+        VarkaVectorIR r1 = VarkaNodeCompiler.microsOfDay(diff, sink);
+        if (n == 1) {
+          r = r1;
+        } else {
+          VarkaVectorIR q1 = VarkaNodeCompiler.floorDivLong(diff, day, sink);
+          VarkaVectorIR k = floorDivBounded(q1, n, DAY_QUOTIENT_MAGNITUDE + n - 1, sink);
+          VarkaVectorIR days = new IntArith(IntOp.SUB, Overflow.WRAP, q1,
+              new IntArith(IntOp.MUL, Overflow.WRAP, k, sink.longSlot(n)));
+          r = new IntArith(IntOp.ADD, Overflow.WRAP,
+              new IntArith(IntOp.MUL, Overflow.WRAP, days, sink.longSlot(day)), r1);
+        }
+      } else {
+        long window = ConstDivide.EXACT_DIVIDEND_BOUND - b;
+        VarkaVectorIR inWindow = new GuardedRange(diff, -window, window);
+        VarkaVectorIR k = floorDivBounded(inWindow, b, ConstDivide.EXACT_DIVIDEND_BOUND, sink);
+        r = new IntArith(IntOp.SUB, Overflow.WRAP, inWindow,
+            new IntArith(IntOp.MUL, Overflow.WRAP, k, sink.longSlot(b)));
+      }
+      kb = new IntArith(IntOp.SUB, Overflow.FAIL, diff, r);
+    }
+    boolean nextBucket = b >= day;
+    if (nextBucket) {
+      kb = new GuardedRange(kb, Long.MIN_VALUE, Long.MAX_VALUE - b);
+    }
+    if (o == 0) {
+      return kb;
+    }
+    VarkaVectorIR start = new IntArith(IntOp.ADD, Overflow.FAIL, sink.longSlot(o), kb);
+    return nextBucket ? new GuardedRange(start, Long.MIN_VALUE, Long.MAX_VALUE - b) : start;
+  }
+
+  /**
+   * {@code Math.floorDiv(x, divisor)} for a positive divisor and a dividend whose magnitude is
+   * under {@code bound - divisor + 1}: a negative {@code x} is moved down by
+   * {@code divisor - 1}, so that the truncating {@code ConstDivide} floors, and the moved
+   * magnitude stays under {@code bound}, which the caller proved and states to the division.
+   */
+  private static VarkaVectorIR floorDivBounded(
+      VarkaVectorIR x, long divisor, long bound, DeclineSink sink) {
+    VarkaVectorIR down = new BitOp(BitOpKind.AND, new BitOp(BitOpKind.SHR, x, sink.longSlot(63)),
+        sink.longSlot(1 - divisor));
+    return new ConstDivide(new IntArith(IntOp.ADD, Overflow.WRAP, x, down), divisor, bound);
+  }
+
 
   /** Whether {@code si} is the replacement of one of Spark's TIME expressions. */
   static boolean isTimeTarget(StaticInvoke si) {

@@ -55,9 +55,10 @@ import org.apache.spark.sql.VarkaBenchmark;
  * section's plan on the Varka session against the section's {@link Fusion} class, the record of
  * how much of it a step of VARKA-339 has fused, and fails when the plan's class differs
  * ({@link VarkaSqlBenchmarkBase#requireBaseline(SparkSession, String, String, Fusion)}). Step 2
- * fuses the chain and the interval column sum, at both densities, and they are {@code WHOLE}; the
- * other sections are {@code NONE}. Each later step sets the class of the sections it fuses, so the
- * same class and the same labels time the fused code. A {@code WHOLE} section must also run as a
+ * fuses the chain and the interval column sum, at both densities, step 3 the month form and
+ * {@code timestampadd}, step 4 both {@code time_bucket} widths, so every section is
+ * {@code WHOLE}. Each step set the class of the sections it fused, so the same class and the same
+ * labels time the fused code. A {@code WHOLE} section must also run as a
  * kernel over every batch, none handed back to the row path ({@link VarkaSizeLadder#varkaFused}),
  * or the run fails rather than time the row path under the {@code varka on} label. That holds
  * with {@value VarkaSqlBenchmarkBase#FUSE_CHECK_PROPERTY} set to {@code false} too, which lifts
@@ -159,9 +160,9 @@ public class VarkaTimestampNtzArithmeticBaselineBenchmark extends VarkaSqlBenchm
       out.add(new Section("TIMESTAMP_NTZ timestampadd(HOUR, q, ntz), " + density,
           "SELECT timestampadd(HOUR, " + q + ", " + a + ")" + from, Fusion.WHOLE));
       out.add(new Section("TIMESTAMP_NTZ time_bucket at 15 minutes, " + density,
-          "SELECT time_bucket(INTERVAL '15' MINUTE, " + a + ")" + from, Fusion.NONE));
+          "SELECT time_bucket(INTERVAL '15' MINUTE, " + a + ")" + from, Fusion.WHOLE));
       out.add(new Section("TIMESTAMP_NTZ time_bucket at one day, " + density,
-          "SELECT time_bucket(INTERVAL '1' DAY, " + a + ")" + from, Fusion.NONE));
+          "SELECT time_bucket(INTERVAL '1' DAY, " + a + ")" + from, Fusion.WHOLE));
     }
     return out;
   }

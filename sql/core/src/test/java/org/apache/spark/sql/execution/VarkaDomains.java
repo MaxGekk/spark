@@ -296,7 +296,10 @@ public final class VarkaDomains {
           "only the last day whose midnight is a long can pass the long with a time of day"),
       Map.entry("CAST(t AS TIMESTAMP_NTZ)",
           "the current date is not the last day whose midnight is a long, the one the add can "
-              + "overflow on"));
+              + "overflow on"),
+      Map.entry("time_bucket(INTERVAL '15' MINUTE, ntz)",
+          "every NTZ value of the fixtures is a day inside the long, and a 15-minute bucket "
+              + "from the epoch starts within 15 minutes below its value"));
 
   // ---------------------------------------------------------------------------------------------
   // The check

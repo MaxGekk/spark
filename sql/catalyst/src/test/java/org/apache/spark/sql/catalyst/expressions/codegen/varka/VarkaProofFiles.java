@@ -259,7 +259,12 @@ final class VarkaProofFiles {
       100_000L,
       10_000L,
       100L,
-      10L);
+      10L,
+      // time_bucket's divisions (VARKA-339): a 15-minute width's remainder of the time of day,
+      // 30 days' division of the day, and a seven-hour width's under its window.
+      15 * DateTimeConstants.MICROS_PER_MINUTE,
+      30L,
+      7 * DateTimeConstants.MICROS_PER_HOUR);
 
   private static final long P52 = 1L << 52;
   private static final long P53 = 1L << 53;
@@ -349,7 +354,79 @@ final class VarkaProofFiles {
     }
     floorDivDay(out);
     truncDivDay(out);
+    timeBucket(out);
     return out.toString();
+  }
+
+  /**
+   * {@code time_bucket}'s remainder {@code r = floorMod(x, b)} of the difference {@code x} of an
+   * NTZ count and the origin, in the three forms {@code VarkaTimeCompiler.bucketStart} builds
+   * (VARKA-339, `VARKA-339.md` 2.5), each at the coverage table's widths and the integer identity
+   * only, the divisions being the sections' above. A width that divides a day: the time of day
+   * {@code r1 = floorMod(x, D)} (proven above) less its truncating quotient by {@code b} times
+   * {@code b}. Whole days {@code n}: the day {@code q1 = floorDiv(x, D)} moved down by
+   * {@code n - 1} when negative, so the truncating division by {@code n} is
+   * {@code floorDiv(x, n * D)}, its dividend under the bound the compiler states, and the
+   * remainder {@code (q1 - k * n) * D + r1}. Any other width: the difference inside the window
+   * {@code +-(2^52 - b)}, moved down by {@code b - 1} when negative and so still under
+   * {@code 2^52}, which one past the window is not. The start's checked {@code x - r} is then
+   * {@code floorDiv(x, b) * b} as an integer, so it overflows where Spark's {@code multiplyExact}
+   * does.
+   */
+  private static void timeBucket(StringBuilder out) {
+    long day = DateTimeConstants.MICROS_PER_DAY;
+    out.append("\n; time_bucket: r = floorMod(x, b), x = t - o, in the three forms of "
+        + "VarkaTimeCompiler.bucketStart\n");
+    long quarter = 15 * DateTimeConstants.MICROS_PER_MINUTE;
+    check(out, "a width of " + quarter + " dividing a day: the time of day less its quotient by "
+        + "the width times the width is floorMod(x, " + quarter + ") for every long x", "unsat",
+        List.of("(declare-const x Int)", "(assert (jlong.in x))",
+            "(define-fun r1 () Int (jlong.floorMod x " + day + "))",
+            "(define-fun r () Int (jlong.sub r1 (jlong.mul (jlong.div r1 " + quarter + ") "
+                + quarter + ")))",
+            "(assert (not (= r (jlong.floorMod x " + quarter + "))))"));
+    long magnitude = -Math.floorDiv(Long.MIN_VALUE, day) + 1;
+    for (long n : List.of(7L, 30L, 365L)) {
+      var steps = List.of("(declare-const x Int)", "(assert (jlong.in x))",
+          "(define-fun q1 () Int (jlong.floorDiv x " + day + "))",
+          "(define-fun r1 () Int (jlong.floorMod x " + day + "))",
+          "(define-fun y () Int (jlong.add q1 (* (- (jlong.shr q1 63)) " + lit(1 - n) + ")))",
+          "(define-fun k () Int (jlong.div y " + n + "))");
+      var quotient = new ArrayList<>(steps);
+      quotient.add("(assert (not (= k (floor.div x " + n * day + "))))");
+      check(out, n + " whole days: the day's truncating quotient by " + n + ", moved down when "
+          + "negative, is floorDiv(x, " + n * day + ") for every long x", "unsat", quotient);
+      var bounded = new ArrayList<>(steps);
+      bounded.add("(assert (not (< (abs y) " + (magnitude + n - 1) + ")))");
+      check(out, "its dividend is under " + (magnitude + n - 1) + ", the bound the compiler "
+          + "states", "unsat", bounded);
+      var remainder = new ArrayList<>(steps);
+      remainder.add("(assert (not (= (+ (* (- q1 (* k " + n + ")) " + day + ") r1) "
+          + "(jlong.floorMod x " + n * day + "))))");
+      check(out, "and (q1 - k * " + n + ") * " + day + " + r1 is floorMod(x, " + n * day + ")",
+          "unsat", remainder);
+    }
+    long b = 7 * DateTimeConstants.MICROS_PER_HOUR;
+    long window = VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND - b;
+    var steps = List.of("(declare-const x Int)", "(assert (jlong.in x))",
+        "(define-fun y () Int (jlong.add x (* (- (jlong.shr x 63)) " + lit(1 - b) + ")))",
+        "(define-fun k () Int (jlong.div y " + b + "))",
+        "(define-fun r () Int (jlong.sub x (jlong.mul k " + b + ")))");
+    var inWindow = new ArrayList<>(steps);
+    inWindow.add("(assert (<= (abs x) " + window + "))");
+    var under = new ArrayList<>(inWindow);
+    under.add("(assert (not (< (abs y) " + P52 + ")))");
+    check(out, "a width of " + b + ": inside the window +-" + window + " the moved difference "
+        + "is under 2^52", "unsat", under);
+    var floorMod = new ArrayList<>(inWindow);
+    floorMod.add("(assert (not (and (= k (floor.div x " + b + ")) (= r (jlong.floorMod x " + b
+        + ")))))");
+    check(out, "and its quotient and remainder are floorDiv and floorMod by " + b, "unsat",
+        floorMod);
+    var past = new ArrayList<>(steps);
+    past.add("(assert (= x " + lit(-window - 1) + "))");
+    past.add("(assert (not (< (abs y) " + P52 + ")))");
+    check(out, "one past the window the moved difference reaches 2^52", "sat", past);
   }
 
   /**

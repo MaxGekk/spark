@@ -272,6 +272,16 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     Row(s"timestampadd($unit, $q, ntz)", domain = Some(s"$ntzFieldDays AND $q BETWEEN " +
       s"${Math.ceilDiv(minMonths, k)} AND ${Math.floorDiv(maxMonths, k)}"))
 
+  /** The epoch as an NTZ literal, the default origin of `time_bucket`. */
+  private val ntzEpoch = "TIMESTAMP_NTZ '1970-01-01 00:00:00'"
+
+  /** How far before the epoch the first 15-minute bucket that starts at a long starts. */
+  private val firstQuarterHour = daySecond(-(Math.ceilDiv(Long.MinValue, 15 * MICROS_PER_MINUTE)
+    * 15 * MICROS_PER_MINUTE))
+
+  /** The differences from the origin the windowed arm of a seven-hour bucket admits. */
+  private val bucketWindow = (1L << 52) - 7 * MICROS_PER_HOUR
+
   /** The least day-time interval, the one `negateExact` refuses. */
   private val leastInterval = "INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND"
 
@@ -1167,7 +1177,25 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       timestampAddMonths("QUARTER", 3, "i"),
       timestampAddMonths("QUARTER", 3, "l"),
       timestampAddMonths("YEAR", 12, "i"),
-      timestampAddMonths("YEAR", 12, "l"))),
+      timestampAddMonths("YEAR", 12, "l"),
+      // time_bucket by a day-time width: the start of the bucket the count falls in, by its
+      // remainder, the raise points Spark's checked: the product past the long and, from a day
+      // up, the next bucket's start past it, both guards.
+      Row("time_bucket(INTERVAL '15' MINUTE, ntz)", "a width that divides a day takes the " +
+        "remainder through the time of day, exact over every long",
+        domain = Some(s"ntz >= $ntzEpoch - INTERVAL '$firstQuarterHour' DAY TO SECOND")),
+      Row("time_bucket(INTERVAL '1' DAY, ntz, TIMESTAMP_NTZ '1970-01-01 06:00:00')", "a width " +
+        "of whole days through the day, an origin's start checked, the next bucket's guarded",
+        domain = Some("ntz >= CAST(date_from_unix_date(-106751991) AS TIMESTAMP_NTZ) + " +
+          "INTERVAL '6' HOUR AND ntz < CAST(date_from_unix_date(106751990) AS TIMESTAMP_NTZ) + " +
+          "INTERVAL '6' HOUR")),
+      Row("time_bucket(INTERVAL '30' DAY, ntz)", "the day's floor division by the days",
+        domain = Some("ntz >= CAST(date_from_unix_date(-106751970) AS TIMESTAMP_NTZ) AND " +
+          "ntz < CAST(date_from_unix_date(106751970) AS TIMESTAMP_NTZ)")),
+      Row("time_bucket(INTERVAL '7' HOUR, ntz)", "any other width by one division, the " +
+        "difference from the origin held to the window that division is exact over",
+        domain = Some(s"ntz - $ntzEpoch BETWEEN INTERVAL '${daySecond(-bucketWindow)}' DAY TO " +
+          s"SECOND AND INTERVAL '${daySecond(bucketWindow)}' DAY TO SECOND")))),
 
     // The decomposition of a TIMESTAMP_NTZ (VARKA-340): the count is read at UTC, so its date is
     // an exact floor division by a day and its time of day the remainder. The calendar fields

@@ -62,7 +62,8 @@ public enum VarkaFamily {
       + " casts to TIME and to a day-time interval, hour, minute and second of a TIMESTAMP_NTZ,"
       + " make_timestamp_ntz(date, time) and the cast of a TIME to TIMESTAMP_NTZ,"
       + " TIMESTAMP_NTZ minus TIMESTAMP_NTZ, a TIMESTAMP_NTZ plus or minus a day-time interval,"
-      + " and timestampadd of a TIMESTAMP_NTZ by a unit from a microsecond to a week"),
+      + " timestampadd of a TIMESTAMP_NTZ by a unit from a microsecond to a week, and"
+      + " time_bucket of a TIMESTAMP_NTZ by a day-time width"),
   /** {@code VarkaConditionCompiler.compileCond}, reached outside the chain. */
   PREDICATE("predicate", "predicate", "the comparisons, IN over dates and year-month intervals,"
       + " IS NULL and IS NOT NULL, AND, OR and NOT, wherever they sit: a filter's predicates, so"
