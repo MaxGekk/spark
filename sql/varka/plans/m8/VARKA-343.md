@@ -896,6 +896,14 @@ to an integral one in the three modes, with `GuardedRange`'s floating bounds. Ro
    under a double drive, rather than declining it to a later part: the store is the same code.
 5. **The branch is `varka-343-conversions`**, the brief's name, and the stacked part
    `varka-343b2b-avx2`.
+6. **The assembly is the default arm and the truncated magic the reference**, by question 1 and
+   4.4's rule, which the measurement still has to confirm. The magic declines a NaN or an
+   infinity as well as a lane past `2^51`, since its guard is the window and nothing else: a
+   decline is the row engine's answer, never a wrong one.
+7. **No proof file in this window.** The house rule asks one of every bounded lowering, and the
+   truncated magic is one; `VarkaProofFiles` and both solvers are needed to write and check it,
+   and the window allowed neither a solver run nor a test run beyond one. It is owed before the
+   part merges, with the reduced-width twins standing in until then.
 
 ### 343b2b as built (20 November 2026, branch `varka-343b2b-avx2`, stacked on 343b2a)
 
