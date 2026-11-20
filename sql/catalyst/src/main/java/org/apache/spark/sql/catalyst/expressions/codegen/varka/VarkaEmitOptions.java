@@ -702,7 +702,10 @@ public record VarkaEmitOptions(
    * XOR into a magic number whose ulp is {@code 2^32}, the second by an arithmetic shift, which
    * AVX2 has no 64-bit instruction for, and a multiply. {@link #MAGIC} is exact for
    * {@code |v| <= 2^51} under a guard that declines a batch past it. The two the default does
-   * not take are arms kept to be measured against it.
+   * not take are arms kept to be measured against it. The option also picks {@code D2L}'s and
+   * {@code F2L}'s form: the integer assembled from the bits under {@link #SPLIT} and
+   * {@link #XOR_SPLIT}, whole-range, and the truncated magic under {@link #MAGIC}, behind the
+   * same window (`VARKA-343.md` 2.3).
    */
   public enum WideConversionForm { SPLIT, MAGIC, XOR_SPLIT }
 

@@ -74,6 +74,13 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  *   converted by Java's {@code l2f} and inserted into a zero float vector, which is the cast
  *   itself. C2 intrinsifies the read, the insert and the window test's reduction under
  *   {@code -XX:UseAVX=2} at 128 and 256 bits ({@code plans/m8/results/VARKA-600}).</li>
+ *   <li>{@code D2L}, and {@code F2L} after an exact {@code F2D}, under {@code SPLIT} and
+ *   {@code XOR_SPLIT}: the integer assembled from the bits ({@link #emitAssembly}), whole-range
+ *   and with no mask (`VARKA-343.md` 2.3).</li>
+ *   <li>The same under {@link WideConversionForm#MAGIC}: the truncated magic, {@code r = (x + M) -
+ *   M}, the nearest integer, read as a long by {@code bits(r + M) - bits(M)} and moved one toward
+ *   zero where it passed {@code x}, under a guard that declines a batch with a live lane past
+ *   {@code |x| <= 2^51}, NaN and the infinities among them ({@link #emitTruncatedMagic}).</li>
  * </ul>
  */
 final class VarkaConversionLowering {
@@ -115,6 +122,14 @@ final class VarkaConversionLowering {
    */
   static final int WINDOW_SHIFT = Long.numberOfTrailingZeros(MAGIC_WINDOW) + 1;
 
+  /** {@code D2L}'s exponent field, its bias plus the 52 bits below the point, and its cap. */
+  static final long EXPONENT_MASK = 0x7FFL;
+  static final long EXPONENT_BIAS = 1075L;
+  /** The largest left shift of {@code m}, {@code 2^52 <= m < 2^53}, that stays below 2^63. */
+  static final long MAX_LEFT_SHIFT = 10L;
+  /** The bits of {@code +Infinity}, above which a magnitude's bits are a NaN's. */
+  static final long INFINITY_BITS = Double.doubleToRawLongBits(Double.POSITIVE_INFINITY);
+
   /** The lane calls of each form, which {@code VarkaEmitBudget.weightOf} weighs them by. */
   static final int SPLIT_CALLS = 10;
   static final int XOR_SPLIT_CALLS = 8;
@@ -124,6 +139,8 @@ final class VarkaConversionLowering {
   static final int WINDOWED_FAST_CALLS = 4;
   /** Both of {@link NarrowConversionForm#WINDOWED}'s arms, which share its method. */
   static final int WINDOWED_CALLS = WINDOW_CALLS + WINDOWED_FAST_CALLS + ODD_CALLS;
+  static final int ASSEMBLY_CALLS = 38;
+  static final int TRUNCATED_MAGIC_CALLS = 22;
 
   /** {@link NarrowConversionForm#SCALAR}'s calls at {@code lanes} long lanes: a read and an
    *  insert a lane, and the zero vector. */
@@ -133,13 +150,21 @@ final class VarkaConversionLowering {
 
   /** Whether {@code n} takes an AVX2 form: Slots, the refusals and the emission all ask. */
   static boolean takesWideForm(Analysis analysis, ConvertLane n) {
-    return n.child().laneType() == LaneType.LONG && n.target().isFloating()
-        && analysis.options.convertsFallBack();
+    return analysis.options.convertsFallBack() && (toLong(n)
+        || n.child().laneType() == LaneType.LONG && n.target().isFloating());
   }
 
-  /** Whether {@code n} is the bounded {@code L2D}, whose guard declines a batch past 2^51. */
+  /** Whether {@code n} converts a floating lane to the long one, {@code F2L} or {@code D2L}. */
+  static boolean toLong(ConvertLane n) {
+    return n.child().laneType().isFloating() && n.target() == LaneType.LONG;
+  }
+
+  /**
+   * Whether {@code n} is a bounded form, the {@code L2D} or the {@code D2L} magic, whose guard
+   * declines a batch past 2^51.
+   */
   static boolean takesMagic(Analysis analysis, ConvertLane n) {
-    return takesWideForm(analysis, n) && n.target() == LaneType.DOUBLE
+    return takesWideForm(analysis, n) && (n.target() == LaneType.DOUBLE || toLong(n))
         && analysis.options.wideConversionForm() == WideConversionForm.MAGIC;
   }
 
@@ -168,11 +193,19 @@ final class VarkaConversionLowering {
   }
 
   /**
-   * How many scratch locals {@code n}'s form parks values in: the rounding to odd's four, which
-   * the windowed form shares, the scalar form's one long vector, and none for {@code L2D}.
+   * How many scratch locals {@code n}'s form parks values in: the assembly's six and the
+   * truncated magic's four for a conversion to the long lane; for {@code L2F}, the rounding to
+   * odd's four, which the windowed form shares, and the scalar form's one long vector; none for
+   * {@code L2D}.
    */
   static int scratch(Analysis analysis, ConvertLane n) {
-    if (!takesWideForm(analysis, n) || n.target() != LaneType.FLOAT) {
+    if (!takesWideForm(analysis, n)) {
+      return 0;
+    }
+    if (toLong(n)) {
+      return takesMagic(analysis, n) ? 4 : 6;
+    }
+    if (n.target() != LaneType.FLOAT) {
       return 0;
     }
     return switch (narrowForm(analysis)) {
@@ -181,8 +214,12 @@ final class VarkaConversionLowering {
     };
   }
 
-  /** {@code [v] -> [d]}, a float filling the low half of its species. */
+  /** {@code [v] -> [d]}, a float filling the low half of its species, or a long. */
   static void emit(CodeBuilder cb, ConvertLane n, boolean dense, Analysis analysis, Slots s) {
+    if (toLong(n)) {
+      emitToLong(cb, n, dense, analysis, s);
+      return;
+    }
     if (n.target() == LaneType.FLOAT) {
       int[] tmp = s.convertTmp.get(n);
       if (tmp == null) {
@@ -210,6 +247,198 @@ final class VarkaConversionLowering {
       case SPLIT -> emitSplit(cb);
       case XOR_SPLIT -> emitXorSplit(cb);
     }
+  }
+
+  /**
+   * {@code [x] -> [(long) x]} for {@code D2L} or {@code F2L}: a float child is widened exactly
+   * first, and under {@code MAGIC} the child is guarded, at its own lane, by {@code |x| <= 2^51}.
+   */
+  private static void emitToLong(CodeBuilder cb, ConvertLane n, boolean dense, Analysis analysis,
+      Slots s) {
+    int[] tmp = s.convertTmp.get(n);
+    if (tmp == null) {
+      throw VarkaErrors.illegalState("a D2L form with no scratch planned: " + n);
+    }
+    boolean magic = takesMagic(analysis, n);
+    if (magic) {
+      Integer guardTmp = s.guardTmp.get(n);
+      if (guardTmp == null) {
+        // Refused by name: without its scratch the window's check would be dropped silently.
+        throw VarkaErrors.illegalState("a bounded D2L with no guard scratch planned: " + n);
+      }
+      VarkaVectorWalk.emitValueRangeGuard(cb, n, dense ? null : s.wordRef.get(n.child()),
+          guardTmp, dense, analysis, s, -MAGIC_WINDOW, MAGIC_WINDOW);
+    }
+    if (n.child().laneType() == LaneType.FLOAT) {
+      VarkaVectorWalk.emitShapeConversion(cb, Lane.FLOAT, Lane.DOUBLE, analysis);
+    }
+    if (magic) {
+      emitTruncatedMagic(cb, tmp);
+    } else {
+      emitAssembly(cb, tmp);
+    }
+  }
+
+  /**
+   * {@code [d] -> [(long) d]}, {@link WideConversionForm#SPLIT} and {@link
+   * WideConversionForm#XOR_SPLIT}'s {@code D2L}: the integer assembled from the bits, with no
+   * mask, so C2 has nothing to lower at two 64-bit lanes. The exponent {@code e = ((b >>> 52) &
+   * 0x7FF) - 1075} and the significand {@code m} with its implicit bit give the magnitude,
+   * {@code m << e} for {@code 0 <= e <= 10} and {@code m >>> -e} below, the right count raised
+   * to 63 where it passes 63 (the Vector API reads a count modulo 64; {@code m < 2^53}, so any
+   * count from 53 up gives 0); the sign {@code (r ^ s) - s}; and where {@code e > 10}, so
+   * {@code |d| >= 2^63}, an infinity or a NaN, the saturated {@code Long.MAX_VALUE ^ s}, or 0 for
+   * a NaN, blended in by integer masks. A subnormal or zero has {@code e = -1075} and gives 0.
+   */
+  private static void emitAssembly(CodeBuilder cb, int[] t) {
+    int b = t[0];
+    int e = t[1];
+    int m = t[2];
+    int neg = t[3];
+    int c = t[4];
+    int left = t[5];
+    cb.invokevirtual(VECTOR, "reinterpretAsLongs", REINTERPRET_L);
+    cb.astore(b);
+    // e = ((b >>> 52) & 0x7FF) - 1075, the power of two of m's last bit.
+    cb.aload(b);
+    emitShift(cb, "LSHR", SMALL_BITS);
+    emitScalar(cb, "and", EXPONENT_MASK);
+    emitScalar(cb, "sub", EXPONENT_BIAS);
+    cb.astore(e);
+    // m = (b & (2^52 - 1)) | 2^52.
+    cb.aload(b);
+    emitScalar(cb, "and", TWO_52_INT - 1);
+    emitScalar(cb, "or", TWO_52_INT);
+    cb.astore(m);
+    // neg, all ones where e < 0: -(e >>> 63).
+    cb.aload(e);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    cb.astore(neg);
+    // left = m << (e & ~neg), the count 0 where e < 0.
+    cb.aload(m);
+    cb.getstatic(VECTOR_OPERATORS, "LSHL", VO_BINARY);
+    cb.aload(e);
+    emitWith(cb, "AND", neg);
+    emitWith(cb, "XOR", e);
+    cb.invokevirtual(LONG_VECTOR, "lanewise", Lane.LONG.integral().lanewiseBinaryV());
+    cb.astore(left);
+    // c = -e & neg, the right count, 0 where e >= 0; raised to 63 where it passes 63.
+    cb.aload(e);
+    emitNeg(cb);
+    emitWith(cb, "AND", neg);
+    cb.astore(c);
+    cb.aload(c);
+    emitNeg(cb);
+    emitScalar(cb, "add", Long.SIZE - 1);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    emitScalar(cb, "and", Long.SIZE - 1);
+    emitWith(cb, "OR", c);
+    cb.astore(c);
+    // mag = left ^ ((left ^ (m >>> c)) & neg).
+    cb.aload(m);
+    cb.getstatic(VECTOR_OPERATORS, "LSHR", VO_BINARY);
+    cb.aload(c);
+    cb.invokevirtual(LONG_VECTOR, "lanewise", Lane.LONG.integral().lanewiseBinaryV());
+    emitWith(cb, "XOR", left);
+    emitWith(cb, "AND", neg);
+    emitWith(cb, "XOR", left);
+    cb.astore(m);
+    // s = -(b >>> 63), all ones where d is negative; r = (mag ^ s) - s.
+    cb.aload(b);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    cb.astore(neg);
+    cb.aload(m);
+    emitWith(cb, "XOR", neg);
+    cb.aload(neg);
+    cb.invokevirtual(LONG_VECTOR, "sub", Lane.LONG.lanewiseVV);
+    cb.astore(m);
+    // sat = (Long.MAX_VALUE ^ s) & notNaN, notNaN = ((bits(inf) - (b & MAX)) >>> 63) - 1.
+    cb.aload(b);
+    emitScalar(cb, "and", Long.MAX_VALUE);
+    emitNeg(cb);
+    emitScalar(cb, "add", INFINITY_BITS);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitScalar(cb, "sub", 1L);
+    cb.aload(neg);
+    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
+    cb.loadConstant(Long.MAX_VALUE);
+    cb.invokevirtual(LONG_VECTOR, "lanewise", LONG_LANEWISE_BINARY);
+    cb.invokevirtual(LONG_VECTOR, "and", Lane.LONG.lanewiseVV);
+    cb.astore(c);
+    // big = -((10 - e) >>> 63), all ones where e > 10; r ^ ((r ^ sat) & big).
+    cb.aload(e);
+    emitNeg(cb);
+    emitScalar(cb, "add", MAX_LEFT_SHIFT);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    cb.astore(e);
+    cb.aload(m);
+    emitWith(cb, "XOR", c);
+    emitWith(cb, "AND", e);
+    emitWith(cb, "XOR", m);
+  }
+
+  /**
+   * {@code [x] -> [(long) x]} for {@code |x| <= 2^51}, the reference arm: {@code r = (x + M) -
+   * M} is {@code rint(x)}, and {@code l = bits(r + M) - bits(M)} that integer as a long. The cast
+   * truncates where {@code r} rounds, so {@code l} moves one toward zero where {@code r} passed
+   * {@code x}: where {@code x - r} is not zero and its sign is not {@code x}'s, read from the
+   * bits, with no mask: {@code l - ((s | 1) & nz & differ)}, {@code s} all ones for a negative
+   * {@code x}.
+   */
+  private static void emitTruncatedMagic(CodeBuilder cb, int[] t) {
+    int x = t[0];
+    int r = t[1];
+    int l = t[2];
+    int d = t[3];
+    cb.astore(x);
+    cb.aload(x);
+    cb.loadConstant(MAGIC);
+    cb.invokevirtual(DOUBLE_VECTOR, "add", LANEWISE_VD);
+    cb.loadConstant(MAGIC);
+    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);
+    cb.astore(r);
+    // l = bits(r + M) - bits(M).
+    cb.aload(r);
+    cb.loadConstant(MAGIC);
+    cb.invokevirtual(DOUBLE_VECTOR, "add", LANEWISE_VD);
+    cb.invokevirtual(VECTOR, "reinterpretAsLongs", REINTERPRET_L);
+    emitScalar(cb, "sub", MAGIC_BITS);
+    cb.astore(l);
+    // d = bits(x - r).
+    cb.aload(x);
+    cb.aload(r);
+    cb.invokevirtual(DOUBLE_VECTOR, "sub", Lane.DOUBLE.lanewiseVV);
+    cb.invokevirtual(VECTOR, "reinterpretAsLongs", REINTERPRET_L);
+    cb.astore(d);
+    // The doubles are done with: x's bits take its slot, and r's the mask being built.
+    cb.aload(x);
+    cb.invokevirtual(VECTOR, "reinterpretAsLongs", REINTERPRET_L);
+    cb.astore(x);
+    // nz = -(((d & MAX) + MAX) >>> 63), all ones where x - r is not zero.
+    cb.aload(d);
+    emitScalar(cb, "and", Long.MAX_VALUE);
+    emitScalar(cb, "add", Long.MAX_VALUE);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    // differ = -((d ^ bits(x)) >>> 63), all ones where the two signs differ.
+    cb.aload(d);
+    emitWith(cb, "XOR", x);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    cb.invokevirtual(LONG_VECTOR, "and", Lane.LONG.lanewiseVV);
+    cb.astore(r);
+    // s | 1 is -1 where x is negative and 1 elsewhere: the step toward zero is l minus it.
+    cb.aload(l);
+    cb.aload(x);
+    emitShift(cb, "LSHR", Long.SIZE - 1);
+    emitNeg(cb);
+    emitScalar(cb, "or", 1L);
+    emitWith(cb, "AND", r);
+    cb.invokevirtual(LONG_VECTOR, "sub", Lane.LONG.lanewiseVV);
   }
 
   /** {@code [n] -> [bitsToDouble(n op bits) - magic]}, {@code op} {@code add} or {@code or}. */

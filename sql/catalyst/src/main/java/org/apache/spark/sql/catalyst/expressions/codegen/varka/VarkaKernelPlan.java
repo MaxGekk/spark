@@ -663,10 +663,10 @@ public final class VarkaKernelPlan {
    * unset session's, which may be such a host, {@code convertShape} would run as the Vector API's
    * Java loop and the entry declines. A floating source converted to the int lane, {@code F2I}
    * or {@code D2I}, is one {@code convertShape} at every level, intrinsic from AVX2 up; one
-   * converted to the long lane, {@code F2L} or {@code D2L}, has x86's AVX512DQ rule too, and is
-   * admitted at level 3 alone until its AVX2 form is built. A boolean whose condition compares
-   * longs is not a conversion from a long: the compiler narrows its one or zero to the int lane
-   * first.
+   * converted to the long lane, {@code F2L} or {@code D2L}, has x86's AVX512DQ rule too, takes
+   * its AVX2 form below level 3 and declines at the unknown level. A boolean whose condition
+   * compares longs is not a conversion from a long: the compiler narrows its one or zero to the
+   * int lane first.
    *
    * <p>The test reads the options' {@code UseAVX} level and not the CPU: the level is part of
    * the shape key, and a plan that read the host would key one shape two ways. The feature
@@ -689,11 +689,10 @@ public final class VarkaKernelPlan {
         continue;
       }
       if (node instanceof ConvertLane c) {
-        if (c.target() == LaneType.LONG
-            && (options.levelUnknown() || options.convertsFallBack())) {
+        if (c.target() == LaneType.LONG && options.levelUnknown()) {
           return Optional.of(new Refusal(Kind.CONVERSION, "a " + c.child().laneType()
-              + " conversion to BIGINT below emit level 3, which may be a host's without"
-              + " AVX512DQ: its AVX2 form is not built yet (row 343)"));
+              + " conversion to BIGINT at an unknown emit level, which may be a host's without"
+              + " AVX512DQ (row 343)"));
         }
         if (c.child().laneType() == LaneType.LONG && options.levelUnknown()) {
           return Optional.of(new Refusal(Kind.CONVERSION, "a BIGINT conversion to " + c.target()

@@ -896,3 +896,41 @@ to an integral one in the three modes, with `GuardedRange`'s floating bounds. Ro
    under a double drive, rather than declining it to a later part: the store is the same code.
 5. **The branch is `varka-343-conversions`**, the brief's name, and the stacked part
    `varka-343b2b-avx2`.
+
+### 343b2b as built (20 November 2026, branch `varka-343b2b-avx2`, stacked on 343b2a)
+
+`D2L` and `F2L` fuse at every named emit level: one `convertShape` at level 3, below it the AVX2
+forms of 2.3 in `VarkaConversionLowering`, so row 342's `dt * x` and `dt / x` have their
+conversion on the runners. The unknown level still declines them, as it declines `L2D`.
+
+- **The assembly** (`SPLIT` and `XOR_SPLIT`, the default): 2.3's construction with no mask, as
+  343b1's `L2F` has none. `e = ((b >>> 52) & 0x7FF) - 1075`, `m` with its implicit bit; the
+  left count `e & ~neg` and the right count `-e & neg`, `neg = -(e >>> 63)`, raised to 63 by an
+  OR where it passes 63 (the Vector API reads a count modulo 64, and `m < 2^53` gives 0 from 53
+  up); the two shifts blended by `neg`; the sign by `(r ^ s) - s`; and where `e > 10` the
+  saturated `Long.MAX_VALUE ^ s`, cleared for a NaN, whose test is `bits(inf) - (b & MAX) < 0`.
+  38 lane calls on the budget's scale, against 2.3's "about fifteen": the masks the plan's form
+  would blend by are integer arithmetic here, a prediction that was wrong by the cost of having
+  no mask.
+- **The truncated magic** (`MAGIC`): `r = (x + M) - M`, `l = bits(r + M) - bits(M)`, and the step
+  toward zero `(s | 1) & nz & differ`, from the bits of `x - r` (non-zero, sign unlike `x`'s), in
+  place of 2.3's `|r| > |x|` compare. Under a guard of `|x| <= 2^51` on the child at its own lane
+  (`VarkaVectorWalk.emitValueRangeGuard`, the floating mask of 343b2a), so NaN and the
+  infinities decline the batch there, which the reference arm may.
+- **`F2L`** is `F2D`, exact, then the same form; under `MAGIC` its guard reads the float.
+- **The twins** (3.2), scalar, at half the width: the assembly as `float` to `int` from the
+  exponent, and the truncated magic as `float` to `int` with `0x1.8p23` within `2^22`, each
+  against Java's cast over every 97th float on every build and over every float under
+  `-Dvarka.sweep=true`. A scratch run of both 64-bit forms over 20 million random doubles and
+  the cells, before they were emitted, found no difference (not committed). 343b1's two twins,
+  the split and round-to-odd, are still owed.
+- **Tests.** `VarkaEmitterFloatToIntegralSuite` gains the three arms at level 2 over both
+  sources in the three modes, the magic's declines past `2^51`, NaN and `-Infinity` in both
+  bodies, and the sweeps moved from 343b2a, with `FLOAT` to `BIGINT` at level 3 and under both
+  whole-range arms (3.1's "again under `useAVX=2`, once per arm"; the bounded arm cannot sweep,
+  since it declines). The baselines' `fusesToBigint` now holds at every named level.
+- **Owed:** the proof file a bounded lowering ships with (house rule, VARKA-242): the truncated
+  magic over `|x| <= 2^51` and the assembly stated in `VarkaProofFiles`, under both solvers,
+  which this window could not run; the C2 reading under `-XX:UseAVX=2` (`dev/varka_emit.sh
+  --asm`) to confirm both forms are `ymm` code with no call; and 2.3's measurement on the EPYC
+  runners, the assembly against the truncated magic by 4.4's rule.

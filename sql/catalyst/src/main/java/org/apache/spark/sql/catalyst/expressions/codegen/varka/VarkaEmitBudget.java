@@ -752,6 +752,9 @@ final class VarkaEmitBudget {
       case ConvertLane n when n.child().laneType() == VarkaVectorIR.LaneType.LONG ->
           n.target() == VarkaVectorIR.LaneType.FLOAT
               ? VarkaConversionLowering.ODD_CALLS : VarkaConversionLowering.SPLIT_CALLS;
+      // A floating lane converted to the long one, by the same rule: the assembly, the larger.
+      case ConvertLane n when VarkaConversionLowering.toLong(n) ->
+          VarkaConversionLowering.ASSEMBLY_CALLS;
       // One lanewise op each: the add or subtract, the min or max, the blend (its condition is a
       // node of its own), the narrowing conversion, the compare (an unsigned one too: it is the
       // lane's own compare operator, intrinsic at more than two long lanes, VARKA-376 9).

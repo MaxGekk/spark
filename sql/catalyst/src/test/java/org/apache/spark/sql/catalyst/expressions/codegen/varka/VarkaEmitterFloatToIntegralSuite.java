@@ -21,15 +21,26 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoublePredicate;
 import java.util.function.IntPredicate;
+import java.util.function.IntToLongFunction;
+import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.apache.spark.sql.catalyst.expressions.CastUtils;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.WideConversionForm;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConvertLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -378,7 +389,7 @@ public final class VarkaEmitterFloatToIntegralSuite {
   }
 
   @Test
-  @DisplayName("the plan admits F2I and D2I at every level, F2L and D2L at level 3 alone")
+  @DisplayName("the plan admits F2I and D2I at every level, F2L and D2L at every named one")
   void levels() {
     for (VarkaEmitOptions options : List.of(VarkaEmitOptions.DEFAULTS, VarkaMatrixRuns.BASE,
         VarkaMatrixRuns.BASE.withUseAVX(2), DQ)) {
@@ -387,8 +398,8 @@ public final class VarkaEmitterFloatToIntegralSuite {
             .isEmpty(), source + " at " + options.useAVX());
         var toLong = VarkaKernelPlan.of(List.of(convert(source, LaneType.LONG)), options)
             .refusal();
-        boolean level3 = options.useAVX() == VarkaEmitOptions.AVX512_LEVEL;
-        assertEquals(!level3, toLong.isPresent(), source + " at " + options.useAVX());
+        assertEquals(options.levelUnknown(), toLong.isPresent(), source + " at "
+            + options.useAVX());
         toLong.ifPresent(r -> assertEquals(VarkaKernelPlan.Kind.CONVERSION, r.kind()));
       }
     }
@@ -398,5 +409,275 @@ public final class VarkaEmitterFloatToIntegralSuite {
     assertTrue(VarkaKernelPlan.refusalOf(List.of(narrowed), VarkaMatrixRuns.BASE).isEmpty());
     var read = new IntArith(IntOp.ADD, Overflow.WRAP, narrowed, narrowed);
     assertTrue(VarkaKernelPlan.refusalOf(List.of(read), VarkaMatrixRuns.BASE).isPresent());
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The AVX2 forms of D2L and F2L
+  // ---------------------------------------------------------------------------------------------
+
+  /** Level 2, an AVX2 host's, under each arm of {@code wideConversionForm}. */
+  private static List<VarkaEmitOptions> avx2Arms() {
+    var avx2 = VarkaMatrixRuns.BASE.withUseAVX(2);
+    return List.of(avx2.withWideConversionForm(WideConversionForm.XOR_SPLIT),
+        avx2.withWideConversionForm(WideConversionForm.SPLIT),
+        avx2.withWideConversionForm(WideConversionForm.MAGIC));
+  }
+
+  @Test
+  @DisplayName("AVX2: the assembled D2L and F2L are Java's cast at every cell, the magic within "
+      + "2^51")
+  void avx2ToLong() {
+    for (VarkaEmitOptions options : avx2Arms()) {
+      boolean magic = options.wideConversionForm() == WideConversionForm.MAGIC;
+      String arm = " under " + options.wideConversionForm();
+      for (LaneType source : List.of(LaneType.FLOAT, LaneType.DOUBLE)) {
+        var column = new ColumnRef(0, source);
+        long[] cells = magic ? window(source) : cells(source);
+        check("cast(" + source + " AS bigint)" + arm, cast(column, LaneType.LONG, Overflow.WRAP),
+            cells, options, false);
+        check("try_cast(" + source + " AS bigint)" + arm,
+            cast(column, LaneType.LONG, Overflow.NULL), cells, options, false);
+        check("cast(" + source + " AS bigint) under ANSI" + arm,
+            cast(column, LaneType.LONG, Overflow.FAIL), inside(source, LaneType.LONG), options,
+            magic);
+      }
+    }
+  }
+
+  /** {@link #cells} within the magic's window, {@code |x| <= 2^51}, NaN left out. */
+  private static long[] window(LaneType source) {
+    return LongStream.of(cells(source)).filter(bits -> {
+      double v = source == LaneType.FLOAT ? Float.intBitsToFloat((int) bits)
+          : Double.longBitsToDouble(bits);
+      return Math.abs(v) <= 0x1p51;
+    }).toArray();
+  }
+
+  @Test
+  @DisplayName("AVX2 MAGIC: a live lane past 2^51, NaN or an infinity declines, a null one does "
+      + "not")
+  void magicDeclines() {
+    var options = avx2Arms().get(2).withLanesOverride(4);
+    int range = VarkaFusedKernel.STATUS_VALUE_RANGE;
+    var roots = List.<VarkaVectorIR>of(cast(X, LaneType.LONG, Overflow.WRAP));
+    var emitted = VarkaEmitterFixtures.emit(roots, 1, 0, options);
+    for (double bad : new double[] {Math.nextUp(0x1p51), -Math.nextUp(0x1p51), Double.NaN,
+        Double.NEGATIVE_INFINITY}) {
+      var values = new long[1][17];
+      for (int i = 0; i < 17; i++) {
+        values[0][i] = Double.doubleToRawLongBits(i == 9 ? bad : (i % 2 == 0 ? 0x1p51 : -1.5));
+      }
+      var nulls = new boolean[1][17];
+      var batch = new VarkaKernelChecks.LongBatch(17, nulls, values, false);
+      assertEquals(List.of(range, range), VarkaKernelChecks.runEachBodyMixedStatus("" + bad,
+          emitted.className(), emitted.bytes(), roots, 1, new int[0], new long[0], batch));
+      nulls[0][9] = true;
+      assertEquals(List.of(0, range), VarkaKernelChecks.runEachBodyMixedStatus(bad + ", null",
+          emitted.className(), emitted.bytes(), roots, 1, new int[0], new long[0], batch));
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The reduced-width twins of 3.2: each AVX2 form at 32 bits, scalar, over every float
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * The assembly's twin, {@code float} to {@code int} from the exponent with the same steps at
+   * half the width: {@code e = ((b >>> 23) & 0xFF) - 150}, {@code m} with its implicit bit, the
+   * shifts, the right count raised to 31, the sign and the saturation past {@code e = 7}.
+   */
+  static int assemblyTwin(float x) {
+    int b = Float.floatToRawIntBits(x);
+    int e = ((b >>> 23) & 0xFF) - 150;
+    int m = (b & 0x7FFFFF) | (1 << 23);
+    int neg = -(e >>> 31);
+    int left = m << ((e ^ (e & neg)) & 31);
+    int c = (-e) & neg;
+    c |= (-((31 - c) >>> 31)) & 31;
+    int mag = left ^ ((left ^ (m >>> c)) & neg);
+    int sign = -(b >>> 31);
+    int r = (mag ^ sign) - sign;
+    int big = -((7 - e) >>> 31);
+    int notNan = ((0x7F800000 - (b & Integer.MAX_VALUE)) >>> 31) - 1;
+    int sat = (Integer.MAX_VALUE ^ sign) & notNan;
+    return r ^ ((r ^ sat) & big);
+  }
+
+  /** The truncated magic's twin, {@code float} to {@code int} with {@code 0x1.8p23}. */
+  static int magicTwin(float x) {
+    float magic = 0x1.8p23f;
+    float r = (x + magic) - magic;
+    int l = Float.floatToRawIntBits(r + magic) - Float.floatToRawIntBits(magic);
+    int xb = Float.floatToRawIntBits(x);
+    int d = Float.floatToRawIntBits(x - r);
+    int nz = -(((d & Integer.MAX_VALUE) + Integer.MAX_VALUE) >>> 31);
+    int differ = -((d ^ xb) >>> 31);
+    int sign = -(xb >>> 31);
+    return l - ((sign | 1) & nz & differ);
+  }
+
+  /** Every {@code every}-th float pattern through both twins, against Java's cast. */
+  private static void twins(int every) {
+    String bad = IntStream.range(0, (int) ((1L << 32) / every)).parallel()
+        .map(k -> k * every + Integer.MIN_VALUE)
+        .filter(b -> {
+          float x = Float.intBitsToFloat(b);
+          boolean window = Math.abs(x) <= 0x1p22f;
+          return assemblyTwin(x) != (int) x || window && magicTwin(x) != (int) x;
+        })
+        .mapToObj(b -> String.format("%08x", b)).findFirst().orElse(null);
+    if (bad != null) {
+      fail("a twin differs from Java's cast over the float bits " + bad);
+    }
+  }
+
+  @Test
+  @DisplayName("the assembly's and the truncated magic's float-to-int twins over every 97th "
+      + "float are Java's cast")
+  void twinSlices() {
+    twins(97);
+  }
+
+  @Test
+  @DisplayName("the float-to-int twins over every float are Java's cast (opt-in: "
+      + "-Dvarka.sweep=true)")
+  void twinsWhole() {
+    assumeTrue("true".equals(System.getProperty("varka.sweep")),
+        "set -Dvarka.sweep=true to run the twins over every float");
+    twins(1);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The sweeps of 3.1: every FLOAT pattern
+  // ---------------------------------------------------------------------------------------------
+
+  private static final int CHUNK = 1 << 16;
+  /** The answer that marks a null row in a sweep's expectations. */
+  private static final long NULL = Long.MIN_VALUE + 1;
+
+  /**
+   * Every {@code every}-th chunk of the 2^32 float patterns through {@code root}, a kernel over
+   * one float column, each row held to {@code want} bit for bit, or to a null where it answers
+   * {@link #NULL}. A 64-bit result is read eight bytes a row, a 32-bit or narrow one widened.
+   */
+  private static void sweep(String ctx, VarkaVectorIR root, VarkaEmitOptions options, int every,
+      IntToLongFunction want) {
+    boolean wide = root.laneType() == LaneType.LONG;
+    int width = switch (root.laneType()) {
+      case BYTE -> 1;
+      case SHORT -> 2;
+      case INT -> 4;
+      case LONG -> 8;
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException("a floating root: " + root);
+    };
+    var emitted = VarkaEmitterFixtures.emit(List.of(root), 1, 0, options);
+    var loaders = new ConcurrentLinkedQueue<VarkaGeneratedClassLoader>();
+    ThreadLocal<VarkaFusedKernel> kernels = ThreadLocal.withInitial(() -> {
+      var loaded = VarkaEmitterFixtures.load(emitted);
+      loaders.add(loaded.loader());
+      return loaded.kernel();
+    });
+    var failure = new AtomicReference<String>();
+    try {
+      LongStream.range(0, (1L << 32) / CHUNK).filter(k -> k % every == 0).parallel().forEach(k -> {
+        if (failure.get() != null) {
+          return;
+        }
+        long first = k * CHUNK;
+        VarkaFusedKernel kernel = kernels.get();
+        try (Arena arena = Arena.ofConfined()) {
+          MemorySegment in = VarkaEmitterFixtures.alloc(arena, CHUNK * 4L);
+          for (int i = 0; i < CHUNK; i++) {
+            in.set(ValueLayout.JAVA_INT, i * 4L, (int) (first + i));
+          }
+          var out = wide ? VarkaEmitterFixtures.makeLongOutput(arena, CHUNK)
+              : VarkaEmitterFixtures.makeOutput(arena, CHUNK, -1L);
+          long[] src = {in.address()};
+          long[] dst = {out.data().address()};
+          long[] validity = {out.validity().address()};
+          long scratch = VarkaEmitterTestSupport.scratch(kernel, CHUNK);
+          int status = wide
+              ? kernel.run(src, new long[] {0L}, new int[] {0}, dst, validity, new int[0],
+                  new long[0], CHUNK, scratch)
+              : kernel.run(src, new long[] {0L}, new int[] {0}, dst, validity, new int[0], CHUNK,
+                  scratch);
+          if (status != 0) {
+            failure.compareAndSet(null, ctx + ": status " + status + " at " + first);
+          }
+          for (int i = 0; i < CHUNK && failure.get() == null; i++) {
+            int value = (int) (first + i);
+            boolean valid = (out.validity().get(ValueLayout.JAVA_BYTE, i >> 3) >> (i & 7) & 1) != 0;
+            long got = switch (width) {
+              case 1 -> out.data().get(ValueLayout.JAVA_BYTE, i);
+              case 2 -> out.data().get(ValueLayout.JAVA_SHORT_UNALIGNED, i * 2L);
+              case 4 -> out.data().get(ValueLayout.JAVA_INT, i * 4L);
+              default -> out.data().get(ValueLayout.JAVA_LONG, i * 8L);
+            };
+            long expected = want.applyAsLong(value);
+            boolean wrong = expected == NULL ? valid : !valid || got != expected;
+            if (wrong) {
+              failure.compareAndSet(null, String.format("%s: over %08x the kernel gave %x (valid"
+                  + " %b) and Java's cast %x", ctx, value, got, valid, expected));
+            }
+          }
+        }
+      });
+    } finally {
+      for (VarkaGeneratedClassLoader loader : loaders) {
+        loader.release();
+      }
+    }
+    if (failure.get() != null) {
+      fail(failure.get());
+    }
+  }
+
+  /**
+   * The LEGACY and TRY sweeps of a float source to the four integral types; {@code BIGINT} at
+   * level 3 and under each AVX2 arm that converts the whole range.
+   */
+  private static void sweeps(int every) {
+    var targets = List.of(LaneType.BYTE, LaneType.SHORT, LaneType.INT, LaneType.LONG,
+        LaneType.LONG, LaneType.LONG);
+    var levels = List.of(VarkaMatrixRuns.BASE, VarkaMatrixRuns.BASE, VarkaMatrixRuns.BASE, DQ,
+        avx2Arms().get(0), avx2Arms().get(1));
+    for (int t = 0; t < targets.size(); t++) {
+      LaneType target = targets.get(t);
+      var options = levels.get(t);
+      double[] b = VarkaTypes.castBounds(LaneType.FLOAT, target);
+      IntToLongFunction legacy = v -> {
+        float f = Float.intBitsToFloat(v);
+        return switch (target) {
+          case BYTE -> (byte) (int) f;
+          case SHORT -> (short) (int) f;
+          case INT -> (int) f;
+          default -> (long) f;
+        };
+      };
+      String at = " at " + options.useAVX() + " " + options.wideConversionForm();
+      sweep("cast(f AS " + target + ")" + at, cast(F, target, Overflow.WRAP), options, every,
+          legacy);
+      sweep("try_cast(f AS " + target + ")" + at, cast(F, target, Overflow.NULL), options, every,
+          v -> {
+            float f = Float.intBitsToFloat(v);
+            return f >= b[0] && f <= b[1] ? legacy.applyAsLong(v) : NULL;
+          });
+    }
+  }
+
+  @Test
+  @DisplayName("every 256th chunk of the FLOAT patterns to the four integral types, in LEGACY "
+      + "and TRY, is Java's cast or Spark's null")
+  void sweepSlices() {
+    sweeps(256);
+  }
+
+  @Test
+  @DisplayName("every FLOAT pattern to the four integral types, in LEGACY and TRY, is Java's cast "
+      + "or Spark's null (opt-in: -Dvarka.sweep=true)")
+  void sweepsWhole() {
+    assumeTrue("true".equals(System.getProperty("varka.sweep")),
+        "set -Dvarka.sweep=true to sweep the emitted kernels");
+    sweeps(1);
   }
 }

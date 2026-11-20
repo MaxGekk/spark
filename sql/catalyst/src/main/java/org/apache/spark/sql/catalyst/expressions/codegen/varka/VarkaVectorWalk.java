@@ -1682,7 +1682,8 @@ final class VarkaVectorWalk {
       Analysis analysis, long lo, long hi) {
     Lane lane = guardLane(node, analysis);
     if (lane.laneType.isFloating()) {
-      emitFloatingRangeMask(cb, (GuardedRange) node, guardTmp, lane);
+      GuardedRange g = (GuardedRange) node;
+      emitFloatingRangeMask(cb, guardTmp, lane, g.loValue(), g.hiValue());
       return;
     }
     cb.dup();
@@ -1699,22 +1700,32 @@ final class VarkaVectorWalk {
   }
 
   /**
+   * {@link #emitRangeGuard} over the floating value on the stack, of {@code node}'s guard lane,
+   * against the values {@code [lo, hi]}: the bounded {@code D2L}'s window, NaN outside it.
+   */
+  static void emitValueRangeGuard(CodeBuilder cb, VarkaVectorIR node, Integer word,
+      int guardTmp, boolean dense, Analysis analysis, Slots s, double lo, double hi) {
+    emitFloatingRangeMask(cb, guardTmp, guardLane(node, analysis), lo, hi);
+    emitGuardCollect(cb, node, word, dense, analysis, s);
+  }
+
+  /**
    * {@link #emitRangeMask} at a floating lane: the lanes not inside {@code [lo, hi]}, as the
    * complement of {@code v >= lo & v <= hi} under IEEE, so that a NaN, which compares false to
    * either bound, is outside, where {@code v < lo | v > hi} would let it through. The bounds are
-   * the lane's own values ({@link GuardedRange#floating}). The complement also sets the lanes past
+   * values of the lane ({@link GuardedRange#floating}). The complement also sets the lanes past
    * the group's rows that a 32-bit value has in a 64-bit kernel; every reader takes the group's
    * lanes alone - the collect crosses to the drive through the mask's word, and the word the
    * nulling arm narrows is read as a mask of the drive's lanes, its higher bits unread.
    */
-  private static void emitFloatingRangeMask(CodeBuilder cb, GuardedRange node, int guardTmp,
-      Lane lane) {
+  private static void emitFloatingRangeMask(CodeBuilder cb, int guardTmp, Lane lane, double lo,
+      double hi) {
     cb.dup();
     cb.astore(guardTmp);
     for (int k = 0; k < 2; k++) {
       cb.aload(guardTmp);
       cb.getstatic(VECTOR_OPERATORS, k == 0 ? "GE" : "LE", VO_COMPARISON);
-      double bound = k == 0 ? node.loValue() : node.hiValue();
+      double bound = k == 0 ? lo : hi;
       if (lane.laneType == VarkaVectorIR.LaneType.FLOAT) {
         cb.loadConstant((float) bound);
       } else {

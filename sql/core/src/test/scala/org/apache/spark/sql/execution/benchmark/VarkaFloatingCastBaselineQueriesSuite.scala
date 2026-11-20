@@ -206,8 +206,8 @@ class VarkaFloatingCastBaselineQueriesSuite extends QueryTest with VarkaSharedSe
           val emit = VarkaSessionEmit.of(varkaSpark.sessionState.conf)
           assert(VarkaFloatingCastBaselineBenchmark.fusesLongCasts(emit) === fuses,
             s"level $level")
-          // D2L fuses at level 3 alone until its AVX2 form is built.
-          val toBigint = level == 3
+          // D2L fuses at the named levels, by its AVX2 form at 2, as the BIGINT sources do.
+          val toBigint = level != -1
           assert(VarkaFloatingCastBaselineBenchmark.fusesToBigint(emit) === toBigint,
             s"level $level")
           forEachTwoLaneRefusal { declines =>

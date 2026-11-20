@@ -197,8 +197,8 @@ public class VarkaFloatingCastBaselineBenchmark extends VarkaSqlBenchmarkBase {
 
   /**
    * Whether a session with these emit settings fuses a {@code DOUBLE} cast to {@code BIGINT},
-   * {@code D2L}, which the kernel plan admits where the level assures AVX512DQ until its AVX2 form
-   * is built; asked of the plan as {@link #fusesLongCasts} asks it.
+   * {@code D2L}, which the kernel plan admits at every named level, by its AVX2 form below 3;
+   * asked of the plan as {@link #fusesLongCasts} asks it.
    */
   static boolean fusesToBigint(VarkaSessionEmit emit) {
     VarkaEmitOptions options = VarkaColumnarToRowExec$.MODULE$.emitOptions(emit);
