@@ -539,6 +539,12 @@ public final class VarkaGuardSpecs {
         yield c != null && outside(c.negate(), b);
       }
       case GuardedDay n -> outside(values.value(n.days()), b);
+      // A floating guard's bounds are IEEE values, which the child's bits do not order: compare
+      // the values, as the reference does (VARKA-343).
+      case GuardedRange n when n.laneType().isFloating() -> {
+        BigInteger v = values.value(n.child());
+        yield v != null && VarkaReference.outside(n, v.longValue());
+      }
       case GuardedRange n -> outside(values.value(n.child()), b);
       // No guard is placed on any other node; reaching one means the emitter placed a guard this
       // class does not know, which is the case to add.

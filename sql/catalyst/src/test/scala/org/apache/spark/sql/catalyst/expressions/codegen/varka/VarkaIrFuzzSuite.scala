@@ -2433,7 +2433,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       }
     }
     val wanted = Set("INT->FLOAT", "INT->DOUBLE", "LONG->FLOAT", "LONG->DOUBLE",
-      "FLOAT->DOUBLE", "DOUBLE->FLOAT")
+      "FLOAT->DOUBLE", "DOUBLE->FLOAT", "FLOAT->INT", "DOUBLE->INT", "FLOAT->LONG",
+      "DOUBLE->LONG")
     assert((wanted -- conversions).isEmpty, s"never drawn: ${(wanted -- conversions).toSeq}")
     assert(Set(LaneType.INT, LaneType.FLOAT, LaneType.LONG, LaneType.DOUBLE).subsetOf(drives),
       s"drives drawn: $drives")

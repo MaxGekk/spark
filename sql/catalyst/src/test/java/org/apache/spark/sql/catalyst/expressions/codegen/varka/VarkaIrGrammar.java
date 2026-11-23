@@ -2411,7 +2411,8 @@ public final class VarkaIrGrammar {
    * {@link ConvertLane} into it (into a floating lane from an integral lane or the other
    * floating one, into an integral lane from a floating one), a wrapping {@code +}, {@code -} or
    * {@code *}, a pick, or a conditional over a comparison at the same lane or at another one,
-   * crossed. No division and no checked mode, so no draw declines.
+   * crossed. No division and no checked mode; a conversion to an integral lane wraps, and one to
+   * the long lane is admitted at level 3 alone, below which its draw declines (VARKA-343).
    */
   static final class FloatingCastShapes {
     private final Random rnd;

@@ -1047,7 +1047,8 @@ public final class VarkaKernelPlan {
 
   /**
    * Whether a narrow-typed store of {@code stored} in this kernel's loop body may be whole: in a
-   * kernel at the long lane, where the kernel converts between lanes - whose loop bound leaves
+   * kernel at a 64-bit lane (the long one, or the double one since a double converts to a narrow
+   * type, VARKA-343), where the kernel converts between lanes - whose loop bound leaves
    * room for one int group of the long width past each lane group - and the store fills exactly
    * that group ({@link #wholeNarrowStoreFits}). The plan makes a kernel with such a narrowing at
    * its store one that converts between lanes, so this holds for every narrow store that can be
@@ -1056,7 +1057,7 @@ public final class VarkaKernelPlan {
    */
   boolean wholeNarrowStoreAtLong(Lane stored) {
     requireEmittable();
-    return lane == Lane.LONG && mixed && wholeNarrowStoreFits(stored, lanes);
+    return lane.bits == Long.SIZE && mixed && wholeNarrowStoreFits(stored, lanes);
   }
 
   /**
