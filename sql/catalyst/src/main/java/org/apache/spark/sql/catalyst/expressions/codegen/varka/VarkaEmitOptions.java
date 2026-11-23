@@ -515,8 +515,8 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * @param decimalStore how a {@code WidenDecimal} root interleaves its words into Arrow's
  *        sixteen-byte decimal slots (VARKA-157 2.2): see {@link DecimalStore}. No other root reads
  *        it, so every shape without a decimal output emits the same bytes under either value.
- * @param wideConversionForm the form of {@code L2D} where {@link #convertsFallBack()} holds:
- *        see {@link WideConversionForm}. No other shape reads it.
+ * @param wideConversionForm the form of {@code L2D}, and of {@code D2L} and {@code F2L}, where
+ *        {@link #convertsFallBack()} holds: see {@link WideConversionForm}.
  * @param roundToOddByShifts how {@code L2F}'s form where {@link #convertsFallBack()} holds takes
  *        its sign and picks its arm ({@code VarkaConversionLowering}, VARKA-583). False, the
  *        default, by a logical shift and a negation for the sign and a subtraction, a shift and

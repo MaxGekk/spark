@@ -359,7 +359,8 @@ final class Analysis {
      * {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries - a
      * value the row engine throws on, or a date column outside the column bound (VARKA-379). A
      * {@code NULL}-mode guard is not one: it nulls its lane and declines nothing. And the
-     * bounded {@code L2D}'s window, a {@code ConvertLane}'s, checked on its long child.
+     * bounded {@code L2D}'s window and the truncated magic's for {@code D2L} and {@code F2L}, a
+     * {@code ConvertLane}'s, checked on its child.
      */
     VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE),
     /**

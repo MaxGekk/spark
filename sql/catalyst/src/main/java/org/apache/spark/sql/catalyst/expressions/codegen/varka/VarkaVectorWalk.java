@@ -858,9 +858,9 @@ final class VarkaVectorWalk {
    * emitted at and emits nothing, and any other pair is a lowering this emitter has not built.
    * {@code L2F} and {@code L2D} come here at level 3 alone, where x86 has AVX512DQ, the level an
    * aarch64 host resolves to as well; below it they take {@link VarkaConversionLowering}'s
-   * forms. {@code F2L} and {@code D2L} have the same rule on x86, and the kernel plan admits
-   * them at level 3 alone; {@code F2I} and {@code D2I} are intrinsic from AVX2 up, NaN to 0 and
-   * saturating as Java's cast.
+   * forms. {@code F2L} and {@code D2L} have the same rule on x86: here at level 3, and below it
+   * the assembly or the truncated magic of {@link VarkaConversionLowering}; {@code F2I} and
+   * {@code D2I} are intrinsic from AVX2 up, NaN to 0 and saturating as Java's cast.
    * The one form of the conversion: a long kernel's narrowing store converts through it too
    * ({@code VarkaBodyEmitter.emitNarrowStore}), into the low half of the int species.
    */

@@ -34,7 +34,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoublePredicate;
 import java.util.function.IntPredicate;
 import java.util.function.IntToLongFunction;
-import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -82,7 +81,8 @@ public final class VarkaEmitterFloatToIntegralSuite {
   private static final double[] CELLS = {Double.NaN, Double.POSITIVE_INFINITY,
       Double.NEGATIVE_INFINITY, 0.0, -0.0, 0.7, -0.7, 1.5, -1.5, 0.5, 128.0, 300.7, -129.5,
       1e10, -1e10, 0x1p31, -0x1p31, 0x1p31 - 0.5, 0x1p63, -0x1p63, 3e18, 32767.9, -32768.9,
-      2147483520.0, 1e30, -1e30};
+      2147483520.0, 1e30, -1e30, 0x1p51, -0x1p51, 0x1p51 - 0.5, -(0x1p51 - 0.5), 0x1p62,
+      Math.nextDown(0x1p63), -Math.nextDown(0x1p63)};
 
   /** The cells, a source's bounds for every target and their outer neighbours, as bits. */
   private static long[] cells(LaneType source) {
@@ -518,8 +518,8 @@ public final class VarkaEmitterFloatToIntegralSuite {
 
   /** Every {@code every}-th float pattern through both twins, against Java's cast. */
   private static void twins(int every) {
-    String bad = IntStream.range(0, (int) ((1L << 32) / every)).parallel()
-        .map(k -> k * every + Integer.MIN_VALUE)
+    String bad = LongStream.range(0, (1L << 32) / every).parallel()
+        .mapToInt(k -> (int) (k * every + Integer.MIN_VALUE))
         .filter(b -> {
           float x = Float.intBitsToFloat(b);
           boolean window = Math.abs(x) <= 0x1p22f;
@@ -666,10 +666,11 @@ public final class VarkaEmitterFloatToIntegralSuite {
   }
 
   @Test
-  @DisplayName("every 256th chunk of the FLOAT patterns to the four integral types, in LEGACY "
+  @DisplayName("every 257th chunk of the FLOAT patterns to the four integral types, in LEGACY "
       + "and TRY, is Java's cast or Spark's null")
   void sweepSlices() {
-    sweeps(256);
+    // 257, coprime to the 256 chunks of an exponent, so the slice meets every exponent's low bit.
+    sweeps(257);
   }
 
   @Test
