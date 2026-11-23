@@ -446,8 +446,9 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
   test("ym * x and ym * f fuse and round to the months as the row engine does, a tie away "
       + "from zero") {
     // One projection of the five spellings, so the answers are one check through the path; the
-    // cells themselves are VarkaEmitterIntervalScaleSuite's.
-    val q = "SELECT ym * x AS a, ym * f AS b, x * ym AS c, ym * 0.5D AS d, ym * 2.5F AS e " +
+    // cells themselves are VarkaEmitterIntervalScaleSuite's. The literal factors are at most one
+    // in magnitude, since the fixture holds the int's ends, past which Spark raises.
+    val q = "SELECT ym * x AS a, ym * f AS b, x * ym AS c, ym * 0.5D AS d, ym * -0.5F AS e " +
       s"FROM $scaledIntervals"
     val actual = varkaSpark.sql(q)
     assertFused(actual.queryExecution.executedPlan)
