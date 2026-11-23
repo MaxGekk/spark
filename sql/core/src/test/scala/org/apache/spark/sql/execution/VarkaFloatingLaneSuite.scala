@@ -639,9 +639,14 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
   }
 
   // The divisors are literals: the fixtures' zero divisors raise under ANSI on both sides. The
-  // casts from a floating type are TRY's, since the fixtures' NaNs raise under ANSI.
-  private val declined = Seq("try_cast(f1 AS INT)", "x1 % 2.5D", "pmod(f1, 2.5F)",
-    "try_cast(x1 AS BIGINT)")
+  // cast from a floating type is TRY's, since the fixtures' NaNs raise under ANSI; to BIGINT it
+  // waits for emit level 3, which these sessions leave unknown (VARKA-343).
+  private val declined = Seq("x1 % 2.5D", "pmod(f1, 2.5F)", "try_cast(x1 AS BIGINT)")
+
+  test("SELECT try_cast(f1 AS INT) fuses and answers as the row engine does") {
+    // F2I fuses at every level, its NaN and its values past the int nulled (VARKA-343).
+    checkFused("SELECT try_cast(f1 AS INT) AS v FROM $t")
+  }
 
   declined.foreach { expr =>
     test(s"SELECT $expr declines and answers as the row engine does") {
