@@ -692,7 +692,8 @@ floating lane to an integral one and the floating guard, which 2.4 waits for.
 - **Tests.** `VarkaEmitterIntervalScaleSuite` (JUnit, own JVM) holds the builder's trees to
   Spark's own `eval` of the four expressions through the reference, over the cross product of
   edge counts and factors and 3.7's pinned cells at a count of one (the ties, `2^31 - 1.5`, each
-  guard's ends and their outer neighbours, `2^52 + 0.5`, row 103's long cells), and the kernels to
+  guard's ends and their outer neighbours, `2^52 - 0.5` (the largest double with a half
+  fraction), row 103's long cells), and the kernels to
   the reference at three widths, seven lengths, three null patterns and both bodies; every cell
   Spark raises on declines both bodies among answered cells, and declines neither the masked body
   nor the answer when null. The quotients and the day-time forms run there at the IR, the day-time

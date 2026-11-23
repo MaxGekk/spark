@@ -553,6 +553,10 @@ public final class VarkaIntervalCompiler {
     Optional<VarkaVectorIR> count = lane == LaneType.INT
         ? intervalOperand(interval, "the multiplied interval", inputs, literals, sink)
         : dayTimeOperand(interval, "the multiplied interval", inputs, literals, sink);
+    if (count.isPresent() && count.get().laneType() != lane) {
+      count = sink.decline("an interval count computed on the " + count.get().laneType()
+          + " lane, not the " + lane, whole);
+    }
     if (count.isEmpty()) {
       return rolledBack(count, literals, mark, sink, longMark);
     }

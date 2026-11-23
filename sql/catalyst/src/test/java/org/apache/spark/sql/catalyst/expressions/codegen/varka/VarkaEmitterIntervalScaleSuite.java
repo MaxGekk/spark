@@ -93,7 +93,7 @@ public final class VarkaEmitterIntervalScaleSuite {
    */
   private static final double[] PINNED = {0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 0x1p31 - 1.5,
       -0x1p31 + 1.5, 0x1p31 - 0.5, -0x1p31 - 0.5, Math.nextDown(0x1p31 - 0.5),
-      Math.nextUp(-0x1p31 - 0.5), 0x1p31 - 1.0, -0x1p31, 0x1p52 + 0.5, 0x1p52 + 1.0,
+      Math.nextUp(-0x1p31 - 0.5), 0x1p31 - 1.0, -0x1p31, 0x1p52 - 0.5, 0x1p52 + 1.0,
       -0x1p52 - 1.0, 0x1p53, Math.nextDown(0x1p63), -0x1p63, 0x1p63, Math.nextDown(-0x1p63),
       VarkaIntervalCompiler.HALF_UP_INT_LO, VarkaIntervalCompiler.HALF_UP_INT_HI,
       VarkaIntervalCompiler.HALF_UP_LONG_LO, VarkaIntervalCompiler.HALF_UP_LONG_HI};
@@ -228,7 +228,7 @@ public final class VarkaEmitterIntervalScaleSuite {
   /**
    * {@code form} at every width under {@code options}: over the cells Spark answers, no batch
    * declines and every row is the reference's; each cell Spark raises on, put among them, declines
-   * both bodies, and the same cell null declines neither the masked body nor the answer.
+   * both bodies, and the same cell null does not decline the masked body (its status is read).
    */
   private static void check(Form form, VarkaEmitOptions options) {
     List<Cell> all = cells(form);

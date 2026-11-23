@@ -3687,7 +3687,7 @@ final class VarkaProofFiles {
         """);
     out.append(rendered("ALL"));
     String p = "(declare-const p Float64)";
-    // The guards' bounds are the lowering's own, from the class that will build it.
+    // The guards' bounds are the lowering's own, from the class that builds it (scaledHalfUp).
     double longLo = VarkaIntervalCompiler.HALF_UP_LONG_LO;
     double longHi = VarkaIntervalCompiler.HALF_UP_LONG_HI;
     halfUpChecks(out, "ym", 32, VarkaIntervalCompiler.HALF_UP_INT_LO,
