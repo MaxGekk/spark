@@ -868,8 +868,8 @@ to an integral one in the three modes, with `GuardedRange`'s floating bounds. Ro
   the level rule. 3.1's sweeps of every `FLOAT` pattern to the four targets in LEGACY and TRY
   ran here (every 256th chunk) and move to 343b2b with the AVX2 forms, to keep this part under
   the cap. The fuzz grammar draws a conversion into an integral lane. Coverage rows, family "Floating
-  casts to integral types": seven, no `BIGINT` target (the defaults' unknown level declines
-  `D2L`). The baselines' fuse lists move: `CAST(w AS INT)` and `CAST(x AS INT)` fuse at every
+  casts to integral types": eight, each floating type to each narrow target, no `BIGINT` target
+  (the defaults' unknown level declines `D2L`). The baselines' fuse lists move: `CAST(w AS INT)` and `CAST(x AS INT)` fuse at every
   level, `try_cast(w AS BIGINT)` and `VarkaFloatingBaselineBenchmark`'s `DOUBLE` to `BIGINT`
   where the level is 3 (`fusesToBigint`).
 - **Run here** (laptop, 20 November 2026): `catalyst/Test/compile` and `sql/Test/compile`, and

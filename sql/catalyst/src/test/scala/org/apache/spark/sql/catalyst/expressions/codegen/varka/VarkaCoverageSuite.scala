@@ -1530,6 +1530,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("try_cast(f AS INT)", "null at the float values past 2147483520 and below -2^31"),
       Row("try_cast(x AS SMALLINT)", "the int conversion wrapped, under the short range's "
         + "guard"),
+      Row("try_cast(f AS SMALLINT)", "the short twin over a float, in a kernel of the int lane"),
       Row("try_cast(f AS TINYINT)", "the byte twin over a float, in a kernel of the int lane"),
       Row("CAST(x AS TINYINT)", "the int conversion stored as a byte from a double kernel",
         domain = Some("x BETWEEN -100.0D AND 100.0D")))),
