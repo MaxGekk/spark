@@ -1665,9 +1665,10 @@ final class Analysis {
     // emission holds the int and float lanes, the narrow ones only at the int drive; a long one
     // holds every other lane, and a double one every lane but the long one, since a tree holding
     // a long node drives at the long lane, and of the narrow nodes only a column, loaded as the
-    // long lane loads it. A float emission holds its own lane alone: a tree with an int node
-    // drives at the int lane. The plan declines every other narrow node under a floating drive
-    // (`VarkaKernelPlan.narrowRefusal`), so the two agree.
+    // long lane loads it, and an int value narrowed at a root, stored from the int species' low
+    // half (`VarkaKernelPlan.narrowsAnIntAtRoot`). A float emission holds its own lane alone: a
+    // tree with an int node drives at the int lane. The plan declines every other narrow node
+    // under a floating drive (`VarkaKernelPlan.narrowRefusal`), so the two agree.
     VarkaVectorIR.LaneType type = node.laneType();
     boolean fits = switch (lane) {
       case BYTE, SHORT, FLOAT -> type == lane.laneType;

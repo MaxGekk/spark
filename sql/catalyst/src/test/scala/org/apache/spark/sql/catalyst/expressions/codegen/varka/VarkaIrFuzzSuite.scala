@@ -602,11 +602,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   /**
-   * One draw of the floating conversions' corpus (VARKA-343): the conversions to a floating lane
-   * and between the two, over an int, a bigint, a float and a double column, compared with
-   * `VarkaReference.mixedValue` through `VarkaKernelChecks.runAndCompareMixed`. A draw whose kernel
-   * the plan refuses under the drawn options - a bigint conversion at the unknown emit level - is
-   * counted and skipped, as the compiler declines it. Below `useAVX=3` a bigint converts by its
+   * One draw of the floating conversions' corpus (VARKA-343): the conversions to a floating lane,
+   * between the two and from them into an integral lane, over an int, a bigint, a float and a
+   * double column, compared with `VarkaReference.mixedValue` through
+   * `VarkaKernelChecks.runAndCompareMixed`. A draw whose kernel the plan refuses under the drawn
+   * options - a bigint conversion at the unknown emit level - is counted and skipped, as the
+   * compiler declines it. Below `useAVX=3` a bigint converts by its
    * AVX2 form; under the bounded `wideConversionForm=MAGIC`, which only the option matrix's base
    * sets here, a batch with a bigint past `2^51` may decline, and the reference has no decline.
    */

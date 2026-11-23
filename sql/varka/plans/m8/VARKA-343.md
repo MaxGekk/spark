@@ -876,6 +876,10 @@ to an integral one in the three modes, with `GuardedRange`'s floating bounds. Ro
   one run of the new suite with the sweeps in it: 9 of 10 passed, the sweep slice included; `ansiAnswers` failed
   because the helper asserted that no batch declines over cells holding NaN. Its fix, cells
   inside the bounds and one check that lets an outside batch decline, has not been run.
+- **Rebuilt** (laptop, 23 November 2026) on master as branch `varka-343b2a-r2`: the suite passed
+  9 of 9 there, the fixed `ansiAnswers` included. The gate's census then found no coverage row
+  casting `FLOAT` to `SMALLINT`, a pair this part fuses, and the family gained
+  `try_cast(f AS SMALLINT)`.
 - **Predictions, to score when the owed runs come in:** no committed shape's bytes move
   (`emitted_bytes.json` gains the new rows' shapes only), as 4.1 says; the suite adds under
   30 s to the catalyst tests (one run took 22 s on the laptop, the sweep slice included).

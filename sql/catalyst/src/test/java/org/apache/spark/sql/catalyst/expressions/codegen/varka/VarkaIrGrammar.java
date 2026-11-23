@@ -2370,9 +2370,9 @@ public final class VarkaIrGrammar {
 
   /**
    * The seed of the floating conversions' corpus: trees over an int, a bigint, a float and a
-   * double column that convert to a floating lane and between the two, with the arithmetic, the
-   * picks and the conditional over each lane above them. A sequence of its own, so that drawing
-   * it moves no committed corpus.
+   * double column that convert to a floating lane, between the two and from them into an
+   * integral lane, with the arithmetic, the picks and the conditional over each lane above them.
+   * A sequence of its own, so that drawing it moves no committed corpus.
    */
   public static final long FLOATING_CAST_FUZZ_SEED = 20261102L;
 
