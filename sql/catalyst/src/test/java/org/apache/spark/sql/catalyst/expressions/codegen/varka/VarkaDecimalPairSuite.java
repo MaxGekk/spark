@@ -59,7 +59,7 @@ import org.apache.spark.sql.util.ArrowUtils;
 
 /**
  * The comparisons and null tests of decimals wider than 18 digits (`m8/VARKA-359.md` 3 item 2),
- * and the sums and differences under them (`m8/VARKA-360.md` 3 item 1),
+ * and the sums and differences under them and as outputs (`m8/VARKA-360.md` 3 item 1),
  * compiled from SQL by the real compiler, each value read as the two words of its unscaled value
  * ({@code DecimalWords.compare}), and run over Arrow decimal vectors at the word edges: a low
  * word with its sign bit set under a high word of 0 (where a signed low compare is wrong), equal
@@ -583,9 +583,10 @@ public final class VarkaDecimalPairSuite {
    * the forms below over every pair of the word edges and the null patterns, at 2, 4 and 8 long
    * lanes, each answer held to Spark's own expression under ANSI and under LEGACY, and
    * {@code try_add} and {@code try_subtract} for TRY. Each form reads the sum's words through a
-   * comparison, the pair's store being row 359's: against an operand, against zero, and
-   * {@code (a + b) - b = a}, which a wrong carry in either word fails. {@code DECIMAL(37, 2)}
-   * operands give a 38-digit result, so values of 35 to 37 digits are among the edges.
+   * comparison, against an operand, against zero, and {@code (a + b) - b = a}, which a wrong
+   * carry in either word fails; {@link #storedSumsAndDifferences} reads them as an output.
+   * {@code DECIMAL(37, 2)} operands give a 38-digit result, so values of 35 to 37 digits are
+   * among the edges.
    */
   @Test
   @DisplayName("a wide sum or difference at one scale answers as Spark's in every mode, on the "
@@ -666,6 +667,119 @@ public final class VarkaDecimalPairSuite {
     assertTrue(worked.contains("rows 360 and 363"), worked);
     String rescaled = decline("a - b < 0", new DecimalType(20, 2), new DecimalType(20, 4));
     assertTrue(rescaled.contains("360"), rescaled);
+  }
+
+  /**
+   * The sums and differences of {@link #wideSumsAndDifferences} as a projection's output: the
+   * sum's two words under the pair's store (VARKA-359's {@code InterleaveDecimal}), each slot held
+   * to Spark's own expression under ANSI and under LEGACY, and through {@code try_add} and
+   * {@code try_subtract}. No form here can overflow, its exact type being within 38 digits, so
+   * neither a null from an overflow nor ANSI's error has a row; the operands' bounds, which give
+   * the largest and the smallest result of each type, are among the edges. The forms are the
+   * sum alone, in both operand orders, and under each form the pair builds over a value: the
+   * negation, {@code abs}, a choice, a {@code coalesce} whose second sum is cast to the first's
+   * type, and a pick.
+   */
+  @Test
+  @DisplayName("a wide sum or difference as an output is stored as its two words and answers as "
+      + "Spark's in every mode, every null pattern and the word edges included")
+  void storedSumsAndDifferences() {
+    record Types(DecimalType ta, DecimalType tb) { }
+    var forms = List.of("a + b", "a - b", "b - a", "try_add(a, b)", "try_subtract(b, a)",
+        "-(a + b)", "abs(a - b)", "IF(a > b, a + b, a - b)", "coalesce(a - b, b + b)",
+        "greatest(a + b, a - b)");
+    for (Types t : List.of(new Types(new DecimalType(18, 2), new DecimalType(18, 2)),
+        new Types(new DecimalType(19, 2), new DecimalType(19, 2)),
+        new Types(new DecimalType(20, 2), new DecimalType(18, 2)),
+        new Types(new DecimalType(30, 10), new DecimalType(30, 10)),
+        new Types(new DecimalType(37, 2), new DecimalType(37, 2)),
+        new Types(new DecimalType(37, 0), new DecimalType(18, 0)))) {
+      for (boolean ansi : new boolean[] {true, false}) {
+        inMode(ansi, () -> {
+          for (String sql : forms) {
+            checkStored(sql, t.ta(), t.tb());
+          }
+          // A sum of a sum, where the second result is still within 38 digits.
+          if (t.ta().precision() <= 36) {
+            checkStored("(a + b) - b", t.ta(), t.tb());
+            checkStored("a - (b + a)", t.ta(), t.tb());
+          }
+        });
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("a wide sum is stored over a 64-bit operand or a constant rescaled within a long, "
+      + "and over a BIGINT under coercion's cast, which is stored alone too")
+  void storedSumsOverRescaledAndBigintOperands() {
+    var wide = new DecimalType(20, 2);
+    var narrow = new DecimalType(9, 0);
+    var whole = new DecimalType(18, 0);
+    for (boolean ansi : new boolean[] {true, false}) {
+      inMode(ansi, () -> {
+        for (String sql : List.of("a + b", "b - a", "a + 1", "a - 0.5", "0.5 - a",
+            "try_add(b, a)")) {
+          checkStored(sql, wide, narrow);
+          checkStored(sql, new DecimalType(37, 2), new DecimalType(16, 0));
+        }
+        // The null constant is two null words, so the sum is null on every row.
+        checkStored("a + CAST(NULL AS DECIMAL(20, 2))", wide, narrow);
+        // CAST(a AS BIGINT) reads every long of 18 digits; coercion casts it to DECIMAL(20, 0).
+        for (String sql : List.of("CAST(a AS BIGINT) + b", "b - CAST(a AS BIGINT)",
+            "CAST(CAST(a AS BIGINT) AS DECIMAL(20, 0))",
+            "CAST(CAST(a AS BIGINT) AS DECIMAL(20, 0)) - CAST(CAST(a AS BIGINT) AS "
+                + "DECIMAL(20, 0))")) {
+          checkStored(sql, whole, new DecimalType(20, 0));
+        }
+      });
+    }
+  }
+
+  @Test
+  @DisplayName("with the bitmap validity pass off, a stored sum's two words are valid on the "
+      + "same rows: the carry and a sign extension are null where their operand is")
+  void storedSumsWithoutTheBitmapPass() {
+    // The high word holds the carry, an unsigned compare made a value, and for a 64-bit operand
+    // its sign extension: both must be null exactly where the low word is, since the output's
+    // validity is the low word's (storedValuesWithoutTheBitmapPass).
+    for (boolean first : new boolean[] {false, true}) {
+      VarkaEmitOptions options = VarkaMatrixRuns.BASE.toBuilder().validityByBitmap(false)
+          .denseValidityOnce(false).validityOrFirst(first).build();
+      for (String sql : List.of("a + b", "a - b", "IF(a > b, a + b, a - b)",
+          "coalesce(a - b, b + b)")) {
+        checkStored(sql, new DecimalType(20, 2), new DecimalType(20, 2), options);
+        checkStored(sql, new DecimalType(18, 2), new DecimalType(18, 2), options);
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("a wide sum as an output declines where it declines under a comparison: capped at "
+      + "38 digits, where it could overflow, and over an operand rescaled past a long")
+  void cappedAndRescaledSumsDeclineAsOutputs() {
+    var t38 = new DecimalType(38, 2);
+    for (String sql : List.of("a + b", "a - b", "try_add(a, b)", "-(a + b)")) {
+      String reason = outputDecline(sql, t38, t38);
+      assertTrue(reason.contains("rows 360 and 363"), () -> sql + ": " + reason);
+    }
+    String rescaled = outputDecline("a - b", new DecimalType(20, 2), new DecimalType(20, 4));
+    assertTrue(rescaled.contains("360"), rescaled);
+    String past = outputDecline("a + b", new DecimalType(20, 2), new DecimalType(17, 0));
+    assertTrue(past.contains("WideMul, row 360"), past);
+    String bigint = outputDecline("CAST(a AS BIGINT) + b", new DecimalType(9, 0),
+        new DecimalType(20, 2));
+    assertTrue(bigint.contains("360"), bigint);
+  }
+
+  /** The decline reason of {@code sql} as a projection's one output, or "fused". */
+  private static String outputDecline(String sql, DecimalType ta, DecimalType tb) {
+    List<Attribute> columns =
+        List.of(VarkaSqlResolve.column("a", ta), VarkaSqlResolve.column("b", tb));
+    NamedExpression entry = VarkaSqlResolve.named(VarkaSqlResolve.parse(sql, seq(columns)), "c");
+    var declines = VarkaExpressionCompiler.declines(
+        CollectionConverters.asScala(List.of(entry)).toSeq(), seq(columns), VarkaMatrixRuns.BASE);
+    return declines.isEmpty() ? "fused" : declines.get(declines.firstKey()).reason();
   }
 
   /** The decline reason of the one conjunct {@code sql} over {@code a}, {@code b}, or "fused". */

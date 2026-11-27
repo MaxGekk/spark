@@ -207,5 +207,13 @@ public final class VarkaTwoLaneConditionSuite {
     assertEquals(Kind.TWO_LANE_CONDITION, refused.get().kind());
     assertEquals(VarkaKernelPlan.TWO_LANE_DECIMAL_PAIR_OUTPUT_REASON, refused.get().reason());
     assertTrue(admit(negated, false).isEmpty(), negated.toString());
+    // A sum of two BIGINTs under coercion's cast (VARKA-360) reads no decimal slot, and its
+    // store is the pair's all the same, so it is refused by its root.
+    var sum = new VarkaVectorIR.InterleaveDecimal(
+        new VarkaVectorIR.IntArith(VarkaVectorIR.IntOp.ADD, VarkaVectorIR.Overflow.WRAP, L, L2),
+        new VarkaVectorIR.IntArith(VarkaVectorIR.IntOp.ADD, VarkaVectorIR.Overflow.WRAP, L2, L));
+    assertEquals(VarkaKernelPlan.TWO_LANE_DECIMAL_PAIR_OUTPUT_REASON,
+        admit(sum, true).orElseThrow().reason());
+    assertTrue(admit(sum, false).isEmpty(), sum.toString());
   }
 }

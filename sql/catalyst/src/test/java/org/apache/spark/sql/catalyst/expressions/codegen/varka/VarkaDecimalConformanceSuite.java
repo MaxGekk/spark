@@ -18,7 +18,6 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.math.BigInteger;
-import java.util.Set;
 
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.DecimalType;
@@ -40,9 +39,13 @@ import org.apache.spark.sql.types.DecimalType;
  * <p>The census marks the comparisons fused in part for {@code dec}: at one scale they fuse,
  * across two they wait for rows 360 and 363. So load, null handling and ordering hold every
  * comparison, {@code <=>} and the null tests to the reference and to Spark. The forms the census
- * owes ({@code IN}, the choices, {@code greatest} and {@code least}, 359b's; the casts, 364's; the
- * arithmetic, 360 to 363's) must decline, and cancel their checks naming the rows. A comparison
- * that declines fails: at one scale the census's fused-in-part marker means it fuses.
+ * owes (the casts, 364's; the products, 361 to 363's) must decline, and cancel their checks
+ * naming the rows. A comparison that declines fails: at one scale the census's fused-in-part
+ * marker means it fuses. The values that fuse as outputs over the pair's two-word store - the
+ * choices, {@code greatest}, {@code least}, the negation and {@code abs} (VARKA-359), and the
+ * sums and differences, which at this suite's {@code DECIMAL(30, 4)} are within 38 digits
+ * (VARKA-360) - are not read by this harness: they cancel as unverified, and
+ * {@code VarkaDecimalPairSuite} holds them to Spark.
  *
  * <p>In its own JVM, as the long-lane suites are ({@link VarkaSpeciesGuard}).
  */
@@ -72,17 +75,5 @@ public final class VarkaDecimalConformanceSuite extends VarkaTypeConformance {
   @Override
   protected BigInteger[] decimalSlots() {
     return VALUES;
-  }
-
-  /**
-   * The operators the census marks fused in part for {@code dec} because the long fuses them and
-   * the pair does not: the sums and differences as values at this suite's
-   * {@code DECIMAL(30, 4)} (row 349's on the long; the pair's are row 360's). The choices,
-   * {@code greatest}, {@code least}, the negation and {@code abs} fuse as outputs over the pair's
-   * two-word store (VARKA-359).
-   */
-  @Override
-  protected Set<String> declinesInPart() {
-    return Set.of("+", "-", "try_add", "try_subtract");
   }
 }

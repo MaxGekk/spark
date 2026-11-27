@@ -205,19 +205,32 @@ public final class VarkaDecimalOutputSuite {
 
   @Test
   @DisplayName("an output whose type passes 18 digits is the lane pair's: where the pair has no "
-      + "form of its value yet, it declines naming that form's row, 359's rescale or 360's sum")
+      + "form of its value yet, it declines naming that form's row, 359's rescale or 360's sum, "
+      + "and a sum of two 64-bit values at one scale is stored from its two words")
   void wideOutputDeclines() {
     var wide = new DecimalType(18, 0);
     for (Shape s : List.of(new Shape("coalesce(a, b)", wide, D18),
-        new Shape("a + b", D18, D18), new Shape("if(a < b, a, b)", wide, D9S4))) {
+        new Shape("a + b", D18, D9S4), new Shape("if(a < b, a, b)", wide, D9S4))) {
       List<Attribute> columns = columns(s);
       Expression e = VarkaSqlResolve.parse(s.sql(), seq(columns));
       assertTrue(((DecimalType) e.dataType()).precision() > 18, () -> s + ": " + e.dataType());
       String reason = decline(e, columns);
-      // The pair builds no rescale up (row 359's comparison form widens only at one scale) and
-      // no sum past 18 digits (row 360), so each shape declines naming its value's row.
+      // The pair builds no rescale up past a long (row 359's comparison form widens only at one
+      // scale, and row 360's sum rescales an operand only within a long), so each shape declines
+      // naming its value's row.
       assertTrue(reason.matches("(?s).*\\b(359|360)\\b.*"), () -> s + ": " + reason);
     }
+    // DECIMAL(18, 2) + DECIMAL(18, 2) is DECIMAL(19, 2), the pair's sum (VARKA-360), whose
+    // answers VarkaDecimalPairSuite.storedSumsAndDifferences holds to Spark.
+    var sum = new Shape("a + b", D18, D18);
+    List<Attribute> columns = columns(sum);
+    Expression e = VarkaSqlResolve.parse(sum.sql(), seq(columns));
+    assertEquals(new DecimalType(19, 2), e.dataType());
+    CompiledVarkaProjection compiled = VarkaExpressionCompiler.compile(out(e), seq(columns),
+        VarkaMatrixRuns.BASE).orElseThrow(() -> new AssertionError(sum + " does not fuse: "
+            + decline(e, columns)));
+    assertInstanceOf(VarkaVectorIR.InterleaveDecimal.class, compiled.outputs().get(0),
+        () -> compiled.toString());
   }
 
   private static List<Attribute> columns(Shape s) {

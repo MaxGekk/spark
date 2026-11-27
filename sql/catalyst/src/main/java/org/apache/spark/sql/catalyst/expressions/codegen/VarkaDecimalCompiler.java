@@ -271,9 +271,9 @@ final class VarkaDecimalCompiler {
     return switch (e) {
       case RuntimeReplaceable r when r.replacement().dataType() instanceof DecimalType ->
           wideReason(r.replacement(), type);
-      // A sum widePair builds declines only as a value, which waits for its two-word store.
+      // A sum widePair builds is two words, so only a consumer that reads one long declines it.
       case Expression a when uncappedSum(a) -> "a decimal sum or difference past " + MAX_PRECISION
-          + " digits as a value is row 359's two-word store";
+          + " digits is two words, which a consumer of one long does not read (row 359's)";
       case Add a when a.left().dataType() instanceof DecimalType t1
           && a.right().dataType() instanceof DecimalType t2 -> sumReason("sum", t1, t2);
       case Subtract a when a.left().dataType() instanceof DecimalType t1

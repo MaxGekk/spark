@@ -81,8 +81,8 @@ class VarkaCoverageCompositionFuzzSuite
   // engine by `VarkaCoverageDifferentialSuite` and to the reference by `VarkaEmitterBoolSuite`.
   private def readsOtherColumns(executable: String): Boolean =
     VarkaCoverageRows.compositionFilters.exists(_.reads(executable))
-  private def projections =
-    table.projections.filterNot(r => readsOtherColumns(r.executable) || unbakedAlone(r.executable))
+  private def projections = table.projections.filterNot(r => readsOtherColumns(r.executable) ||
+    unbakedAlone(r.executable) || pairStored(r.executable))
   private def predicates =
     table.predicates.filterNot(r => readsOtherColumns(r.executable) || unbakedAlone(r.executable))
 
@@ -99,6 +99,19 @@ class VarkaCoverageCompositionFuzzSuite
           VarkaMatrix.base).asScala.values
           .exists(d => VarkaMatrixRuns.isUnbakedWidthDecline(VarkaMatrix.base, d.reason))
       }.toSet
+
+  // The rows whose output is the lane pair's store (`InterleaveDecimal`, VARKA-359). The DECIMAL
+  // filter leaves out every pair over a decimal column, so only one built from BIGINT casts gets
+  // here, `CAST(l AS DECIMAL(20, 0)) + CAST(l2 AS DECIMAL(20, 0))` (VARKA-360). The reference
+  // evaluator has no one long for a pair's two words, so such a row is no entry of the
+  // property's: `VarkaDecimalPairSuite` holds its store to Spark, and row 359 owes the two-word
+  // harness (`VarkaTypeConformance`).
+  private lazy val pairStored: Set[String] =
+    table.projections.map(_.executable).filterNot(readsOtherColumns).filter { sql =>
+      VarkaExpressionCompiler.compile(Seq(Alias(resolve(sql), "c")()), columns,
+        VarkaMatrix.base).toScala.exists(_.outputs.asScala.exists(
+          _.isInstanceOf[VarkaVectorIR.InterleaveDecimal]))
+    }.toSet
 
   /**
    * The rows `filters` leave out by a filter that names no row owing them, counted by the
@@ -1434,11 +1447,13 @@ class VarkaCoverageCompositionFuzzSuite
     val filtered = rows.size - leftOut.getOrElse(None, Nil).size
     val drawn = projections.size + predicates.size
     val alone = rows.count(r => !readsOtherColumns(r.executable) && unbakedAlone(r.executable))
+    val stored = rows.count(r => !r.predicate && pairStored(r.executable))
     // The pools the tests draw from against the oracle: every row of no filtered type, less
-    // those this configuration declines alone.
-    assert(drawn + alone == untyped, s"$drawn drawn + $alone alone, $untyped of no filtered type")
+    // those this configuration declines alone and those that store a pair.
+    assert(drawn + alone + stored == untyped,
+      s"$drawn drawn + $alone alone + $stored a pair's store, $untyped of no filtered type")
     info(s"coverage accounting: ${rows.size} rows, $drawn drawn, $filtered left out by a filter, " +
-      s"$alone declined alone by this configuration")
+      s"$alone declined alone by this configuration, $stored a pair's store, owed by VARKA-359")
     for (f <- filters) {
       val n = leftOut.getOrElse(Some(f.name), Nil).size
       info(s"coverage accounting: left out, ${f.name}: $n rows, owed by " +

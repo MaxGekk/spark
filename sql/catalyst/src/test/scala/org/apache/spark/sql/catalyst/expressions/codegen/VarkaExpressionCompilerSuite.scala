@@ -1063,10 +1063,16 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
 
   test("a decimal output above precision 18 is the lane pair's, and a form it lacks declines " +
       "naming its row at plan time") {
-    // A wide output is the value's two words (VarkaDecimalCompiler.output, VARKA-359); a wide
-    // sum is row 360's, so the projection never reaches the allocator's assertion.
+    // A wide output is the value's two words (VarkaDecimalCompiler.output, VARKA-359), a sum
+    // within 38 digits among them (VARKA-360); a sum Spark caps at 38 digits is rows 360 and
+    // 363's, so the projection never reaches the allocator's assertion.
     val wide = AttributeReference("wide", DecimalType(19, 2))()
-    val reason = declineReason(Add(wide, wide), childOutput :+ wide)
+    val stored = VarkaExpressionCompiler.compile(
+      Seq(out(Add(wide, wide))), childOutput :+ wide).toScala
+    assert(stored.exists(_.outputs.asScala.forall(
+      _.isInstanceOf[VarkaVectorIR.InterleaveDecimal])), stored)
+    val capped = AttributeReference("capped", DecimalType(38, 2))()
+    val reason = declineReason(Add(capped, capped), childOutput :+ capped)
     assert(reason.contains("360"), reason)
   }
 
