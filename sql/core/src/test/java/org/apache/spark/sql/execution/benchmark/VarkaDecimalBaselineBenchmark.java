@@ -155,10 +155,12 @@ import org.apache.spark.sql.internal.SQLConf;
  * fuses whole the comparison at precision 38 and, at 38 and 20, {@code x <=> y},
  * {@code x IS NULL} and the projected {@code x < y}, its value half's conditions
  * {@code x IN (c1, c2, c3)}, {@code -x < y} and {@code abs(x) < y}, and the choice at precision
- * 38 as an output, through the pair's store; the two filters of
- * rows 360 and 361, whose sum and product no lowering computes yet, are {@code NONE}: of each,
- * only the null tests Spark infers would fuse, and a filter fusing nothing else stays whole on
- * the row path (VARKA-598). A session that
+ * 38 as an output, through the pair's store. Row 360's sum at one scale fuses whole, its words
+ * added with the carry (VARKA-360): the filter {@code x20 + y20 < z20} and, through the pair's
+ * store, the value {@code x20 + y20}; its four other sums, rescaled past a long or capped at 38
+ * digits, are {@code NONE}. Row 361's filter, whose product no lowering computes yet, is
+ * {@code NONE}: only the null tests Spark infers would fuse, and a filter fusing nothing else
+ * stays whole on the row path (VARKA-598). A session that
  * refuses a filter's condition in a kernel driven at 64 bits ({@code declinesLongConditions},
  * VARKA-503), the 128-bit companion's host by default, leaves every fused filter to the
  * row path, the lane pair's among them, since its words are on the long lane, and the projected
@@ -701,7 +703,7 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
       }
     }
     for (Density d : Density.values()) {
-      addWidening(out, d);
+      addWidening(out, d, fusedFilter);
     }
     for (Density d : Density.values()) {
       addCasts(out, d, fusedFilter);
@@ -784,11 +786,16 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
 
   /**
    * Adds the widening arithmetic's sections at density {@code d}: row 360's five sums and its
-   * filter, then row 361's four products and its filter. No lowering computes a sum or a product
-   * past a long yet, so every section is {@code NONE}: of the filters only the null tests Spark
-   * infers would fuse, and such a filter stays whole on the row path (VARKA-598).
+   * filter, then row 361's four products and its filter. Row 360's sum of two columns of one
+   * scale, within 38 digits, fuses whole as the filter and as the value, {@code fused}, the value
+   * through the pair's store, which a session at two long lanes declines as it declines the
+   * condition. Its other sums are {@code NONE}: {@code x - w} and the two {@code BIGINT} sums
+   * rescale an operand past a long and the {@code DECIMAL(38, 2)} sum is capped at 38 digits.
+   * Row 361's sections are {@code NONE}, a product past a long being no lowering's yet: of its
+   * filter only the null tests Spark infers would fuse, and such a filter stays whole on the row
+   * path (VARKA-598).
    */
-  private static void addWidening(List<Section> out, Density d) {
+  private static void addWidening(List<Section> out, Density d, Fusion fused) {
     String x9 = d.column("x9");
     String x18 = d.column("x18");
     String x20 = d.column("x20");
@@ -807,7 +814,7 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
     String d20 = "DECIMAL(20, 2) ";
     String d15 = "DECIMAL(15, 2) ";
     out.add(new Section(d20 + "x + y as a value" + tail,
-        "SELECT " + x20 + " + " + y20 + value, Fusion.NONE));
+        "SELECT " + x20 + " + " + y20 + value, fused));
     out.add(new Section(d20 + "x - w as a value, w a DECIMAL(20, 4)" + tail,
         "SELECT " + x20 + " - " + y20s4 + value, Fusion.NONE));
     out.add(new Section("DECIMAL(38, 2) x + y as a value" + tail,
@@ -817,7 +824,7 @@ public class VarkaDecimalBaselineBenchmark extends VarkaSqlBenchmarkBase {
     out.add(new Section("BIGINT l + x as a value, x a DECIMAL(18, 4)" + tail,
         "SELECT " + l + " + " + x18 + value, Fusion.NONE));
     out.add(new Section(d20 + "x + y < z filter" + tail,
-        "SELECT " + x20 + filter + x20 + " + " + y20 + " < " + z20, Fusion.NONE));
+        "SELECT " + x20 + filter + x20 + " + " + y20 + " < " + z20, fused));
     out.add(new Section(d15 + "x * y as a value" + tail,
         "SELECT " + x15 + " * " + y15 + value, Fusion.NONE));
     out.add(new Section(d15 + "x * (1 - y) as a value" + tail,

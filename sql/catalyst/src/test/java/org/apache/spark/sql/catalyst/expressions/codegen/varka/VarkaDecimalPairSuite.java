@@ -32,6 +32,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
+import scala.runtime.BoxedUnit;
+
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.DecimalVector;
 import org.junit.jupiter.api.DisplayName;
@@ -50,12 +52,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
+import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.sql.types.DecimalType;
 import org.apache.spark.sql.util.ArrowUtils;
 
 /**
  * The comparisons and null tests of decimals wider than 18 digits (`m8/VARKA-359.md` 3 item 2),
+ * and the sums and differences under them (`m8/VARKA-360.md` 3 item 1),
  * compiled from SQL by the real compiler, each value read as the two words of its unscaled value
  * ({@code DecimalWords.compare}), and run over Arrow decimal vectors at the word edges: a low
  * word with its sign bit set under a high word of 0 (where a signed low compare is wrong), equal
@@ -562,6 +566,106 @@ public final class VarkaDecimalPairSuite {
       String reason = decline("a < b", c.ta(), c.tb());
       assertTrue(reason.contains(c.row()), () -> c + ": " + reason);
     }
+  }
+
+  /** Runs {@code body} with {@code spark.sql.ansi.enabled} set to {@code ansi}. */
+  private static void inMode(boolean ansi, Runnable body) {
+    SQLConf conf = SQLConf.get().clone();
+    conf.setConfString(SQLConf.ANSI_ENABLED().key(), Boolean.toString(ansi));
+    SQLConf.withExistingConf(conf, () -> {
+      body.run();
+      return BoxedUnit.UNIT;
+    });
+  }
+
+  /**
+   * The sums and differences past 18 digits whose exact type is within 38 (VARKA-360's class U):
+   * the forms below over every pair of the word edges and the null patterns, at 2, 4 and 8 long
+   * lanes, each answer held to Spark's own expression under ANSI and under LEGACY, and
+   * {@code try_add} and {@code try_subtract} for TRY. Each form reads the sum's words through a
+   * comparison, the pair's store being row 359's: against an operand, against zero, and
+   * {@code (a + b) - b = a}, which a wrong carry in either word fails. {@code DECIMAL(37, 2)}
+   * operands give a 38-digit result, so values of 35 to 37 digits are among the edges.
+   */
+  @Test
+  @DisplayName("a wide sum or difference at one scale answers as Spark's in every mode, on the "
+      + "word edges, from DECIMAL(19, 2) to DECIMAL(38, 2)")
+  void wideSumsAndDifferences() {
+    record Types(DecimalType ta, DecimalType tb) { }
+    var forms = List.of("a + b < b", "a - b > a", "a + b > 0", "a - b <= 0", "a + b = b",
+        "try_add(a, b) < a", "try_subtract(a, b) >= b", "(a + b) IS NULL", "(a - b) IS NOT NULL",
+        // The sum under the pair's negation, choice and coalesce (VARKA-359's forms).
+        "-(a + b) > 0", "IF(a > b, a + b, a) > 0", "coalesce(a + b, b) > 0");
+    for (Types t : List.of(new Types(new DecimalType(18, 2), new DecimalType(18, 2)),
+        new Types(new DecimalType(19, 2), new DecimalType(19, 2)),
+        new Types(new DecimalType(20, 2), new DecimalType(18, 2)),
+        new Types(new DecimalType(30, 10), new DecimalType(30, 10)),
+        new Types(new DecimalType(37, 2), new DecimalType(37, 2)),
+        new Types(new DecimalType(37, 0), new DecimalType(18, 0)))) {
+      for (boolean ansi : new boolean[] {true, false}) {
+        inMode(ansi, () -> {
+          for (String sql : forms) {
+            check(sql, t.ta(), t.tb());
+          }
+          if (t.ta().precision() <= 36) {
+            check("(a + b) - b = a", t.ta(), t.tb());
+          }
+        });
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("a 64-bit operand or a constant of a smaller scale is rescaled within a long, then "
+      + "sign-extended into the sum; one whose rescale leaves the long declines naming row 360")
+  void narrowOperandsRescaled() {
+    record Types(DecimalType ta, DecimalType tb) { }
+    for (Types t : List.of(new Types(new DecimalType(20, 2), new DecimalType(9, 0)),
+        new Types(new DecimalType(37, 2), new DecimalType(16, 0)))) {
+      for (boolean ansi : new boolean[] {true, false}) {
+        inMode(ansi, () -> {
+          for (String sql : List.of("a + b > a", "b - a < 0", "a + 1 > a", "a - 0.5 < a",
+              "try_add(b, a) <= a")) {
+            check(sql, t.ta(), t.tb());
+          }
+        });
+      }
+    }
+    String past = decline("a + b > a", new DecimalType(20, 2), new DecimalType(17, 0));
+    assertTrue(past.contains("WideMul, row 360"), past);
+    String bigint = decline("CAST(a AS BIGINT) + b > b", new DecimalType(9, 0),
+        new DecimalType(20, 2));
+    assertTrue(bigint.contains("360"), bigint);
+  }
+
+  @Test
+  @DisplayName("a wide sum compiles to one kernel in LEGACY, ANSI and TRY")
+  void oneKernelInEveryMode() {
+    var t = new DecimalType(20, 2);
+    List<Attribute> columns =
+        List.of(VarkaSqlResolve.column("a", t), VarkaSqlResolve.column("b", t));
+    var kernels = new ArrayList<Object>();
+    for (boolean ansi : new boolean[] {true, false}) {
+      inMode(ansi, () -> kernels.add(compile("a + b < b", columns).fused().outputs()));
+    }
+    kernels.add(compile("try_add(a, b) < b", columns).fused().outputs());
+    assertEquals(1, new LinkedHashSet<>(kernels).size(), () -> kernels.toString());
+  }
+
+  @Test
+  @DisplayName("a wide sum Spark caps at 38 digits, or over two scales, declines naming its rows")
+  void cappedAndRescaledSumsDecline() {
+    var t38 = new DecimalType(38, 2);
+    for (String sql : List.of("a + b < b", "try_subtract(a, b) > b", "(a + b) IS NULL")) {
+      String reason = decline(sql, t38, t38);
+      assertTrue(reason.contains("rows 360 and 363"), () -> sql + ": " + reason);
+    }
+    // The worked case: DECIMAL(39, 10) exact, capped with the scale kept or cut by the setting.
+    var t3810 = new DecimalType(38, 10);
+    String worked = decline("a + b > a", t3810, t3810);
+    assertTrue(worked.contains("rows 360 and 363"), worked);
+    String rescaled = decline("a - b < 0", new DecimalType(20, 2), new DecimalType(20, 4));
+    assertTrue(rescaled.contains("360"), rescaled);
   }
 
   /** The decline reason of the one conjunct {@code sql} over {@code a}, {@code b}, or "fused". */

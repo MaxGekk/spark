@@ -118,7 +118,8 @@ public final class VarkaDecimalArithmeticSuite {
 
   @Test
   @DisplayName("every pair of operand types within 18 digits fuses exactly where Spark's result "
-      + "type is within 18 digits, and otherwise declines naming the wider row")
+      + "type is within 18 digits, or for a sum within 38 whose operands rescale within a long, "
+      + "and otherwise declines naming the wider row")
   void typeRuleSweep() {
     var types = new ArrayList<DecimalType>();
     for (int p = 1; p <= MAX; p++) {
@@ -148,13 +149,19 @@ public final class VarkaDecimalArithmeticSuite {
           String reason = specs.size() == 1
               ? specs.get(0).decline().map(d -> d.reason()).orElse("") : "specs " + specs;
           boolean fuses = reason.isEmpty();
-          if (spark.precision() <= MAX) {
+          // A sum past 18 digits is the lane pair's (VARKA-360) where each operand's rescale to
+          // the result's scale stays within a long; decimal128.smt2 holds its reduction.
+          int scale = Math.max(t1.scale(), t2.scale());
+          boolean pairSum = op != Op.MUL && raw <= DecimalType.MAX_PRECISION()
+              && t1.precision() + scale - t1.scale() <= MAX
+              && t2.precision() + scale - t2.scale() <= MAX;
+          if (spark.precision() <= MAX || pairSum) {
             fused++;
             if (!fuses) {
               wrong.add(t1 + " " + op.sql + " " + t2 + " is " + spark + " and declines: "
                   + reason);
             }
-            if (fuses) {
+            if (fuses && spark.precision() <= MAX) {
               String reduction = reduction(compile(new EqualTo(e, e), List.of(a, b)).fused(),
                   spark.precision());
               if (!reduction.isEmpty()) {
@@ -259,15 +266,21 @@ public final class VarkaDecimalArithmeticSuite {
   }
 
   @Test
-  @DisplayName("an operand past 18 digits declines naming rows 359 and 360 under + and -, and "
-      + "rows 362 and 363 under *")
+  @DisplayName("an operand past 18 digits fuses under + and - at one scale and declines naming "
+      + "row 360 where it must be rescaled, and names rows 362 and 363 under *")
   void wideOperandsDecline() {
     var narrow = new DecimalType(9, 2);
+    var finer = new DecimalType(9, 4);
     var wide = new DecimalType(20, 2);
     for (Op op : Op.values()) {
-      String reason = declineOf(op, wide, narrow);
-      String want = op == Op.MUL ? "rows 362 and 363" : "rows 359 and 360";
-      assertTrue(reason.contains(want), () -> op.sql + " over " + wide + ": " + reason);
+      if (op == Op.MUL) {
+        String reason = declineOf(op, wide, narrow);
+        assertTrue(reason.contains("rows 362 and 363"), () -> "* over " + wide + ": " + reason);
+      } else {
+        assertEquals("fused", declineOf(op, wide, narrow), op.sql);
+        String reason = declineOf(op, wide, finer);
+        assertTrue(reason.contains("row 360"), () -> op.sql + " over " + wide + ": " + reason);
+      }
     }
   }
 
@@ -292,15 +305,15 @@ public final class VarkaDecimalArithmeticSuite {
     for (String[] pair : new String[][] {
         // Each literal is of the node's scale, so that no rescale of it names rows 359 and 360.
         {"CAST(a * b AS DECIMAL(20, 4)) > 0.0000", "row 361"},
-        {"-(x + y) > 0.00", "row 360"},
-        {"CAST(x + y AS DECIMAL(19, 1)) > 0.0", "rows 350, 360 and 363"},
+        // x + y is the lane pair's (VARKA-360), so over it only the wide form is owed: the
+        // lowering cast is rows 350's and 363's; its negation and choices fuse
+        // (VarkaDecimalPairSuite.wideSumsAndDifferences).
+        {"CAST(x + y AS DECIMAL(19, 1)) > 0.0", "rows 350, 359 and 363"},
         {"CAST(d AS DECIMAL(19, 1)) > 0.0", "rows 350, 359 and 363"},
         // x is rescaled up into DECIMAL(20, 4), and that reason wins over the product's 361.
         {"IF(a > b, a * b, x) > 0.0000", "rows 359 and 360"},
-        {"IF(a > b, x + y, x) > 0.00", "rows 359 and 360"},
-        {"COALESCE(d, x + y) > 0.00", "rows 359 and 360"},
-        {"IF(a > b, x + y, c * e) > 0.00", "rows 360 and 361"},
-        {"IF(a > b, c * e, x + y) > 0.00", "rows 360 and 361"}}) {
+        {"IF(a > b, x + y, c * e) > 0.00", "361"},
+        {"IF(a > b, c * e, x + y) > 0.00", "361"}}) {
       String reason = predicateDecline(pair[0], columns);
       assertTrue(reason.contains(pair[1]), () -> pair[0] + ": " + reason);
     }

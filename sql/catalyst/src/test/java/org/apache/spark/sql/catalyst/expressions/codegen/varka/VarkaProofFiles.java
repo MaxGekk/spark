@@ -4476,7 +4476,77 @@ final class VarkaProofFiles {
       }
     }
     decimal128Carry(out, two64);
+    decimal128Sum(out, two64);
     return out.toString();
+  }
+
+  /**
+   * {@code decimal128.smt2}'s sum layer (VARKA-360): the uncapped sum and difference over the words
+   * as the kernel computes them, Java's wrapping longs, the carry the unsigned compare
+   * {@code ULT(s.lo, x.lo)} and the borrow {@code ULT(x.lo, y.lo)} as 1 or 0
+   * ({@code VarkaDecimalCompiler.carry} and {@code borrow}). The words are first proven to hold
+   * {@code x + y} and {@code x - y} modulo {@code 2^128} for every pair of 128-bit values, the
+   * ring layer of the add; then for each result precision {@code P} from 19 to 38, operands
+   * within {@code 10^(P - 1) - 1}, which Spark's type rule gives each operand of a sum typed
+   * {@code (P, S)} at scale {@code S}, give words holding the exact result, within
+   * {@code 10^P - 1}; and one digit wider, operands within {@code 10^P - 1}, the words have a
+   * witness past {@code 10^P - 1}, and at 38 digits one where they wrap, so the operands' bound
+   * is what keeps the words exact and within the type.
+   */
+  private static void decimal128Sum(StringBuilder out, String two64) {
+    String two128 = BigInteger.ONE.shiftLeft(128).toString();
+    out.append("""
+
+        ; The sum layer (VARKA-360): s.lo = x.lo + y.lo and s.hi = x.hi + y.hi + ULT(s.lo, x.lo),
+        ; d.lo = x.lo - y.lo and d.hi = x.hi - y.hi - ULT(x.lo, y.lo), every operation a wrapping
+        ; Java long one and each unsigned compare 1 or 0.
+        (define-fun s.lo ((xl Int) (yl Int)) Int (jlong.add xl yl))
+        (define-fun s.hi ((xh Int) (xl Int) (yh Int) (yl Int)) Int
+          (jlong.add (jlong.add xh yh) (ite (< (c.flip (s.lo xl yl)) (c.flip xl)) 1 0)))
+        (define-fun d.lo ((xl Int) (yl Int)) Int (jlong.sub xl yl))
+        (define-fun d.hi ((xh Int) (xl Int) (yh Int) (yl Int)) Int
+          (jlong.sub (jlong.sub xh yh) (ite (< (c.flip xl) (c.flip yl)) 1 0)))
+        """);
+    List<String> longs = List.of("(declare-const xh Int)", "(declare-const xl Int)",
+        "(declare-const yh Int)", "(declare-const yl Int)",
+        "(assert (and (jlong.in xh) (jlong.in xl) (jlong.in yh) (jlong.in yl)))");
+    String vx = "(w.val xh (c.lo xl))";
+    String vy = "(w.val yh (c.lo yl))";
+    String sum = "(w.val (s.hi xh xl yh yl) (c.lo (s.lo xl yl)))";
+    String diff = "(w.val (d.hi xh xl yh yl) (c.lo (d.lo xl yl)))";
+    String[][] forms = {{"x + y", sum, "(+ " + vx + " " + vy + ")"},
+        {"x - y", diff, "(- " + vx + " " + vy + ")"}};
+    for (String[] f : forms) {
+      var ring = new ArrayList<>(longs);
+      ring.add("(assert (not (= (mod (- " + f[1] + " " + f[2] + ") " + two128 + ") 0)))");
+      check(out, f[0] + " over the words, the carry an unsigned compare, is the value's modulo "
+          + "2^128", "unsat", ring);
+    }
+    for (int p = VarkaVectorIR.DecimalColumn.MAX_LONG_PRECISION + 1;
+        p <= org.apache.spark.sql.types.DecimalType.MAX_PRECISION(); p++) {
+      String operand = lit(BigInteger.TEN.pow(p - 1).subtract(BigInteger.ONE));
+      String wider = lit(BigInteger.TEN.pow(p).subtract(BigInteger.ONE));
+      for (String[] f : forms) {
+        var exact = new ArrayList<>(longs);
+        exact.add("(assert (and (<= (abs " + vx + ") " + operand + ") (<= (abs " + vy + ") "
+            + operand + ")))");
+        exact.add("(assert (not (and (= " + f[1] + " " + f[2] + ") (<= (abs " + f[1] + ") "
+            + wider + "))))");
+        check(out, "precision " + p + ": " + f[0] + " over operands within 10^" + (p - 1)
+            + " - 1 is exact and within 10^" + p + " - 1", "unsat", exact);
+        var past = new ArrayList<>(longs);
+        past.add("(assert (and (<= (abs " + vx + ") " + wider + ") (<= (abs " + vy + ") " + wider
+            + ")))");
+        // The kernel's words, not the integers, leave the type's bound, and at 38 digits they
+        // wrap: the operands' bound is what keeps the words exact and within the type.
+        past.add(p == org.apache.spark.sql.types.DecimalType.MAX_PRECISION()
+            ? "(assert (not (= " + f[1] + " " + f[2] + ")))"
+            : "(assert (> (abs " + f[1] + ") " + wider + "))");
+        check(out, "and over operands one digit wider, " + f[0] + " over the words "
+            + (p == org.apache.spark.sql.types.DecimalType.MAX_PRECISION() ? "wraps"
+                : "passes 10^" + p + " - 1"), "sat", past);
+      }
+    }
   }
 
   /**

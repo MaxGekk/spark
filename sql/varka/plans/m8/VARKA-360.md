@@ -418,4 +418,60 @@ its predictions scored; and the PR build and the option matrix pass.
 
 ## 10. Outcome
 
-(Written when the work lands.)
+### 10.2 360a, part 1: class U under a comparison (10 November 2026)
+
+*Same branch, on 10.1.* Built, in `VarkaDecimalCompiler.pair`:
+
+1. **The sum and the difference** (`widePair`, 2.2, 2.3): `+`, `-`, `try_add` and `try_subtract`
+   typed past 18 digits whose exact type is within 38: `lo = a.lo +- b.lo`, `hi = a.hi +- b.hi +-
+   c`, wrapping `IntArith`s, `c` the carry `CondValue(ULT(lo, a.lo))` or the borrow
+   `CondValue(ULT(a.lo, b.lo))`, over any `Pair` operand at the result's scale, or one of a
+   smaller scale whose rescale stays within a long, a folded constant or a 64-bit value times
+   `10^k`, sign-extended (`atPairScale`). One kernel in every mode (0 item 4); Spark's `Decimal.+`
+   and `-` are exact `BigDecimal` arithmetic here, with no 34-digit rounding.
+2. **The `BIGINT` cast** (2.6): `CAST(l AS DECIMAL(p, 0))`, `p >= 19`, is the long and its sign
+   extension; its null test declines until it has an edge table of its own.
+   **Departure:** the 64-bit and constant operands of a smaller scale, rescaled within a long, are
+   part of 360b's "rescale-up shapes of class U" (section 5), pulled here by the review; the
+   `WideMul` rescales stay 360b's.
+3. **Declines**: a capped sum names rows 360 and 363; a rescale past a long and a `BIGINT` at a
+   nonzero scale name this row's `WideMul` (360b); a wide sum as a value waits for 359b's store.
+   A negation, a choice or a lowering cast over an uncapped sum names only the wide form's rows,
+   and `VarkaDecimalArithmeticSuite`'s pinned reasons and type sweep follow.
+
+**Proofs.** `decimal128.smt2`'s sum layer: the words' sum and difference, carry and borrow as
+unsigned compares over Java longs, equal to the values' modulo `2^128`; per `P` from 19 to 38,
+operands within `10^(P - 1) - 1` give words exact within `10^P - 1`, and one digit wider the
+words pass it (wrap, at 38). 155 checks, from 73; Z3 2.02 s and cvc5 1.32 s on the busy laptop.
+
+**Tests.** `VarkaDecimalPairSuite` gains four: the word edges and null patterns at 2, 4 and 8
+lanes through nine forms over six type pairs from `(18, 2) + (18, 2)` to `(37, 2) + (37, 2)`,
+held to Spark under ANSI and LEGACY and through the `try_` forms; one kernel in the three modes;
+the capped and rescaled declines, the worked `DECIMAL(38, 10)` sum among them; and the rescaled
+64-bit and literal operands. The carry compare with its operands swapped fails the first, at
+`1 + -1`. The coverage family "DECIMAL wide add" has five filter rows, a `BIGINT` pair among
+them, proven by `decimal128.smt2`. The baseline's `x20 + y20 < z20` is `WHOLE` (`NONE` under the
+two-lane refusal). Its new rows moved `VarkaCoverageCompositionFuzzSuite`'s draw onto
+`extract(SECOND FROM t)`, whose warm-up wrote a decimal output's sixteen-byte slots into eight
+bytes a row; master's VARKA-157 (#1500) sizes it by the slot, so the branch's own fix was dropped
+on the rebase of 20 November 2026.
+
+**The review** (`/code-review high`, eight findings), fixed: a null test through any non-decimal
+cast, now none (a `BIGINT` cast's declines until its edge table, item 2); reasons over an uncapped
+sum still naming row 360; the rescalable operands, which declined; three stale javadocs; the wider
+witness, which read the integers, not the words; two copies of the sign extension. Trade-offs left:
+two 64-bit operands into `DECIMAL(19, s)` could be one long add, six lane calls fewer (360d's
+measurement); and the `BIGINT` pair has no edge table of its own, only the differential's draws. A
+second review, after the merge of #1448 (whose harness holds `+` and `-` only as values, still
+declined, so no drift): the reasons over a sum of two scales and over a wide sum as a value now name
+row 359's store; the check does not ask whether the operands compile, so `-(x20 + c9 * e9)` names
+359 and not 361. A third, after the rebase of 20 November 2026 (six nits): fixed, the census notes
+of `+`, `-`, `try_add` and `try_subtract`, item 2's record and 10.1's two-lane claim; kept, the
+reason above, the carry fixed as `COMPARE` until the runner reads `BITS`, and the baseline's
+committed runner files, which time the `x20 + y20 < z20` filter on the row path until its owed
+dispatch.
+
+**Not in this part**, owed: 360b, `WideMul` and the rescaled shapes (`x20 - y20s4`, `l + x9`,
+`l + x18`); 360c, class K after row 481 (`x38s2 + y38s2`); 360d, the projections after 359b's
+store and the measurement; the rescaling casts; the `BITS` arm, should the runner ask; and the IR
+fuzzer's carry forms.

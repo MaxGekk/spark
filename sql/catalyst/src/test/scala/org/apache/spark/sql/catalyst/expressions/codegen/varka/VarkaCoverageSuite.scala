@@ -1734,6 +1734,20 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("greatest(d38, d38b)"),
       Row("least(d38, d38b, d19)"))),
 
+    // Decimal + and - typed past 18 digits whose exact type is within 38 (VARKA-360): the low
+    // words add or subtract wrapping and the high words take the carry or the borrow, an unsigned
+    // compare made a value. The exact result fits its type, so the check
+    // never fires, the three modes answer alike, and one kernel serves all three; no row names a
+    // domain. A BIGINT joins under coercion's cast to DECIMAL(20, 0) as its long and its sign
+    // extension. Filters only: the pair's store is row 359's.
+    Family("DECIMAL wide add", predicates = true, Seq(
+      Row("d19 + d19 < d38", "DECIMAL(20, 2): the low words' carry an unsigned compare"),
+      Row("d19 - d18b >= d38", "a 64-bit operand sign-extended into the pair, its borrow"),
+      Row("d18 + d18b < d19", "two 64-bit operands into DECIMAL(19, 2), each sign-extended"),
+      Row("try_add(d19, d18b) <= d38", "TRY's kernel is LEGACY's and ANSI's"),
+      Row("CAST(l AS DECIMAL(20, 0)) - CAST(l2 AS DECIMAL(20, 0)) < CAST(l AS DECIMAL(20, 0))",
+        "two BIGINTs under coercion's cast, at DECIMAL(21, 0)"))),
+
     // Decimal +, - and * whose result stays within 18 digits (VARKA-349), under a comparison:
     // a sum or difference is one long add or subtract of the operands rescaled to the result's
     // scale, a product one long multiply. Within 18 digits the exact result always fits Spark's
@@ -2503,6 +2517,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "DECIMAL lane pair" -> Proved("decimal128.smt2"),
     // The negation and abs words are the carry layer's; the choices are differential (below).
     "DECIMAL lane pair values" -> Proved("decimal128.smt2"),
+    // The words' sum and difference with the carry and the borrow, and their bounds (VARKA-360).
+    "DECIMAL wide add" -> Proved("decimal128.smt2"),
     // The 64-bit decimal rows, each refined whole from the IR the compiler builds (VARKA-506).
     "DECIMAL columns" -> Rendered,
     "DECIMAL arithmetic" -> Rendered,
