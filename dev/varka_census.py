@@ -957,10 +957,6 @@ CONTEXT_CASTS = {
     ("dec", "dec"): "only a comparison's operand: widened at one scale (d9 < d18, d9 = 0.42), "
     "rounded down to a lower scale or cut to a lower precision (CAST(d9s4 AS DECIMAL(9, 2)) < d9), "
     "or raised in scale behind its precision guard (CAST(d9 AS DECIMAL(9, 4)) > 0)",
-    # A BIGINT fuses only into a scale of 0 past 18 digits, as its long and sign, an output of
-    # that type included (VARKA-360): a form the probe, whose decimals have a scale, never casts.
-    ("bigint", "dec"): "only into DECIMAL(p, 0) of 19 digits or more: an output, or a wide sum's "
-    "or comparison's operand (VARKA-360)",
 }
 
 # The pairs that fuse only from a form the coverage table has no column of, so that no row over
