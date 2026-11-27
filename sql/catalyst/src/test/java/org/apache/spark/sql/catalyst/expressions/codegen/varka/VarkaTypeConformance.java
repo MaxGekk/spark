@@ -267,7 +267,8 @@ public abstract class VarkaTypeConformance {
    * as its value's exact literal at the scale, which type coercion widens to the column's type at
    * the same scale, so a comparison reads it as a constant of the column's representation. The
    * pair form is {@code x < y}: null-intolerant, and fused over two columns of either
-   * representation, where {@code x + y} is row 360's.
+   * representation, where {@code x + y} declines once Spark caps it at 38 digits (rows 360 and
+   * 363's).
    */
   protected static ConformanceType decimal(DecimalType type, BigInteger[] slots, long[] picks) {
     return new ConformanceType("dec", type, type.sql(),

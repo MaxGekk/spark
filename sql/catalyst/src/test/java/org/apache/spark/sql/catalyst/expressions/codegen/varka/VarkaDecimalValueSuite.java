@@ -40,10 +40,12 @@ import org.apache.arrow.vector.DecimalVector;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.CaseWhen;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
+import org.apache.spark.sql.catalyst.expressions.GreaterThan;
 import org.apache.spark.sql.catalyst.expressions.IsNull;
 import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
@@ -310,6 +312,16 @@ public final class VarkaDecimalValueSuite {
       assertDeclines("CASE WHEN c < d THEN NULL END IS NULL at DECIMAL(20, -2)",
           new IsNull(new CaseWhen(branches, Option.empty())),
           "a decimal of negative scale is declined everywhere", columns);
+      // So does a sum over a constant of negative scale, which no coercion cast folds: within 18
+      // digits (e, at DECIMAL(17, 9)) and as a pair (c, at DECIMAL(21, 2)) alike.
+      Expression negative = Literal.create(Decimal.apply(5L, 3, -2), new DecimalType(3, -2));
+      for (String column : List.of("e", "c")) {
+        Expression sum = new Add(VarkaSqlResolve.parse(column, seq(columns)), negative);
+        var t = (DecimalType) sum.dataType();
+        Expression zero = Literal.create(Decimal.apply(0L, t.precision(), t.scale()), t);
+        assertDeclines(column + " + 5E+2 > 0 at " + t.sql(), new GreaterThan(sum, zero),
+            "a decimal of negative scale is declined everywhere", columns);
+      }
     } finally {
       conf.unsetConf(legacy);
     }

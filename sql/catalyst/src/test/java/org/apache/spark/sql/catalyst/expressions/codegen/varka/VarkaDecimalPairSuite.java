@@ -41,9 +41,13 @@ import org.junit.jupiter.api.Test;
 
 import scala.jdk.javaapi.CollectionConverters;
 
+import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
+import org.apache.spark.sql.catalyst.expressions.GreaterThan;
+import org.apache.spark.sql.catalyst.expressions.IsNull;
+import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
@@ -290,7 +294,8 @@ public final class VarkaDecimalPairSuite {
 
   @Test
   @DisplayName("the null tests of a wide column, of a widening cast, a choice, a pick, a negation "
-      + "or an abs over one read its validity, and a wide sum or lowering cast declines")
+      + "or an abs over one read its validity, and a sum capped at 38 digits or a lowering "
+      + "cast declines")
   void nullTests() {
     var t = new DecimalType(20, 2);
     for (String sql : List.of("a IS NULL", "a IS NOT NULL", "CAST(a AS DECIMAL(38, 2)) IS NULL",
@@ -300,8 +305,9 @@ public final class VarkaDecimalPairSuite {
         "abs(b) IS NOT NULL")) {
       check(sql, t, new DecimalType(38, 2));
     }
-    // Each can raise, or null a row whose leaves are valid: a sum by overflowing, and a
-    // lowering cast likewise.
+    // Each can raise, or null a row whose leaves are valid: a sum Spark caps at 38 digits, here
+    // DECIMAL(39, 2) exact, by overflowing, and a lowering cast likewise. A sum within 38 digits
+    // cannot, and its null test fuses (wideSumsAndDifferences).
     for (String sql : List.of("(a + b) IS NULL", "CAST(b AS DECIMAL(20, 2)) IS NULL")) {
       String reason = decline(sql, t, new DecimalType(38, 2));
       assertTrue(reason.contains("row"), () -> sql + ": " + reason);
@@ -570,8 +576,13 @@ public final class VarkaDecimalPairSuite {
 
   /** Runs {@code body} with {@code spark.sql.ansi.enabled} set to {@code ansi}. */
   private static void inMode(boolean ansi, Runnable body) {
+    withConf(SQLConf.ANSI_ENABLED().key(), Boolean.toString(ansi), body);
+  }
+
+  /** Runs {@code body} with the SQL config {@code key} set to {@code value}. */
+  private static void withConf(String key, String value, Runnable body) {
     SQLConf conf = SQLConf.get().clone();
-    conf.setConfString(SQLConf.ANSI_ENABLED().key(), Boolean.toString(ansi));
+    conf.setConfString(key, value);
     SQLConf.withExistingConf(conf, () -> {
       body.run();
       return BoxedUnit.UNIT;
@@ -772,11 +783,75 @@ public final class VarkaDecimalPairSuite {
     assertTrue(bigint.contains("360"), bigint);
   }
 
+  @Test
+  @DisplayName("a wide sum over an operand rescaled past a long declines with one reason, the "
+      + "constant WideMul's, bare and under a negation, abs, a cast or a null test")
+  void rescaledSumsDeclineWithOneReason() {
+    record Types(DecimalType ta, DecimalType tb) { }
+    // A wide operand beside one whose rescale leaves the long, and two 64-bit operands.
+    for (Types t : List.of(new Types(new DecimalType(20, 2), new DecimalType(17, 0)),
+        new Types(new DecimalType(18, 2), new DecimalType(18, 0)))) {
+      String bare = decline("a + b > a", t.ta(), t.tb());
+      assertTrue(bare.contains("takes a constant WideMul, row 360's"), () -> t + ": " + bare);
+      for (String sql : List.of("-(a + b) > 0", "abs(a + b) > 0", "(a + b) IS NULL",
+          "CAST(a + b AS DECIMAL(38, 2)) > 0")) {
+        assertEquals(bare, decline(sql, t.ta(), t.tb()), () -> t + ": " + sql);
+      }
+      for (String sql : List.of("a + b", "-(a + b)")) {
+        assertEquals(bare, outputDecline(sql, t.ta(), t.tb()), () -> t + ": " + sql);
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("a BIGINT cast into a wide decimal of nonzero scale names the constant WideMul, "
+      + "and row 350's guard as well where fewer than 19 integral digits let it overflow")
+  void bigintRescaleNamesItsRows() {
+    var t = new DecimalType(9, 0);
+    String guarded = outputDecline("CAST(CAST(a AS BIGINT) AS DECIMAL(20, 5))", t, t);
+    assertTrue(guarded.contains("row 360's constant WideMul")
+        && guarded.contains("row 350's guard"), guarded);
+    String exact = outputDecline("CAST(CAST(a AS BIGINT) AS DECIMAL(38, 5))", t, t);
+    assertTrue(exact.contains("row 360's constant WideMul") && !exact.contains("350"), exact);
+  }
+
+  @Test
+  @DisplayName("a wide sum over an operand of negative scale declines as a decimal of negative "
+      + "scale does everywhere: a constant, a column and a wide column alike")
+  void negativeScaleOperandsDecline() {
+    // Pinned: a decimal of negative scale exists only under this legacy setting, which the
+    // type's constructor reads.
+    withConf(SQLConf.LEGACY_ALLOW_NEGATIVE_SCALE_OF_DECIMAL_ENABLED().key(), "true", () -> {
+      String want = "a decimal of negative scale is declined everywhere";
+      for (DecimalType tb : List.of(new DecimalType(3, -2), new DecimalType(20, -2))) {
+        List<Attribute> columns = List.of(VarkaSqlResolve.column("a", new DecimalType(20, 2)),
+            VarkaSqlResolve.column("b", tb));
+        Expression constant = Literal.create(Decimal.apply(5L, tb.precision(), tb.scale()), tb);
+        for (Expression b : List.of(constant, columns.get(1))) {
+          Expression sum = new Add(columns.get(0), b);
+          var ts = (DecimalType) sum.dataType();
+          Expression zero = Literal.create(Decimal.apply(0L, ts.precision(), ts.scale()), ts);
+          for (Expression filter : List.of(new GreaterThan(sum, zero), new IsNull(sum))) {
+            String reason = decline(filter, columns);
+            assertTrue(reason.contains(want), () -> filter + ": " + reason);
+          }
+          String output = outputDecline(sum, columns);
+          assertTrue(output.contains(want), () -> sum + " as an output: " + output);
+        }
+      }
+    });
+  }
+
   /** The decline reason of {@code sql} as a projection's one output, or "fused". */
   private static String outputDecline(String sql, DecimalType ta, DecimalType tb) {
     List<Attribute> columns =
         List.of(VarkaSqlResolve.column("a", ta), VarkaSqlResolve.column("b", tb));
-    NamedExpression entry = VarkaSqlResolve.named(VarkaSqlResolve.parse(sql, seq(columns)), "c");
+    return outputDecline(VarkaSqlResolve.parse(sql, seq(columns)), columns);
+  }
+
+  /** The decline reason of {@code e} as a projection's one output, or "fused". */
+  private static String outputDecline(Expression e, List<Attribute> columns) {
+    NamedExpression entry = VarkaSqlResolve.named(e, "c");
     var declines = VarkaExpressionCompiler.declines(
         CollectionConverters.asScala(List.of(entry)).toSeq(), seq(columns), VarkaMatrixRuns.BASE);
     return declines.isEmpty() ? "fused" : declines.get(declines.firstKey()).reason();
@@ -786,10 +861,14 @@ public final class VarkaDecimalPairSuite {
   private static String decline(String sql, DecimalType ta, DecimalType tb) {
     List<Attribute> columns =
         List.of(VarkaSqlResolve.column("a", ta), VarkaSqlResolve.column("b", tb));
-    Expression e = VarkaSqlResolve.parse(sql, seq(columns));
+    return decline(VarkaSqlResolve.parse(sql, seq(columns)), columns);
+  }
+
+  /** The decline reason of the one conjunct {@code e} over {@code columns}, or "fused". */
+  private static String decline(Expression e, List<Attribute> columns) {
     List<VarkaConjunctSpec> specs = VarkaExpressionCompiler.explainPredicate(e, seq(columns),
         VarkaMatrixRuns.BASE, VarkaAdmission.NO_HOST_REFUSAL);
-    assertEquals(1, specs.size(), sql);
+    assertEquals(1, specs.size(), () -> e.toString());
     return specs.get(0).decline().map(d -> d.reason()).orElse("fused");
   }
 }

@@ -110,7 +110,9 @@ import org.apache.spark.sql.types.DecimalType;
  * values below {@code 10^p1} and {@code 10^p2} is below {@code 10^(P - 1)}. So Spark's precision
  * check never fires, LEGACY's null, ANSI's raise and TRY's null are dead, and one wrapping long
  * operation, which cannot wrap below {@code 10^18}, is Spark's answer in every mode
- * ({@code decimal64.smt2}). A wider result is a decline, never a check.
+ * ({@code decimal64.smt2}). A wider result is never a check either: within 38 digits it is a
+ * {@link Pair}'s sum, and one Spark caps at 38 digits, or over an operand rescaled past a long,
+ * is a decline.
  *
  * <p>A comparison or a null test of a type wider than 18 digits, up to 38, reads each value as a
  * {@link Pair} of words instead (VARKA-359): a column's two {@code DecimalWord} leaves, a
@@ -393,17 +395,23 @@ final class VarkaDecimalCompiler {
   }
 
   /**
-   * Why a sum or difference past 18 digits declines: its result's rows past 38 digits, which only
-   * an operand past 18 digits reaches, else an operand's, else its result's.
+   * Why a sum or difference past 18 digits that {@link #widePair} does not build declines: its
+   * result's rows past 38 digits, which only an operand past 18 digits reaches; within 38, the
+   * rescale of an operand past a long ({@link #rescaledPastLong}), since {@link #uncappedSum}
+   * fails such a sum on nothing else, so it has one reason whatever reads it.
    */
   private static String sumReason(String what, DecimalType t1, DecimalType t2) {
     int p = ResultType.ofSum(t1, t2).precision();
-    if (p <= DecimalType.MAX_PRECISION()
-        && (t1.precision() > MAX_PRECISION || t2.precision() > MAX_PRECISION)) {
-      return "a decimal " + what + " over an operand wider than " + MAX_PRECISION
-          + " digits is rows 359 and 360's";
+    if (p > MAX_PRECISION && p <= DecimalType.MAX_PRECISION()) {
+      return rescaledPastLong(what);
     }
     return arithmeticReason(what, p, "360", "360 and 363");
+  }
+
+  /** Why a wide sum or difference over an operand whose rescale leaves a long declines. */
+  private static String rescaledPastLong(String what) {
+    return "a decimal " + what + " past " + MAX_PRECISION + " digits over an operand rescaled "
+        + "past " + MAX_PRECISION + " digits takes a constant WideMul, row 360's";
   }
 
   /** Why a product past 18 digits declines: an operand's, or its result's, row. */
@@ -860,13 +868,18 @@ final class VarkaDecimalCompiler {
    * (`VARKA-360.md` 0.6), or a comparison's wider common type over it. Every long has at most 19
    * digits, so the cast keeps the value in every mode and Spark emits no check for it; its pair
    * is the long and its sign extension. A long of a nonzero scale is rescaled first, row 360's
-   * constant {@code WideMul}, and declines.
+   * constant {@code WideMul}, and declines; with fewer than 19 integral digits left that cast can
+   * overflow (LEGACY's null, ANSI's {@code NUMERIC_VALUE_OUT_OF_RANGE}), so its reason names row
+   * 350's guard as well.
    */
   private static Optional<Pair> bigintPair(Cast c, DecimalType type, VarkaSlotTable inputs,
       VarkaSlotTable literals, DeclineSink sink) {
     if (type.scale() != 0) {
+      // Every long has at most 19 digits (Long.MIN_VALUE's), so 19 integral digits hold them all.
+      boolean overflows = type.precision() - type.scale() < 19;
       return sink.decline("a BIGINT rescaled into a decimal wider than " + MAX_PRECISION
-          + " digits is row 360's constant WideMul", c);
+          + " digits is row 360's constant WideMul" + (overflows ? ", and with fewer than 19 "
+          + "integral digits it can overflow, which takes row 350's guard as well" : ""), c);
     }
     Optional<VarkaVectorIR> l = VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
     if (l.isEmpty()) {
@@ -939,10 +952,16 @@ final class VarkaDecimalCompiler {
    * compile time; and a value within 18 digits whose rescale stays within 18
    * ({@link #rescale}), sign-extended. Each keeps the operand's bound of {@code P - 1} digits at
    * {@code s}, since Spark's rule gives the result {@code P} digits. Any other operand of a
-   * smaller scale declines: its rescale into the pair is row 360's constant {@code WideMul}.
+   * smaller scale declines: its rescale into the pair is row 360's constant {@code WideMul}. An
+   * operand of negative scale declines first, a constant included, which would fold at {@code s}
+   * otherwise: the class declines a negative scale everywhere (the milestone plan's 2.8).
    */
   private static Optional<Pair> atPairScale(Expression whole, String what, Expression e,
       DecimalType t, int s, VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+    if (t.scale() < 0) {
+      return sink.decline("a decimal of negative scale is declined everywhere (the milestone "
+          + "plan's 2.8)", e);
+    }
     int k = s - t.scale();
     if (k == 0) {
       return pair(e, inputs, literals, sink);
@@ -953,9 +972,7 @@ final class VarkaDecimalCompiler {
           : literal(e, at, sink).map(x -> signExtended(x.unscaled(), at, sink));
     }
     if (isWide(e) || at.precision() > MAX_PRECISION) {
-      return sink.decline("a decimal " + what + " past " + MAX_PRECISION + " digits over an "
-          + "operand rescaled past " + MAX_PRECISION + " digits takes a constant WideMul, row "
-          + "360's", whole);
+      return sink.decline(rescaledPastLong(what), whole);
     }
     return value(e, inputs, literals, sink).map(x -> signExtended(rescale(x, k, sink).unscaled(),
         at, sink));
@@ -965,9 +982,9 @@ final class VarkaDecimalCompiler {
    * The carry out of the low words' wrapping sum {@code s = a + b}, 1 or 0 a lane: the sum wrapped
    * exactly where it is below {@code a} read unsigned, so it is the unsigned compare
    * {@code s < a} as a value. This is the plan's {@code COMPARE} form, picked over the mask-free
-   * {@code BITS} form on the laptop's reading of the spike (`VARKA-360.md` 10.1), where the two
-   * tie at 512 and 256 bits and this one is four lane calls to eight. Null where an operand is,
-   * as the sum is.
+   * {@code BITS} form on the laptop's reading of the spike (`VARKA-360.md` 10.1, from
+   * `results/VARKA-360-spike-laptop.txt`), where the two tie at 512 and 256 bits and this one is
+   * four lane calls to eight. Null where an operand is, as the sum is.
    */
   private static VarkaVectorIR carry(VarkaVectorIR a, VarkaVectorIR s) {
     return new CondValue(new Compare(CompareOp.ULT, s, a), LaneType.LONG);
