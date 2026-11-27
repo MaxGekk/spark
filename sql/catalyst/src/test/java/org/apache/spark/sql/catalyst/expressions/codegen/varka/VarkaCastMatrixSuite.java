@@ -46,7 +46,6 @@ import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.internal.SQLConf$;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DecimalType;
 
 /**
  * Milestone 8's cast matrix ({@code sql/varka/plans/m8/casts.tsv}, written by
@@ -65,31 +64,20 @@ import org.apache.spark.sql.types.DecimalType;
 public final class VarkaCastMatrixSuite {
 
   /**
-   * Each census type as a Spark type, in every form it has: a decimal's precision and scale (the
-   * registry's two and {@link #WIDE_SCALE_0}), a time's precision (three), an interval's start and
-   * end fields (all of them). A pair within one type casts between two of its forms, since
-   * Spark's cast there is a real one, and the file's same-type row stands for it. The fusion test
-   * reads every form, since the compiler's answer depends on the form: it fuses a day-time cast
-   * whose target ends in {@code SECOND} and no other.
+   * Each census type as a Spark type, in every form it has: a decimal's precision and scale (two
+   * of them), a time's precision (three), an interval's start and end fields (all of them). A
+   * pair within one type casts between two of its forms, since Spark's cast there is a real one,
+   * and the file's same-type row stands for it. The fusion test reads every form, since the
+   * compiler's answer depends on the form: it fuses a day-time cast whose target ends in
+   * {@code SECOND} and no other.
    */
   static final Map<String, DataType[]> TYPES = new LinkedHashMap<>();
-
-  /**
-   * A decimal past 18 digits of scale 0, the probe's own form beside the registry's two, whose
-   * scales are nonzero: the one target a {@code BIGINT} cast fuses into, as its long and its sign
-   * (VARKA-360), so that the file records that cast as fused and not as fusing nowhere.
-   */
-  static final DataType WIDE_SCALE_0 = DataTypes.createDecimalType(20, 0);
 
   // The type registry's census types and forms, in its order (VARKA-494).
   static {
     for (VarkaTypes.Info i : VarkaTypes.all()) {
       if (i.census() != null) {
-        var forms = new ArrayList<DataType>(i.forms());
-        if (forms.stream().anyMatch(f -> f instanceof DecimalType)) {
-          forms.add(WIDE_SCALE_0);
-        }
-        TYPES.put(i.census(), forms.toArray(new DataType[0]));
+        TYPES.put(i.census(), i.forms().toArray(new DataType[0]));
       }
     }
   }

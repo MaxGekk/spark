@@ -721,12 +721,10 @@ public final class VarkaDecimalPairSuite {
   }
 
   @Test
-  @DisplayName("a wide sum is stored over a 64-bit operand or a constant rescaled within a long, "
-      + "and over a BIGINT under coercion's cast, which is stored alone too")
-  void storedSumsOverRescaledAndBigintOperands() {
+  @DisplayName("a wide sum is stored over a 64-bit operand or a constant rescaled within a long")
+  void storedSumsOverRescaledOperands() {
     var wide = new DecimalType(20, 2);
     var narrow = new DecimalType(9, 0);
-    var whole = new DecimalType(18, 0);
     for (boolean ansi : new boolean[] {true, false}) {
       inMode(ansi, () -> {
         for (String sql : List.of("a + b", "b - a", "a + 1", "a - 0.5", "0.5 - a",
@@ -736,13 +734,6 @@ public final class VarkaDecimalPairSuite {
         }
         // The null constant is two null words, so the sum is null on every row.
         checkStored("a + CAST(NULL AS DECIMAL(20, 2))", wide, narrow);
-        // CAST(a AS BIGINT) reads every long of 18 digits; coercion casts it to DECIMAL(20, 0).
-        for (String sql : List.of("CAST(a AS BIGINT) + b", "b - CAST(a AS BIGINT)",
-            "CAST(CAST(a AS BIGINT) AS DECIMAL(20, 0))",
-            "CAST(CAST(a AS BIGINT) AS DECIMAL(20, 0)) - CAST(CAST(a AS BIGINT) AS "
-                + "DECIMAL(20, 0))")) {
-          checkStored(sql, whole, new DecimalType(20, 0));
-        }
       });
     }
   }
@@ -804,15 +795,21 @@ public final class VarkaDecimalPairSuite {
   }
 
   @Test
-  @DisplayName("a BIGINT cast into a wide decimal of nonzero scale names the constant WideMul, "
-      + "and row 350's guard as well where fewer than 19 integral digits let it overflow")
-  void bigintRescaleNamesItsRows() {
-    var t = new DecimalType(9, 0);
-    String guarded = outputDecline("CAST(CAST(a AS BIGINT) AS DECIMAL(20, 5))", t, t);
-    assertTrue(guarded.contains("row 360's constant WideMul")
-        && guarded.contains("row 350's guard"), guarded);
-    String exact = outputDecline("CAST(CAST(a AS BIGINT) AS DECIMAL(38, 5))", t, t);
-    assertTrue(exact.contains("row 360's constant WideMul") && !exact.contains("350"), exact);
+  @DisplayName("a wide sum over a BIGINT operand declines at coercion's cast of it to "
+      + "DECIMAL(20, 0), under a comparison, under a null test and as an output")
+  void sumsOverBigintOperandsDecline() {
+    var t = new DecimalType(18, 0);
+    var whole = new DecimalType(20, 0);
+    // The pair has no form of a BIGINT's cast, so the sum declines at it, with the reason the
+    // cast gives alone.
+    String want = "a decimal wider than 18 digits is row 359's";
+    assertEquals(want, outputDecline("CAST(CAST(a AS BIGINT) AS DECIMAL(20, 0))", t, t));
+    for (String sql : List.of("CAST(a AS BIGINT) + b > b", "(b - CAST(a AS BIGINT)) IS NULL")) {
+      assertEquals(want, decline(sql, t, whole), sql);
+    }
+    for (String sql : List.of("CAST(a AS BIGINT) + b", "-(CAST(a AS BIGINT) + b)")) {
+      assertEquals(want, outputDecline(sql, t, whole), sql);
+    }
   }
 
   @Test

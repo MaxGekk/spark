@@ -73,7 +73,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Tru
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenDecimal;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Word;
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke;
-import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.sql.types.DecimalType;
 
@@ -116,11 +115,10 @@ import org.apache.spark.sql.types.DecimalType;
  *
  * <p>A comparison or a null test of a type wider than 18 digits, up to 38, reads each value as a
  * {@link Pair} of words instead (VARKA-359): a column's two {@code DecimalWord} leaves, a
- * literal's two slots, a value within 18 digits and its sign extension, a {@code BIGINT} under
- * coercion's cast and its sign extension, or a sum or difference of such values whose exact type
- * is within 38 digits (VARKA-360, {@link #widePair}), and compares the words
- * ({@code DecimalWords.compare}). An output of such a type is its {@link Pair}, a sum or
- * difference included, stored by an {@code InterleaveDecimal} root.
+ * literal's two slots, a value within 18 digits and its sign extension, or a sum or difference
+ * of such values whose exact type is within 38 digits (VARKA-360, {@link #widePair}), and
+ * compares the words ({@code DecimalWords.compare}). An output of such a type is its
+ * {@link Pair}, a sum or difference included, stored by an {@code InterleaveDecimal} root.
  *
  * <p>What declines, each naming its row: any other form of a type wider than 18 digits (row 359,
  * and row 360 where a rescale is needed); a sum or difference past 18 digits over an operand
@@ -129,7 +127,7 @@ import org.apache.spark.sql.types.DecimalType;
  * negative scale (the milestone plan's 2.8); and every operator no arm here claims yet.
  * A cast between two decimals that rounds or can overflow is {@link VarkaDecimalCastCompiler}'s,
  * under its family's switch (VARKA-350); one from an integral type or {@code BOOLEAN} declines
- * naming row 350, but a {@code BIGINT}'s into a wide type of scale 0 ({@link #bigintPair}).
+ * naming row 350.
  *
  * <p>A decimal-valued output root is compiled by {@link #output}, which the projection's root
  * binding calls: within 18 digits any {@link #value}, admitted by {@link #outputRoot}, which
@@ -590,11 +588,10 @@ final class VarkaDecimalCompiler {
    * of a long's value read as 128 bits ({@link #signExtended}). A wider one is a constant's two
    * slots (the null constant's two {@code NullValue}s), a column's two word leaves, a cast that
    * keeps the scale and only widens the precision, which keeps the unscaled value - the cast
-   * coercion puts over the narrower side of {@code d18 < d38} -, a {@code BIGINT} under its cast
-   * to a scale of 0 ({@link #bigintPair}), an uncapped sum or difference ({@link #widePair}),
-   * and, over any of these, the forms of 2.5 that cannot fail: {@code -x} and {@code abs(x)} by
-   * the words' borrow ({@link #negated}), and the choices and picks word by word under one
-   * condition ({@link #pairChoice}, {@link #pairPick}).
+   * coercion puts over the narrower side of {@code d18 < d38} -, an uncapped sum or difference
+   * ({@link #widePair}), and, over any of these, the forms of 2.5 that cannot fail: {@code -x}
+   * and {@code abs(x)} by the words' borrow ({@link #negated}), and the choices and picks word by
+   * word under one condition ({@link #pairChoice}, {@link #pairPick}).
    * Every other wide form declines naming its row.
    */
   private static Optional<Pair> pair(Expression e, VarkaSlotTable inputs,
@@ -625,8 +622,6 @@ final class VarkaDecimalCompiler {
       case Cast c when c.child().dataType() instanceof DecimalType from
           && from.scale() == type.scale() && keepsDigits(from, type) ->
           pair(c.child(), inputs, literals, sink).map(p -> new Pair(p.lo(), p.hi(), type));
-      case Cast c when DataTypes.LongType.equals(c.child().dataType()) ->
-          bigintPair(c, type, inputs, literals, sink);
       case Add a -> widePair(a, IntOp.ADD, a.left(), a.right(), type, inputs, literals, sink);
       case Subtract a -> widePair(a, IntOp.SUB, a.left(), a.right(), type, inputs, literals, sink);
       // Neither can fail or leave the precision: |-v| = |v| <= 10^p - 1, and Spark negates a
@@ -860,35 +855,6 @@ final class VarkaDecimalCompiler {
     }
     return unscaled.abs().compareTo(BigInteger.TEN.pow(type.precision())) < 0
         ? Optional.of(unscaled) : Optional.empty();
-  }
-
-  /**
-   * {@code CAST(l AS DECIMAL(p, 0))} of a {@code BIGINT} {@code l}, {@code p} of 19 or more: the
-   * cast coercion puts over a {@code BIGINT} operand of a decimal operator, {@code DECIMAL(20, 0)}
-   * (`VARKA-360.md` 0.6), or a comparison's wider common type over it. Every long has at most 19
-   * digits, so the cast keeps the value in every mode and Spark emits no check for it; its pair
-   * is the long and its sign extension. A long of a nonzero scale is rescaled first, row 360's
-   * constant {@code WideMul}, and declines; with fewer than 19 integral digits left that cast can
-   * overflow (LEGACY's null, ANSI's {@code NUMERIC_VALUE_OUT_OF_RANGE}), so its reason names row
-   * 350's guard as well.
-   */
-  private static Optional<Pair> bigintPair(Cast c, DecimalType type, VarkaSlotTable inputs,
-      VarkaSlotTable literals, DeclineSink sink) {
-    if (type.scale() != 0) {
-      // Every long has at most 19 digits (Long.MIN_VALUE's), so 19 integral digits hold them all.
-      boolean overflows = type.precision() - type.scale() < 19;
-      return sink.decline("a BIGINT rescaled into a decimal wider than " + MAX_PRECISION
-          + " digits is row 360's constant WideMul" + (overflows ? ", and with fewer than 19 "
-          + "integral digits it can overflow, which takes row 350's guard as well" : ""), c);
-    }
-    Optional<VarkaVectorIR> l = VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
-    if (l.isEmpty()) {
-      return Optional.empty();
-    }
-    if (l.get().laneType() != LaneType.LONG) {
-      return sink.decline("a BIGINT under its cast to a decimal that is not on the long lane", c);
-    }
-    return Optional.of(signExtended(l.get(), type, sink));
   }
 
   /** The long {@code x} as the {@link Pair} of its value: itself and its sign {@code x >> 63}. */
@@ -1302,11 +1268,6 @@ final class VarkaDecimalCompiler {
       // failure, the error Spark raises, is in the value the null test does not keep (VARKA-350).
       case Cast c when VarkaDecimalCastCompiler.unguardedIntoDecimal(c) ->
           valid(c.child(), inputs, literals, sink);
-      // A BIGINT's cast into a pair (bigintPair) cannot null a valid row, but its operand is no
-      // decimal, whose validity this method cannot derive, so its null test declines.
-      case Cast c when DataTypes.LongType.equals(c.child().dataType()) ->
-          sink.decline("the validity of a cast to a decimal from a bigint is row 360's next "
-              + "part", c);
       case Cast c -> sink.decline("the validity of a decimal cast that can overflow: its null "
           + "test is left to the row engine (VARKA-350)", c);
       case UnaryMinus m -> valid(m.child(), inputs, literals, sink);
