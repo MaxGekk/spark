@@ -622,18 +622,9 @@ No emitted byte, coverage row, width-audit entry or proof moved: every fix is a 
 
 *By the lead's decision, to keep each pull request under the cap of 1000 counted lines: with the
 cast this part counted 1045 against the spike's branch.* 10.2 to 10.4 were written with the cast
-built beside the sum; this pull request now holds the sum and the difference only, and the cast
-follows in the next one, stacked on it. Taken out here, by commits over the reviewed head and with
-no line of the sum changed: `bigintPair` and its arm in `pair`, the cast's arm in `valid()`, its
-decline reasons, its tests (the stored cast and the stored sum over it, the two reasons at a
-nonzero scale, the two-lane refusal of a sum of two `BIGINT`s, the composition fuzzer's filter of
-a pair's store), the `BIGINT` row of each coverage family, which leaves four rows each, and the
-cast probe's `DECIMAL(20, 0)` form. The text of 10.2 to 10.4 about the cast went with them: 10.2's
-item on the cast, 10.3's paragraph on `valid()` and its two-lane case, and findings 2 and 6 of
-10.4.
-
-Until the next pull request a `BIGINT` cast into a decimal wider than 18 digits declines as on
-master, "a decimal wider than 18 digits is row 359's", and so does a sum over it at one scale:
-`VarkaDecimalPairSuite.sumsOverBigintOperandsDecline` holds the cast alone and the sum under a
-comparison, under a null test and as an output to that reason. A `BIGINT` beside a decimal of
-nonzero scale declines as a rescale past a long, as before.
+built beside the sum. This pull request now holds the sum and the difference only; the cast, its
+tests, its coverage rows, its probe form and the text about it in 10.2 to 10.4 follow in the next
+one, stacked on it. No line of the sum changed in the cut. Until then a `BIGINT` cast into a
+decimal wider than 18 digits declines as on master, "a decimal wider than 18 digits is row
+359's", and so does a sum over it at one scale
+(`VarkaDecimalPairSuite.sumsOverBigintOperandsDecline`).
