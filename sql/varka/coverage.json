@@ -9998,18 +9998,6 @@
     "note" : "TRY's kernel is LEGACY's and ANSI's",
     "verified" : "proof: decimal128.smt2"
   }, {
-    "sql" : "CAST(l AS DECIMAL(20, 0)) - CAST(l2 AS DECIMAL(20, 0)) < CAST(l AS DECIMAL(20, 0))",
-    "executable" : "CAST(l AS DECIMAL(20, 0)) - CAST(l2 AS DECIMAL(20, 0)) < CAST(l AS DECIMAL(20, 0))",
-    "family" : "DECIMAL wide add",
-    "form" : "predicate",
-    "catalyst" : [ "Cast", "LessThan", "Subtract" ],
-    "casts" : [ "bigint>dec:ansi", "dec>dec:ansi" ],
-    "operands" : [ "Cast:bigint", "Cast:dec", "LessThan:dec", "Subtract:dec" ],
-    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
-    "domain" : "",
-    "note" : "two BIGINTs under coercion's cast, at DECIMAL(21, 0)",
-    "verified" : "proof: decimal128.smt2"
-  }, {
     "sql" : "d19 + d19",
     "executable" : "d19 + d19",
     "family" : "DECIMAL wide add values",
@@ -10056,18 +10044,6 @@
     "switches" : [ ],
     "domain" : "",
     "note" : "TRY's kernel is LEGACY's and ANSI's",
-    "verified" : "proof: decimal128.smt2"
-  }, {
-    "sql" : "CAST(l AS DECIMAL(20, 0)) + CAST(l2 AS DECIMAL(20, 0))",
-    "executable" : "CAST(l AS DECIMAL(20, 0)) + CAST(l2 AS DECIMAL(20, 0))",
-    "family" : "DECIMAL wide add values",
-    "form" : "projection",
-    "catalyst" : [ "Add", "Cast" ],
-    "casts" : [ "bigint>dec:ansi" ],
-    "operands" : [ "Add:dec", "Cast:bigint" ],
-    "switches" : [ ],
-    "domain" : "",
-    "note" : "two BIGINTs under coercion's cast, at DECIMAL(21, 0)",
     "verified" : "proof: decimal128.smt2"
   }, {
     "sql" : "d9 + d9b < d18",

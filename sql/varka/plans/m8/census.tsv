@@ -455,7 +455,7 @@ int	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,d
 bigint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	bigint	bool,byte,short,int,bigint,dt	bool,byte,short,float,double,dec	semantics	332,343,350,28,364	cast alias	dec
 float	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date	float	bool,byte,short,int,float,double	bool,byte,short,float,double,dec	semantics	343,364,366	cast alias	
 double	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date	double	bool,byte,short,int,float,double	bool,byte,short,float,double,dec	semantics	343,364,366	cast alias	
-decimal	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	dec		bool,byte,short,float,double,dec	semantics	350,364,366	cast alias; DECIMAL(10,0) by default	bigint
+decimal	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	dec		bool,byte,short,float,double,dec	semantics	350,364,366	cast alias; DECIMAL(10,0) by default	
 date	Cast	conversionExpressions	in		date,ntz	date	date,ntz	ntz	done	340	cast alias	
 timestamp	Cast	conversionExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026								
 time	Cast	conversionExpressions	in		ntz,time	time	ntz	ntz	plumbing	340	cast alias; TIME widening fuses, a narrowing does not yet (VARKA-340)	time
