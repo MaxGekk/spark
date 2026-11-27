@@ -8,7 +8,7 @@ VarkaCastWithAnsiOffSuite	bigint	bool	BIGINT	BOOLEAN	legacy	fused
 VarkaCastWithAnsiOffSuite	bigint	byte	BIGINT	TINYINT	legacy	fused	
 VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(10,0)	legacy	declined	a cast from bigint to a decimal is row 350's
 VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(2,0)	legacy	declined	a cast from bigint to a decimal is row 350's
-VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(20,5)	legacy	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul
+VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(20,5)	legacy	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul, and with fewer than 19 integral digits it can overflow, which takes row 350's guard as well
 VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(3,0)	legacy	declined	a cast from bigint to a decimal is row 350's
 VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(3,1)	legacy	declined	a cast from bigint to a decimal is row 350's
 VarkaCastWithAnsiOffSuite	bigint	dec	BIGINT	DECIMAL(38,18)	legacy	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul
@@ -365,7 +365,7 @@ VarkaCastWithAnsiOnSuite	bigint	bigint	BIGINT	BIGINT	ansi	declined	unsupported e
 VarkaCastWithAnsiOnSuite	bigint	bool	BIGINT	BOOLEAN	ansi	fused	
 VarkaCastWithAnsiOnSuite	bigint	byte	BIGINT	TINYINT	ansi	fused	
 VarkaCastWithAnsiOnSuite	bigint	dec	BIGINT	DECIMAL(10,0)	ansi	declined	a cast from bigint to a decimal is row 350's
-VarkaCastWithAnsiOnSuite	bigint	dec	BIGINT	DECIMAL(20,5)	ansi	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul
+VarkaCastWithAnsiOnSuite	bigint	dec	BIGINT	DECIMAL(20,5)	ansi	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul, and with fewer than 19 integral digits it can overflow, which takes row 350's guard as well
 VarkaCastWithAnsiOnSuite	bigint	dec	BIGINT	DECIMAL(3,0)	ansi	declined	a cast from bigint to a decimal is row 350's
 VarkaCastWithAnsiOnSuite	bigint	dec	BIGINT	DECIMAL(38,18)	ansi	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul
 VarkaCastWithAnsiOnSuite	bigint	double	BIGINT	DOUBLE	ansi	declined	a BIGINT conversion to DOUBLE at an unknown emit level, which may be a host's without AVX512DQ (row 343)
@@ -628,7 +628,7 @@ VarkaTryCastSuite	bigint	bigint	BIGINT	BIGINT	try	declined	unsupported expressio
 VarkaTryCastSuite	bigint	bool	BIGINT	BOOLEAN	try	fused	
 VarkaTryCastSuite	bigint	byte	BIGINT	TINYINT	try	fused	
 VarkaTryCastSuite	bigint	dec	BIGINT	DECIMAL(10,0)	try	declined	a cast from bigint to a decimal is row 350's
-VarkaTryCastSuite	bigint	dec	BIGINT	DECIMAL(20,5)	try	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul
+VarkaTryCastSuite	bigint	dec	BIGINT	DECIMAL(20,5)	try	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul, and with fewer than 19 integral digits it can overflow, which takes row 350's guard as well
 VarkaTryCastSuite	bigint	dec	BIGINT	DECIMAL(3,0)	try	declined	a cast from bigint to a decimal is row 350's
 VarkaTryCastSuite	bigint	dec	BIGINT	DECIMAL(38,18)	try	declined	a BIGINT rescaled into a decimal wider than 18 digits is row 360's constant WideMul
 VarkaTryCastSuite	bigint	double	BIGINT	DOUBLE	try	declined	a BIGINT conversion to DOUBLE at an unknown emit level, which may be a host's without AVX512DQ (row 343)

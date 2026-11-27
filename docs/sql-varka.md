@@ -288,7 +288,7 @@ An entry is a function or operator of the census; a type counts *fused* for it o
 | `ByteType` (`byte`) | BYTE, INT | 77 | 54 | 2 | plumbing 4, semantics 17 | 0 | 60 |
 | `ShortType` (`short`) | SHORT, INT | 77 | 54 | 2 | plumbing 4, semantics 17 | 0 | 58 |
 | `IntegerType` (`int`) | INT | 92 | 68 | 2 | plumbing 4, semantics 18 | 0 | 139 |
-| `LongType` (`bigint`) | LONG | 87 | 62 | 2 | plumbing 5, semantics 18 | 0 | 99 |
+| `LongType` (`bigint`) | LONG | 87 | 62 | 3 | plumbing 5, semantics 17 | 0 | 99 |
 | `FloatType` (`float`) | FLOAT | 68 | 38 | 2 | plumbing 5, semantics 23 | 0 | 66 |
 | `DoubleType` (`double`) | DOUBLE | 104 | 64 | 2 | plumbing 4, semantics 24, ulp 10 | 0 | 97 |
 | `DecimalType` (`dec`) | LONG, words per value: 1 to precision 18, 2 to precision 38 | 68 | 4 | 32 | plumbing 3, semantics 29 | 3 | 121: 82 to precision 18, 39 at precision 19 to 38 |
@@ -310,7 +310,7 @@ One row per section of Spark's function registry, and per family of the operator
 | bitwise | 13 | 13 | 13 | 0 |  |  |
 | datetime | 41 | 27 | 36 | 0 | byte, short, int, bigint, float, double, dec, ntz, time, ym, dt | 103, 329, 339, 340, 343, 351 |
 | hash | 2 | 0 | 2 | 2 | dec | 337, 359, 368 |
-| conversion | 11 | 1 | 10 | 5 | bool, byte, short, int, bigint, float, double, dec, date, time, ym, dt | 28, 332, 338, 340, 343, 350, 364, 365, 366, 368 |
+| conversion | 11 | 1 | 10 | 6 | bool, byte, short, int, bigint, float, double, dec, date, time, ym, dt | 28, 332, 338, 340, 343, 350, 364, 365, 366, 368 |
 | misc | 2 | 2 | 2 | 0 |  |  |
 | conversion, no registry entry | 1 | 0 | 1 | 1 | bool, byte, short, int, bigint, float, double, dec, time, ym, dt | 332, 343, 350, 364, 365, 366, 368 |
 | predicate, no registry entry | 1 | 0 | 1 | 0 | bool, dec | 329, 341, 348, 359, 497 |
@@ -341,10 +341,10 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `byte` | fused | = | fused | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `short` | fused | fused | = | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `int` | fused | fused | fused | = | fused | fused | fused | declined |  |  |  | fused | declined |
-| `bigint` | fused | fused | fused | fused | = | declined | declined | declined |  |  |  | declined | declined |
+| `bigint` | fused | fused | fused | fused | = | declined | declined | 1 of 3 |  |  |  | declined | declined |
 | `float` | fused | declined | declined | declined | declined | = | fused | declined |  |  |  |  |  |
 | `double` | fused | declined | declined | declined | declined | fused | = | declined |  |  |  |  |  |
-| `dec` | 1 of 2 | declined | declined | declined | 1 of 2 | declined | declined | declined |  |  |  | declined | declined |
+| `dec` | 1 of 3 | declined | declined | declined | 1 of 3 | declined | declined | declined |  |  |  | declined | declined |
 | `date` | declined | declined | declined | declined | declined | declined | declined | declined | = | fused |  |  |  |
 | `ntz` |  |  |  |  |  |  |  |  | fused | = | fused |  |  |
 | `time` |  | declined | declined | declined | declined |  |  | declined |  | fused | 3 of 6 |  |  |
@@ -352,8 +352,9 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `dt` |  | declined | declined | declined | fused |  |  | declined |  |  |  |  | 36 of 90 |
 
 
-* `dec` to `bool` (test), 1 of 2 forms; declined: DECIMAL precision 19 to 38 to BOOLEAN
-* `dec` to `bigint` (truncation), 1 of 2 forms; declined: DECIMAL precision 19 to 38 to BIGINT
+* `bigint` to `dec` (scale up), 1 of 3 forms; declined: BIGINT to DECIMAL to precision 18; BIGINT to DECIMAL precision 19 to 38
+* `dec` to `bool` (test), 1 of 3 forms; declined: DECIMAL precision 19 to 38 to BOOLEAN
+* `dec` to `bigint` (truncation), 1 of 3 forms; declined: DECIMAL precision 19 to 38 to BIGINT
 * `time` to `time` (relabel or truncation), 3 of 6 forms; declined: TIME(3) to TIME(0); TIME(6) to TIME(0); TIME(6) to TIME(3)
 * `ym` to `int` (unit division), 2 of 3 forms; declined: INTERVAL YEAR TO MONTH to INT
 * `dt` to `dt` (relabel or unit narrowing), 36 of 90 forms; declined: INTERVAL DAY to INTERVAL DAY TO HOUR; INTERVAL DAY to INTERVAL DAY TO MINUTE; INTERVAL DAY to INTERVAL HOUR; INTERVAL DAY to INTERVAL HOUR TO MINUTE; INTERVAL DAY to INTERVAL MINUTE; INTERVAL DAY TO HOUR to INTERVAL DAY; INTERVAL DAY TO HOUR to INTERVAL DAY TO MINUTE; INTERVAL DAY TO HOUR to INTERVAL HOUR; INTERVAL DAY TO HOUR to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO HOUR to INTERVAL MINUTE; INTERVAL DAY TO MINUTE to INTERVAL DAY; INTERVAL DAY TO MINUTE to INTERVAL DAY TO HOUR; INTERVAL DAY TO MINUTE to INTERVAL HOUR; INTERVAL DAY TO MINUTE to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO MINUTE to INTERVAL MINUTE; INTERVAL DAY TO SECOND to INTERVAL DAY; INTERVAL DAY TO SECOND to INTERVAL DAY TO HOUR; INTERVAL DAY TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL DAY TO SECOND to INTERVAL HOUR; INTERVAL DAY TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO SECOND to INTERVAL MINUTE; INTERVAL HOUR to INTERVAL DAY; INTERVAL HOUR to INTERVAL DAY TO HOUR; INTERVAL HOUR to INTERVAL DAY TO MINUTE; INTERVAL HOUR to INTERVAL HOUR TO MINUTE; INTERVAL HOUR to INTERVAL MINUTE; INTERVAL HOUR TO MINUTE to INTERVAL DAY; INTERVAL HOUR TO MINUTE to INTERVAL DAY TO HOUR; INTERVAL HOUR TO MINUTE to INTERVAL DAY TO MINUTE; INTERVAL HOUR TO MINUTE to INTERVAL HOUR; INTERVAL HOUR TO MINUTE to INTERVAL MINUTE; INTERVAL HOUR TO SECOND to INTERVAL DAY; INTERVAL HOUR TO SECOND to INTERVAL DAY TO HOUR; INTERVAL HOUR TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL HOUR TO SECOND to INTERVAL HOUR; INTERVAL HOUR TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL HOUR TO SECOND to INTERVAL MINUTE; INTERVAL MINUTE to INTERVAL DAY; INTERVAL MINUTE to INTERVAL DAY TO HOUR; INTERVAL MINUTE to INTERVAL DAY TO MINUTE; INTERVAL MINUTE to INTERVAL HOUR; INTERVAL MINUTE to INTERVAL HOUR TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL DAY; INTERVAL MINUTE TO SECOND to INTERVAL DAY TO HOUR; INTERVAL MINUTE TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL HOUR; INTERVAL MINUTE TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL MINUTE; INTERVAL SECOND to INTERVAL DAY; INTERVAL SECOND to INTERVAL DAY TO HOUR; INTERVAL SECOND to INTERVAL DAY TO MINUTE; INTERVAL SECOND to INTERVAL HOUR; INTERVAL SECOND to INTERVAL HOUR TO MINUTE; INTERVAL SECOND to INTERVAL MINUTE
@@ -370,10 +371,10 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `byte` | fused | = | fused | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `short` | fused | fused | = | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `int` | fused | fused | fused | = | fused | fused | fused | declined |  |  |  | fused | context |
-| `bigint` | fused | fused | fused | fused | = | declined | declined | context |  |  |  | declined | declined |
+| `bigint` | fused | fused | fused | fused | = | declined | declined | 1 of 3 |  |  |  | declined | declined |
 | `float` | fused | declined | declined | declined | declined | = | fused | declined |  |  |  |  |  |
 | `double` | fused | declined | declined | declined | declined | fused | = | declined |  |  |  |  |  |
-| `dec` | 1 of 2 | declined | declined | declined | 1 of 2 | declined | declined | context |  |  |  | declined | declined |
+| `dec` | 1 of 3 | declined | declined | declined | 1 of 3 | declined | declined | context |  |  |  | declined | declined |
 | `date` |  |  |  |  |  |  |  |  | = | fused |  |  |  |
 | `ntz` |  |  |  |  |  |  |  |  | fused | = | fused |  |  |
 | `time` |  | declined | declined | declined | declined |  |  | declined |  | fused | 3 of 6 |  |  |
@@ -381,8 +382,9 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `dt` |  | declined | declined | declined | fused |  |  | declined |  |  |  |  | 36 of 90 |
 
 
-* `dec` to `bool` (test), 1 of 2 forms; declined: DECIMAL precision 19 to 38 to BOOLEAN
-* `dec` to `bigint` (truncation), 1 of 2 forms; declined: DECIMAL precision 19 to 38 to BIGINT
+* `bigint` to `dec` (scale up), 1 of 3 forms; declined: BIGINT to DECIMAL to precision 18; BIGINT to DECIMAL precision 19 to 38
+* `dec` to `bool` (test), 1 of 3 forms; declined: DECIMAL precision 19 to 38 to BOOLEAN
+* `dec` to `bigint` (truncation), 1 of 3 forms; declined: DECIMAL precision 19 to 38 to BIGINT
 * `time` to `time` (relabel or truncation), 3 of 6 forms; declined: TIME(3) to TIME(0); TIME(6) to TIME(0); TIME(6) to TIME(3)
 * `ym` to `int` (unit division), 2 of 3 forms; declined: INTERVAL YEAR TO MONTH to INT
 * `dt` to `dt` (relabel or unit narrowing), 36 of 90 forms; declined: INTERVAL DAY to INTERVAL DAY TO HOUR; INTERVAL DAY to INTERVAL DAY TO MINUTE; INTERVAL DAY to INTERVAL HOUR; INTERVAL DAY to INTERVAL HOUR TO MINUTE; INTERVAL DAY to INTERVAL MINUTE; INTERVAL DAY TO HOUR to INTERVAL DAY; INTERVAL DAY TO HOUR to INTERVAL DAY TO MINUTE; INTERVAL DAY TO HOUR to INTERVAL HOUR; INTERVAL DAY TO HOUR to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO HOUR to INTERVAL MINUTE; INTERVAL DAY TO MINUTE to INTERVAL DAY; INTERVAL DAY TO MINUTE to INTERVAL DAY TO HOUR; INTERVAL DAY TO MINUTE to INTERVAL HOUR; INTERVAL DAY TO MINUTE to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO MINUTE to INTERVAL MINUTE; INTERVAL DAY TO SECOND to INTERVAL DAY; INTERVAL DAY TO SECOND to INTERVAL DAY TO HOUR; INTERVAL DAY TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL DAY TO SECOND to INTERVAL HOUR; INTERVAL DAY TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO SECOND to INTERVAL MINUTE; INTERVAL HOUR to INTERVAL DAY; INTERVAL HOUR to INTERVAL DAY TO HOUR; INTERVAL HOUR to INTERVAL DAY TO MINUTE; INTERVAL HOUR to INTERVAL HOUR TO MINUTE; INTERVAL HOUR to INTERVAL MINUTE; INTERVAL HOUR TO MINUTE to INTERVAL DAY; INTERVAL HOUR TO MINUTE to INTERVAL DAY TO HOUR; INTERVAL HOUR TO MINUTE to INTERVAL DAY TO MINUTE; INTERVAL HOUR TO MINUTE to INTERVAL HOUR; INTERVAL HOUR TO MINUTE to INTERVAL MINUTE; INTERVAL HOUR TO SECOND to INTERVAL DAY; INTERVAL HOUR TO SECOND to INTERVAL DAY TO HOUR; INTERVAL HOUR TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL HOUR TO SECOND to INTERVAL HOUR; INTERVAL HOUR TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL HOUR TO SECOND to INTERVAL MINUTE; INTERVAL MINUTE to INTERVAL DAY; INTERVAL MINUTE to INTERVAL DAY TO HOUR; INTERVAL MINUTE to INTERVAL DAY TO MINUTE; INTERVAL MINUTE to INTERVAL HOUR; INTERVAL MINUTE to INTERVAL HOUR TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL DAY; INTERVAL MINUTE TO SECOND to INTERVAL DAY TO HOUR; INTERVAL MINUTE TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL HOUR; INTERVAL MINUTE TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL MINUTE; INTERVAL SECOND to INTERVAL DAY; INTERVAL SECOND to INTERVAL DAY TO HOUR; INTERVAL SECOND to INTERVAL DAY TO MINUTE; INTERVAL SECOND to INTERVAL HOUR; INTERVAL SECOND to INTERVAL HOUR TO MINUTE; INTERVAL SECOND to INTERVAL MINUTE
@@ -399,10 +401,10 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `byte` | fused | = | fused | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `short` | fused | fused | = | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `int` | fused | fused | fused | = | fused | fused | fused | declined |  |  |  | fused | declined |
-| `bigint` | fused | fused | fused | fused | = | declined | declined | declined |  |  |  | declined | declined |
+| `bigint` | fused | fused | fused | fused | = | declined | declined | 1 of 3 |  |  |  | declined | declined |
 | `float` | fused | declined | declined | declined | declined | = | fused | declined |  |  |  |  |  |
 | `double` | fused | declined | declined | declined | declined | fused | = | declined |  |  |  |  |  |
-| `dec` | 1 of 2 | declined | declined | declined | 1 of 2 | declined | declined | declined |  |  |  | declined | declined |
+| `dec` | 1 of 3 | declined | declined | declined | 1 of 3 | declined | declined | declined |  |  |  | declined | declined |
 | `date` |  |  |  |  |  |  |  |  | = | fused |  |  |  |
 | `ntz` |  |  |  |  |  |  |  |  | fused | = | fused |  |  |
 | `time` |  | declined | declined | declined | declined |  |  | declined |  | fused | 3 of 6 |  |  |
@@ -410,8 +412,9 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `dt` |  | declined | declined | declined | fused |  |  | declined |  |  |  |  | 36 of 90 |
 
 
-* `dec` to `bool` (test), 1 of 2 forms; declined: DECIMAL precision 19 to 38 to BOOLEAN
-* `dec` to `bigint` (truncation), 1 of 2 forms; declined: DECIMAL precision 19 to 38 to BIGINT
+* `bigint` to `dec` (scale up), 1 of 3 forms; declined: BIGINT to DECIMAL to precision 18; BIGINT to DECIMAL precision 19 to 38
+* `dec` to `bool` (test), 1 of 3 forms; declined: DECIMAL precision 19 to 38 to BOOLEAN
+* `dec` to `bigint` (truncation), 1 of 3 forms; declined: DECIMAL precision 19 to 38 to BIGINT
 * `time` to `time` (relabel or truncation), 3 of 6 forms; declined: TIME(3) to TIME(0); TIME(6) to TIME(0); TIME(6) to TIME(3)
 * `ym` to `int` (unit division), 2 of 3 forms; declined: INTERVAL YEAR TO MONTH to INT
 * `dt` to `dt` (relabel or unit narrowing), 36 of 90 forms; declined: INTERVAL DAY to INTERVAL DAY TO HOUR; INTERVAL DAY to INTERVAL DAY TO MINUTE; INTERVAL DAY to INTERVAL HOUR; INTERVAL DAY to INTERVAL HOUR TO MINUTE; INTERVAL DAY to INTERVAL MINUTE; INTERVAL DAY TO HOUR to INTERVAL DAY; INTERVAL DAY TO HOUR to INTERVAL DAY TO MINUTE; INTERVAL DAY TO HOUR to INTERVAL HOUR; INTERVAL DAY TO HOUR to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO HOUR to INTERVAL MINUTE; INTERVAL DAY TO MINUTE to INTERVAL DAY; INTERVAL DAY TO MINUTE to INTERVAL DAY TO HOUR; INTERVAL DAY TO MINUTE to INTERVAL HOUR; INTERVAL DAY TO MINUTE to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO MINUTE to INTERVAL MINUTE; INTERVAL DAY TO SECOND to INTERVAL DAY; INTERVAL DAY TO SECOND to INTERVAL DAY TO HOUR; INTERVAL DAY TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL DAY TO SECOND to INTERVAL HOUR; INTERVAL DAY TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL DAY TO SECOND to INTERVAL MINUTE; INTERVAL HOUR to INTERVAL DAY; INTERVAL HOUR to INTERVAL DAY TO HOUR; INTERVAL HOUR to INTERVAL DAY TO MINUTE; INTERVAL HOUR to INTERVAL HOUR TO MINUTE; INTERVAL HOUR to INTERVAL MINUTE; INTERVAL HOUR TO MINUTE to INTERVAL DAY; INTERVAL HOUR TO MINUTE to INTERVAL DAY TO HOUR; INTERVAL HOUR TO MINUTE to INTERVAL DAY TO MINUTE; INTERVAL HOUR TO MINUTE to INTERVAL HOUR; INTERVAL HOUR TO MINUTE to INTERVAL MINUTE; INTERVAL HOUR TO SECOND to INTERVAL DAY; INTERVAL HOUR TO SECOND to INTERVAL DAY TO HOUR; INTERVAL HOUR TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL HOUR TO SECOND to INTERVAL HOUR; INTERVAL HOUR TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL HOUR TO SECOND to INTERVAL MINUTE; INTERVAL MINUTE to INTERVAL DAY; INTERVAL MINUTE to INTERVAL DAY TO HOUR; INTERVAL MINUTE to INTERVAL DAY TO MINUTE; INTERVAL MINUTE to INTERVAL HOUR; INTERVAL MINUTE to INTERVAL HOUR TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL DAY; INTERVAL MINUTE TO SECOND to INTERVAL DAY TO HOUR; INTERVAL MINUTE TO SECOND to INTERVAL DAY TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL HOUR; INTERVAL MINUTE TO SECOND to INTERVAL HOUR TO MINUTE; INTERVAL MINUTE TO SECOND to INTERVAL MINUTE; INTERVAL SECOND to INTERVAL DAY; INTERVAL SECOND to INTERVAL DAY TO HOUR; INTERVAL SECOND to INTERVAL DAY TO MINUTE; INTERVAL SECOND to INTERVAL HOUR; INTERVAL SECOND to INTERVAL HOUR TO MINUTE; INTERVAL SECOND to INTERVAL MINUTE
