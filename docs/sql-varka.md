@@ -288,10 +288,10 @@ An entry is a function or operator of the census; a type counts *fused* for it o
 | `ByteType` (`byte`) | BYTE, INT | 77 | 54 | 2 | plumbing 4, semantics 17 | 0 | 60 |
 | `ShortType` (`short`) | SHORT, INT | 77 | 54 | 2 | plumbing 4, semantics 17 | 0 | 58 |
 | `IntegerType` (`int`) | INT | 92 | 68 | 2 | plumbing 4, semantics 18 | 0 | 139 |
-| `LongType` (`bigint`) | LONG | 87 | 62 | 2 | plumbing 5, semantics 18 | 0 | 97 |
+| `LongType` (`bigint`) | LONG | 87 | 62 | 2 | plumbing 5, semantics 18 | 0 | 99 |
 | `FloatType` (`float`) | FLOAT | 68 | 38 | 2 | plumbing 5, semantics 23 | 0 | 66 |
 | `DoubleType` (`double`) | DOUBLE | 104 | 64 | 2 | plumbing 4, semantics 24, ulp 10 | 0 | 97 |
-| `DecimalType` (`dec`) | LONG, words per value: 1 to precision 18, 2 to precision 38 | 68 | 4 | 32 | plumbing 3, semantics 29 | 3 | 113: 81 to precision 18, 32 at precision 19 to 38 |
+| `DecimalType` (`dec`) | LONG, words per value: 1 to precision 18, 2 to precision 38 | 68 | 4 | 32 | plumbing 3, semantics 29 | 3 | 121: 82 to precision 18, 39 at precision 19 to 38 |
 | `DateType` (`date`) | INT | 63 | 51 | 1 | plumbing 1, semantics 10 | 0 | 109 |
 | `TimestampNTZType` (`ntz`) | LONG | 54 | 51 | 0 | plumbing 1, semantics 2 | 0 | 77 |
 | `TimeType` (`time`) | LONG | 49 | 36 | 3 | plumbing 1, semantics 9 | 0 | 49 |
@@ -370,7 +370,7 @@ One matrix per evaluation mode, rows the source type and columns the target, eac
 | `byte` | fused | = | fused | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `short` | fused | fused | = | fused | fused | fused | fused | declined |  |  |  | declined | declined |
 | `int` | fused | fused | fused | = | fused | fused | fused | declined |  |  |  | fused | context |
-| `bigint` | fused | fused | fused | fused | = | declined | declined | declined |  |  |  | declined | declined |
+| `bigint` | fused | fused | fused | fused | = | declined | declined | context |  |  |  | declined | declined |
 | `float` | fused | declined | declined | declined | declined | = | fused | declined |  |  |  |  |  |
 | `double` | fused | declined | declined | declined | declined | fused | = | declined |  |  |  |  |  |
 | `dec` | 1 of 2 | declined | declined | declined | 1 of 2 | declined | declined | context |  |  |  | declined | declined |
@@ -1588,6 +1588,26 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `greatest(d38, d38b)` | `intArithmetic` |  |  | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
 | `least(d38, d38b, d19)` | `intArithmetic` |  |  | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
 
+#### DECIMAL wide add
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `d19 + d19 < d38` | `predicate` |  | DECIMAL(20, 2): the low words' carry an unsigned compare | not emitted: a filter's condition in a kernel driven at a 64-bit lane (BIGINT, DOUBLE, TIMESTAMP_NTZ, TIME, day-time interval, DECIMAL), on an x86 host whose 64-bit species have two lanes or fewer: C2 lowers no mask there, and the selection would run the Vector API's Java fallback |
+| `d19 - d18b >= d38` | `predicate` |  | a 64-bit operand sign-extended into the pair, its borrow | not emitted: a filter's condition in a kernel driven at a 64-bit lane (BIGINT, DOUBLE, TIMESTAMP_NTZ, TIME, day-time interval, DECIMAL), on an x86 host whose 64-bit species have two lanes or fewer: C2 lowers no mask there, and the selection would run the Vector API's Java fallback |
+| `d18 + d18b < d19` | `predicate` |  | two 64-bit operands into DECIMAL(19, 2), each sign-extended | not emitted: a filter's condition in a kernel driven at a 64-bit lane (BIGINT, DOUBLE, TIMESTAMP_NTZ, TIME, day-time interval, DECIMAL), on an x86 host whose 64-bit species have two lanes or fewer: C2 lowers no mask there, and the selection would run the Vector API's Java fallback |
+| `try_add(d19, d18b) <= d38` | `predicate` |  | TRY's kernel is LEGACY's and ANSI's | not emitted: a filter's condition in a kernel driven at a 64-bit lane (BIGINT, DOUBLE, TIMESTAMP_NTZ, TIME, day-time interval, DECIMAL), on an x86 host whose 64-bit species have two lanes or fewer: C2 lowers no mask there, and the selection would run the Vector API's Java fallback |
+| `CAST(l AS DECIMAL(20, 0)) - CAST(l2 AS DECIMAL(20, 0)) < CAST(l AS DECIMAL(20, 0))` | `predicate` |  | two BIGINTs under coercion's cast, at DECIMAL(21, 0) | not emitted: a filter's condition in a kernel driven at a 64-bit lane (BIGINT, DOUBLE, TIMESTAMP_NTZ, TIME, day-time interval, DECIMAL), on an x86 host whose 64-bit species have two lanes or fewer: C2 lowers no mask there, and the selection would run the Vector API's Java fallback |
+
+#### DECIMAL wide add values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `d19 + d19` | none |  | DECIMAL(20, 2): the sum's two words in Arrow's sixteen-byte slot | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
+| `d19 - d18b` | none |  | a 64-bit operand sign-extended into the pair | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
+| `d18 + d18b` | none |  | DECIMAL(19, 2) from two 64-bit operands | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
+| `try_subtract(d19, d18b)` | none |  | TRY's kernel is LEGACY's and ANSI's | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
+| `CAST(l AS DECIMAL(20, 0)) + CAST(l2 AS DECIMAL(20, 0))` | none |  | two BIGINTs under coercion's cast, at DECIMAL(21, 0) | not emitted: a DECIMAL output wider than 18 digits, on an x86 host whose 64-bit species have two lanes or fewer: its store interleaves its two words with two-vector rearranges, which C2 does not lower there, so the store would run the Vector API's Java fallback, as the decimal slots' load does |
+
 #### DECIMAL arithmetic
 
 | Predicate | Switches | Domain | Notes | 128-bit lanes |
@@ -1680,11 +1700,11 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | rendered | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 109 | 0 | 0 | 2 | 0 | 2 | 105 |
+| `bigint` | 111 | 0 | 0 | 4 | 0 | 2 | 105 |
 | `bool` | 42 | 0 | 0 | 0 | 13 | 0 | 29 |
 | `byte` | 60 | 0 | 0 | 0 | 0 | 8 | 52 |
 | `date` | 130 | 17 | 0 | 0 | 1 | 0 | 112 |
-| `dec` | 115 | 1 | 50 | 16 | 0 | 0 | 48 |
+| `dec` | 125 | 1 | 50 | 26 | 0 | 0 | 48 |
 | `double` | 112 | 0 | 0 | 1 | 0 | 0 | 111 |
 | `dt` | 41 | 2 | 0 | 7 | 0 | 0 | 32 |
 | `float` | 67 | 0 | 0 | 0 | 0 | 0 | 67 |
