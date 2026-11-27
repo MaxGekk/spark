@@ -475,8 +475,8 @@ rewrites the class's runner results files whole; should `BITS` lead there by 1.3
 
 *Built on 10.1's pick, the `COMPARE` carry, in a pull request of its own stacked on the
 spike's, which merges first. Written before row 359's store merged: 10.3 corrects what that
-changed.* Built, in
-`VarkaDecimalCompiler.pair`:
+changed. The `BIGINT` cast built with it is cut into the next pull request, and its record is
+10.5's.* Built, in `VarkaDecimalCompiler.pair`:
 
 1. **The sum and the difference** (`widePair`, 2.2, 2.3): `+`, `-`, `try_add` and `try_subtract`
    typed past 18 digits whose exact type is within 38: `lo = a.lo +- b.lo`, `hi = a.hi +- b.hi +-
@@ -485,13 +485,11 @@ changed.* Built, in
    smaller scale whose rescale stays within a long, a folded constant or a 64-bit value times
    `10^k`, sign-extended (`atPairScale`). One kernel in every mode (0 item 4); Spark's `Decimal.+`
    and `-` are exact `BigDecimal` arithmetic here, with no 34-digit rounding.
-2. **The `BIGINT` cast** (2.6): `CAST(l AS DECIMAL(p, 0))`, `p >= 19`, is the long and its sign
-   extension; its null test declines until it has an edge table of its own.
-   **Departure:** the 64-bit and constant operands of a smaller scale, rescaled within a long, are
+2. **Departure:** the 64-bit and constant operands of a smaller scale, rescaled within a long, are
    part of 360b's "rescale-up shapes of class U" (section 5), pulled here by the review; the
    `WideMul` rescales stay 360b's.
-3. **Declines**: a capped sum names rows 360 and 363; a rescale past a long and a `BIGINT` at a
-   nonzero scale name this row's `WideMul` (360b); a wide sum as a value waits for 359b's store.
+3. **Declines**: a capped sum names rows 360 and 363; a rescale past a long names this row's
+   `WideMul` (360b); a wide sum as a value waits for 359b's store.
    A negation, a choice or a lowering cast over an uncapped sum names only the wide form's rows,
    and `VarkaDecimalArithmeticSuite`'s pinned reasons and type sweep follow.
 
@@ -505,19 +503,19 @@ lanes through nine forms over six type pairs from `(18, 2) + (18, 2)` to `(37, 2
 held to Spark under ANSI and LEGACY and through the `try_` forms; one kernel in the three modes;
 the capped and rescaled declines, the worked `DECIMAL(38, 10)` sum among them; and the rescaled
 64-bit and literal operands. The carry compare with its operands swapped fails the first, at
-`1 + -1`. The coverage family "DECIMAL wide add" has five filter rows, a `BIGINT` pair among
-them, proven by `decimal128.smt2`. The baseline's `x20 + y20 < z20` is `WHOLE` (`NONE` under the
+`1 + -1`. The coverage family "DECIMAL wide add" has four filter rows, proven by
+`decimal128.smt2`. The baseline's `x20 + y20 < z20` is `WHOLE` (`NONE` under the
 two-lane refusal). Its new rows moved `VarkaCoverageCompositionFuzzSuite`'s draw onto
 `extract(SECOND FROM t)`, whose warm-up wrote a decimal output's sixteen-byte slots into eight
 bytes a row; master's VARKA-157 (#1500) sizes it by the slot, so the branch's own fix was dropped
 on the rebase of 20 November 2026.
 
 **The review** (`/code-review high`, eight findings), fixed: a null test through any non-decimal
-cast, now none (a `BIGINT` cast's declines until its edge table, item 2); reasons over an uncapped
+cast, now none; reasons over an uncapped
 sum still naming row 360; the rescalable operands, which declined; three stale javadocs; the wider
 witness, which read the integers, not the words; two copies of the sign extension. Trade-offs left:
 two 64-bit operands into `DECIMAL(19, s)` could be one long add, six lane calls fewer (360d's
-measurement); and the `BIGINT` pair has no edge table of its own, only the differential's draws. A
+measurement). A
 second review, after the merge of #1448 (whose harness holds `+` and `-` only as values, still
 declined, so no drift): the reasons over a sum of two scales and over a wide sum as a value now name
 row 359's store; the check does not ask whether the operands compile, so `-(x20 + c9 * e9)` names
@@ -538,11 +536,11 @@ fuzzer's carry forms.
 written change what it says.*
 
 **Row 359's store (#1710) makes the sum an output.** `VarkaDecimalCompiler.output` stores every
-form `pair` builds under an `InterleaveDecimal` root, so a sum or difference `widePair` builds,
-and a `BIGINT` under its cast to `DECIMAL(p, 0)`, is a projection's output as soon as this part
+form `pair` builds under an `InterleaveDecimal` root, so a sum or difference `widePair` builds
+is a projection's output as soon as this part
 lands. This corrects 10.2 in three places: item 3's "a wide sum as a value waits for 359b's
-store" (it fuses); the tests' "five filter rows" (a second family, "DECIMAL wide add values",
-holds five output rows); and "Not in this part: 360d, the projections after 359b's store" (the
+store" (it fuses); the tests' "four filter rows" (a second family, "DECIMAL wide add values",
+holds four output rows); and "Not in this part: 360d, the projections after 359b's store" (the
 projections are here, and 360d keeps only the measurement). The reason a consumer of one long
 gets for such a sum, a cast of it to an integral type for one, no longer names the store: it says
 the sum is two words.
@@ -556,31 +554,22 @@ at 1, 2, 4 and 8 long lanes:
    under a negation, `abs`, `IF`, `coalesce` and `greatest`, and a sum of a sum, over the six type
    pairs of 10.2's comparison test, `(18, 2) + (18, 2)` to `(37, 2) + (37, 2)`, under ANSI and
    under LEGACY.
-2. `storedSumsOverRescaledAndBigintOperands`: a 64-bit operand and a literal rescaled within a
-   long, a `BIGINT` under coercion's cast, and that cast stored alone.
+2. `storedSumsOverRescaledOperands`: a 64-bit operand and a literal rescaled within a long.
 3. `storedSumsWithoutTheBitmapPass`: with `validityByBitmap` off the store reads both words'
    validity, so the carry and a sign extension are shown null exactly where the low word is.
-4. `cappedAndRescaledSumsDeclineAsOutputs`: the capped sum, the sum of two scales, the rescale
-   past a long and the `BIGINT` at a nonzero scale decline as outputs with the reasons they give
-   under a comparison.
+4. `cappedAndRescaledSumsDeclineAsOutputs`: the capped sum, the sum of two scales and the
+   rescale past a long decline as outputs with the reasons they give under a comparison.
 
 No row holds an overflow: the exact type of every sum built here is within 38 digits, so Spark's
 check cannot fire, and neither LEGACY's null nor ANSI's error has an input. The sums that can
 overflow are the capped ones, which decline (test 4) and stay 360c's and row 363's. With the
 carry's compare swapped, tests 1 to 3 fail. At two long lanes on x86 the output declines by its
 root, as every pair's store does (`VarkaKernelPlan.TWO_LANE_DECIMAL_PAIR_OUTPUT_REASON`,
-`VARKA-359.md`'s section on the store): `VarkaTwoLaneConditionSuite` holds a sum of two
-`BIGINT`s, which reads no decimal slot, and `results/VARKA-612-refused.txt` lists the five new
+`VARKA-359.md`'s section on the store): `results/VARKA-612-refused.txt` lists the four new
 value rows.
 
 **The proof file on master.** `decimal128.smt2` holds 158 checks, the sum layer's 82 among
 them (10.2's 155 counted three fewer of master's), and every one holds under Z3 and under cvc5.
-
-**Row 350's casts (#1700) meet the `BIGINT` cast in `valid()`.** Master's rule is kept: a cast
-between decimals with no guard is valid where its operand is, and any other cast's null test is
-left to the row engine. `unguardedIntoDecimal` answers false for a source that is no decimal, so
-the `BIGINT` arm sits between the two with its own reason. 10.2's third arm, a cast from any
-other type naming row 350, is master's last arm now.
 
 **Also moved.** The baseline's `x20 + y20` as a value is `WHOLE` beside the filter, both `NONE`
 where the session refuses a 64-bit condition; its four other sums stay `NONE`. The committed
@@ -589,19 +578,13 @@ runner files time both sections on the row path until 360d's dispatch.
 declining in part at its `DECIMAL(30, 4)`: they fuse as pair stores, which that harness does not
 read, and cancel as unverified beside 359's forms. `VarkaDecimalOutputSuite`'s wide decline test
 holds `DECIMAL(18, 2) + DECIMAL(18, 2)` to the pair's store and keeps a decline over a sum that
-rescales past a long. The census note of the `BIGINT` cast says it fuses only into
-`DECIMAL(p, 0)` of 19 digits or more, a form the cast probe does not hold. One two-lane case
-is left, read from `VarkaKernelPlan.admit` and not built against: a comparison of pairs built
-from `BIGINT` casts alone, projected as a `BOOLEAN`, reads no decimal slot, so the refusal of a
-boolean output over a decimal column (#1478) does not see it and it is admitted as a `BIGINT`
-comparison is; row 597, which owned the decline in the readers, moved to milestone 10
-(`m10/SCOPE.md` item 140).
+rescales past a long.
 
 **Owed after this part**, in place of 10.2's list: 360b, `WideMul` and the rescaled shapes
 (`x20 - y20s4`, `l + x9`, `l + x18`) with the rescaling casts; 360c, class K (`x38s2 + y38s2`);
 360d, the measurement of the filter and of the projection against the baseline on the runner;
-the `BITS` arm, should the runner ask; the IR fuzzer's carry forms; and the null test of a
-`BIGINT` cast.
+the `BITS` arm, should the runner ask; the IR fuzzer's carry forms; and the `BIGINT` cast, the
+next pull request (10.5).
 
 ### 10.4 360a's review round (27 November 2026)
 
@@ -617,17 +600,7 @@ its fix. The branch now holds the spike's (10.1) by a merge and is stacked on it
    `VarkaDecimalPairSuite.negativeScaleOperandsDecline` holds a constant, a column and a wide
    column, under a comparison, a null test and as an output; `VarkaDecimalValueSuite` holds the
    wide sum beside the narrow one.
-2. **The `BIGINT` cast was listed as fusing only in context, and it fuses bare.** The cast probe
-   (`VarkaCastMatrixSuite`) gains a third decimal form, `DECIMAL(20, 0)`, and the pair leaves the
-   census's `CONTEXT_CASTS`. This corrects 10.3's "a form the cast probe does not hold". In the
-   three cast matrices of `docs/sql-varka.md`, `bigint` to `dec` reads "1 of 3" in LEGACY, ANSI
-   and TRY (it read "declined", "context" and "declined"). The third form also moves the two
-   cells whose count is of decimal source forms, `dec` to `bool` and `dec` to `bigint`, from "1
-   of 2" to "1 of 3" in each mode: `DECIMAL(20, 0)` declines there as `DECIMAL(30, 4)` does.
-   `casts_fused.tsv` gains 48 lines, one fused. One credit follows that is true of the pair and
-   not of the entry: the census counts a cast alias by its type pair, so the `decimal` alias,
-   which casts to `DECIMAL(10, 0)`, now lists `bigint` as fused in part, and the `bigint` row and
-   the conversion row of the support tables each move one entry to "in part".
+2. The `BIGINT` cast's, recorded with it (10.5).
 3. **One sum, two reasons.** Under a negation, a cast, a choice or a consumer of one long,
    `sumReason` still named rows 359 and 360 for a sum over an operand rescaled past a long; bare,
    `atPairScale` named the constant `WideMul`. Both give the second reason now
@@ -641,9 +614,26 @@ its fix. The branch now holds the spike's (10.1) by a merge and is stacked on it
 5. **Three texts said a wide sum declines**: `nullTests`' name and comment, the conformance
    fixture's javadoc and the compiler's class javadoc now say a sum capped at 38 digits, or
    rescaled past a long, declines.
-6. **The `BIGINT` cast's decline at a nonzero scale named only the `WideMul`.** Into fewer than
-   19 integral digits the cast can overflow, so the reason names row 350's guard as well there
-   (`DECIMAL(20, 5)`) and the `WideMul` alone elsewhere (`DECIMAL(38, 5)`,
-   `bigintRescaleNamesItsRows`); `casts_suites.tsv` records it in the three modes.
+6. The `BIGINT` cast's, recorded with it (10.5).
 
 No emitted byte, coverage row, width-audit entry or proof moved: every fix is a decline or a text.
+
+### 10.5 The `BIGINT` cast: cut into its own pull request (28 November 2026)
+
+*By the lead's decision, to keep each pull request under the cap of 1000 counted lines: with the
+cast this part counted 1045 against the spike's branch.* 10.2 to 10.4 were written with the cast
+built beside the sum; this pull request now holds the sum and the difference only, and the cast
+follows in the next one, stacked on it. Taken out here, by commits over the reviewed head and with
+no line of the sum changed: `bigintPair` and its arm in `pair`, the cast's arm in `valid()`, its
+decline reasons, its tests (the stored cast and the stored sum over it, the two reasons at a
+nonzero scale, the two-lane refusal of a sum of two `BIGINT`s, the composition fuzzer's filter of
+a pair's store), the `BIGINT` row of each coverage family, which leaves four rows each, and the
+cast probe's `DECIMAL(20, 0)` form. The text of 10.2 to 10.4 about the cast went with them: 10.2's
+item on the cast, 10.3's paragraph on `valid()` and its two-lane case, and findings 2 and 6 of
+10.4.
+
+Until the next pull request a `BIGINT` cast into a decimal wider than 18 digits declines as on
+master, "a decimal wider than 18 digits is row 359's", and so does a sum over it at one scale:
+`VarkaDecimalPairSuite.sumsOverBigintOperandsDecline` holds the cast alone and the sum under a
+comparison, under a null test and as an output to that reason. A `BIGINT` beside a decimal of
+nonzero scale declines as a rescale past a long, as before.
