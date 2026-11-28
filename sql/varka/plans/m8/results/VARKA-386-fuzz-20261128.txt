@@ -64,7 +64,29 @@ Tests
   demoted for the null test it takes ahead of a raising residual conjunct, though it reads no
   column of it": isnotnull(l), NOT (year(d) = 2021 AND i > 0), coalesce(l2 + 1, 0) >= 0 fused,
   year(CAST(ntz AS DATE)) = 2021; codegen order 1, 0, 2, 3; only the coalesce is demoted.
-    without the fix: RESULT_BASE
-    with the fix:    VarkaConjunctOrderSuite 23 of 23 passed
-  The 49-conjunct shape at 1ad2c5c5bd0 with the fix: RESULT_OLD
-  Further suites: RESULT_MORE
+    without the fix (master d05429d34a8): fails, 1 of 23, with "the residual filter would order
+      its conjuncts unlike Spark's codegen, which VarkaConjunctOrder.codegenOrder no longer
+      follows"
+    with the fix: VarkaConjunctOrderSuite 23 of 23 passed
+  At 1ad2c5c5bd0 with the fix, the run's own case
+    build/sbt 'set Test/javaOptions ++= Seq("-Dvarka.fuzz.seed=20261128",
+      "-Dvarka.fuzz.compositions=400", "-Dvarka.fuzz.only=99")'
+      'catalyst/testOnly *VarkaCoverageCompositionFuzzSuite -- -z "random conjunctions"'
+    -> Tests: succeeded 20, failed 0 (the suite runs all its tests in its own JVM), and the
+       throwaway suite's 49 conjuncts no longer reach the fallback.
+  At master d05429d34a8 with the fix:
+    catalyst/testOnly *VarkaConjunctOrderSuite *VarkaCoverageCompositionFuzzSuite
+      *VarkaExpressionCompilerSuite, -Dvarka.fuzz.seed=20261128 -Dvarka.fuzz.compositions=400
+      -> composition fuzzer 20 of 20, VarkaConjunctOrderSuite 23 of 23, run total 212 of 212
+    after the review round: VarkaConjunctOrderSuite 23 of 23, sql/testOnly *VarkaDifferentialSuite
+      37 of 37
+
+Review (/code-review high) and what changed after it
+  Taken: the results file is named for row 386; the test's comment lists the conjuncts in
+  written order and then codegen's; the fallback's comment no longer calls it unreachable.
+  Not taken: a hand-traced shape where a fused conjunct changes the residual order only by
+  turning the NULL-conjunct flag on; built as written (NOT (year(d) = 2021 AND i > 0),
+  (l2 + 1) > 0 fused, isnotnull(l + 1), coalesce(l + 1, 0) > CAST(year(CAST(ntz AS DATE)) AS
+  BIGINT)) the order-rule rounds demote the fused conjunct as NULL-able first and the fallback
+  is not reached. Demoting only the order's puller on Spark's side, and not also every fused
+  reader of the column, would keep more fused but changes the rule's existing behaviour; left.

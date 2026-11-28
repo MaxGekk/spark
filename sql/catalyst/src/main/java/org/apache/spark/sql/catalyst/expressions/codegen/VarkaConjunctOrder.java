@@ -364,10 +364,11 @@ public final class VarkaConjunctOrder {
       }
     }
     if (unexplained && !changed) {
-      // Unreachable while codegenOrder ports Spark's algorithm and the split is settled by the
-      // rounds above, as every call here is: the two sides can differ only in null tests, and the
-      // fused conjuncts that pull one are what moves it. Should the port drift, nothing stays
-      // fused, under a reason no suite takes for a composition decline.
+      // Reached only when a difference has no puller the search above knows. With the split
+      // settled by the rounds above, as every call here is, the two sides differ only in null
+      // tests, and a fused conjunct that pulls one is what moves it; a placement of codegen's
+      // that the search misses, or a drifted port, ends here. Nothing then stays fused, under a
+      // reason no suite takes for a composition decline, so a fuzzer that meets it fails.
       for (int f = 0; f < conjuncts.size(); f++) {
         if (isFused[f]) {
           isFused[f] = false;

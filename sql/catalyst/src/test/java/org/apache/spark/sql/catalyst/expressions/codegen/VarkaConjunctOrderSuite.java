@@ -351,10 +351,11 @@ public final class VarkaConjunctOrderSuite {
   @DisplayName("a fused conjunct that may raise after a NULL conjunct is demoted for the null test "
       + "it takes ahead of a raising residual conjunct, though it reads no column of it")
   void precedingNullTestPuller() {
-    // The nightly composition fuzzer's seed 20261128, iteration 99, shrunk. Codegen runs
-    // isnotnull(l), NOT (year(d) = 2021 AND i > 0), which can be NULL, then
-    // coalesce(l2 + 1, 0) >= 0 (fused), which may raise and so takes the null test written before
-    // it along: the order is 1, 0, 2, 3, and a row whose l is null never reaches
+    // The nightly composition fuzzer's seed 20261128, iteration 99, shrunk. The conjuncts are
+    // isnotnull(l), NOT (year(d) = 2021 AND i > 0), which can be NULL, coalesce(l2 + 1, 0) >= 0
+    // (fused) and year(CAST(ntz AS DATE)) = 2021. Codegen runs the NOT first; the coalesce may
+    // raise, so after that NULL-able conjunct it takes the null test written before it along:
+    // the order is 1, 0, 2, 3, and a row whose l is null never reaches
     // year(CAST(ntz AS DATE)) = 2021. Varka counts that conjunct able to raise, but Spark does not
     // (its cast is total), so the residual filter, without the coalesce, leaves isnotnull(l) to
     // the end. The coalesce reads no l, so only its place in codegen's order shows that it moved

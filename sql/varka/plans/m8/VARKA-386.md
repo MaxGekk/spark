@@ -394,7 +394,6 @@ step by step against the merged `generatePredicateCode` and found it to match.
 6. **The m7 row 380 pointer (9 item 2) waits for the merge**, since the switch leaves the
    nightly only when this branch lands.
 
-
 ## 12. A puller the rule did not know (28 November 2026)
 
 The nightly composition fuzzer's seed 20261128, iteration 99, on fork run 46142034135 (code of
@@ -410,5 +409,5 @@ found. 2.3 missed this third placement. The rule now also counts as a puller the
 test is placed just before in Spark's codegen order (`placedBefore`). The decline cost fusion and
 no answer. At master `d05429d34a8` the same iteration passes because row 697's chain cap leaves
 nothing residual that raises there. The record and the reproduction are
-`results/VARKA-fuzz-20261128.txt`; the shrunk shape is `VarkaConjunctOrderSuite`'s
+`results/VARKA-386-fuzz-20261128.txt`; the shrunk shape is `VarkaConjunctOrderSuite`'s
 `precedingNullTestPuller`.
