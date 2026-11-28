@@ -180,6 +180,9 @@ def selftest():
 
 if __name__ == "__main__":
     args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        sys.exit(0)
     if args == ["--selftest"]:
         selftest()
         sys.exit(0)

@@ -26,7 +26,24 @@
 #   dev/varka_emit.sh "year(d)" "month(d)" "add_months(d, 1)" --table \
 #     --variant neriSchneiderMonth=false
 #   dev/varka_emit.sh "second(t)" --columns t:time --asm --width=16   # 128-bit species
+#   dev/varka_emit.sh "date_add(d, 7)" --columns d:date --bytecode     # javap's listing too
+#   dev/varka_emit.sh "hour(ntz)" --columns ntz:timestamp_ntz
 #   dev/varka_emit.sh --replay /tmp/varka-reproductions/varka-repro-<hash>-<kind>-pid<pid>-<token>.txt
+#
+# --columns NAME:TYPE,... names the columns the expressions read; the default is
+# d:date,d2:date,i:int,sh:short,by:byte,ymm:ymm,ymy:ymy,ym:ym. Every TYPE spelling
+# (VarkaEmitDump.columnType), an alias in brackets:
+#   boolean (bool), byte (tinyint), short (smallint), int (integer), bigint (long),
+#   float (real), double, decPsS for DECIMAL(P, S) (dec38s2: a comma would split the list),
+#   date, timestamp_ntz, time or time(P) for TIME(P), ymm (interval month),
+#   ymy (interval year), ym (interval year to month), dt (interval day to second).
+# The session-zone TIMESTAMP has no spelling yet. An alias with a space needs the list quoted.
+#
+# --bytecode also writes the emitted class to target/varka-emit/VarkaFusedDump-XXXXXX.class, a
+# name mktemp makes unique, and prints its listing, `javap -c -p` of it (javap from
+# $JAVA_HOME/bin, else from PATH), after the report. The class is the dump's own emission of the
+# expressions, under the given options. It takes one projection, so --table, which reports on
+# each expression alone, refuses it.
 #
 # --replay FILE replays a reproduction file a Varka kernel failure wrote (VARKA-315): it
 # rebuilds the kernel from the file's IR and options, walks the failing path - the verification,
@@ -91,10 +108,11 @@ if [ "${1:-}" = "--replay" ]; then
   exit $?
 fi
 cd "$root"
-asm=0; width=""; pass=(); jvm=""
+asm=0; width=""; pass=(); jvm=""; bytecode=0
 for a in "$@"; do
   case "$a" in
     --asm) asm=1 ;;
+    --bytecode) bytecode=1 ;;
     --width=*) width="${a#--width=}" ;;
     --jvm-arg=*)
       # The flag is pasted into a Scala string literal of an sbt `set`, so it cannot hold one.
@@ -110,6 +128,33 @@ bindings() {
   sed -E 's/^\[info\] ?//' "$1" | grep -E '^DEBUG: VectorMathLibrary: [A-Z0-9]+ \S+ => 0x' || true
 }
 [ "${#pass[@]}" -gt 0 ] || { usage; }
+classfile=""
+if [ "$bytecode" -eq 1 ]; then
+  for a in "${pass[@]}"; do
+    if [ "$a" = --table ]; then
+      echo "--bytecode lists the one class of a projection; --table reports on each expression" \
+        "alone: drop one of the two" >&2
+      exit 2
+    fi
+  done
+  mkdir -p target/varka-emit
+  # mktemp makes the name unique, so two runs never list each other's class; the file it makes
+  # is empty until the dump writes the class into it.
+  classfile="$(mktemp --suffix=.class "$root/target/varka-emit/VarkaFusedDump-XXXXXX")" || exit 2
+  pass+=(--class-file "$classfile")
+fi
+# The emitted class's listing, under --bytecode; none when the emitter declined.
+listing() {
+  [ "$bytecode" -eq 1 ] || return 0
+  if [ ! -s "$classfile" ]; then
+    rm -f "$classfile"
+    echo "no class was written: nothing was emitted, so there is no bytecode to list" >&2
+    return 1
+  fi
+  echo
+  echo "== the emitted class, javap -c -p $classfile =="
+  "${JAVA_HOME:+$JAVA_HOME/bin/}javap" -c -p "$classfile"
+}
 # sbt splits runMain's argument string on spaces; keep each expression one token.
 quoted=""
 for a in "${pass[@]}"; do quoted+=" \"$a\""; done
@@ -140,7 +185,8 @@ if [ "$asm" -eq 0 ]; then
   fi
   printf '%s\n' "$report"
   bindings "$log"
-  exit 0
+  listing
+  exit $?
 fi
 
 arch="$(uname -m | sed 's/x86_64/amd64/')"
@@ -179,3 +225,4 @@ sed -E 's/^\[info\] ?//' "$log" | awk '
     for (i = 1; i <= length(f); i++) if (f[i] ~ /^[a-z][a-z0-9.]*$/) { m[f[i]]++; break }
   }
   END { for (k in m) printf "%6d %s\n", m[k], k }' | sort -rn | head -25
+listing

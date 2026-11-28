@@ -28,6 +28,8 @@
 #   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
 #   dev/varka_matrix.sh --all --shard 3/18 -j 2        # shard 3 of 18, split by measured time
 #   dev/varka_matrix.sh --module sql --config cse=false --sbt-arg -Phive   # as the PR job runs
+#   dev/varka_matrix.sh --module catalyst --config methodByteBudget=0 \
+#     --suites VarkaEmitterLongLaneSuite --test "TEXT"   # one test of one unit
 #   dev/varka_matrix.sh --defaults --split 4 -j 8 --jvm-arg -XX:MaxVectorSize=16   # as the gate
 #
 # The gate's options (VARKA-286): --defaults runs no configuration, only the defaults, over
@@ -51,6 +53,15 @@
 # one job report on them all; --leaf-suffix S names this run's JVM directories <module>-S, so the
 # shares of one configuration land side by side when their runs/ directories are merged; and
 # --report-only DIR reports on the merged DIR/runs and runs nothing.
+#
+# One test (VARKA-707): --test TEXT runs, in every suite the run takes, only the tests whose name
+# contains TEXT, as ScalaTest's -z does; VarkaSuiteRunner applies it to the JUnit suites too.
+# The defaults run beside the configuration under the same filter. With --suites naming the one
+# suite, a CI unit "configuration|module|suite" shrinks to its failing test. A --test run files
+# its JVMs under runs-test/, not runs/, so that its partial JUnit times never weigh a later
+# --split: the test's output is in target/varka-matrix/runs-test/<configuration>/<module>[-<k>]/
+# run.log, its JUnit XML in junit/ there. A configuration that ran no test fails the run: TEXT
+# matched no test name in the suites it took.
 #
 # A platform run (VARKA-505): --platform NAME, with --defaults and --jvm-arg flags, runs the
 # defaults under a fixed instruction set and files the runs under runs/NAME, so that the report lists it
@@ -96,6 +107,7 @@ jvm_args=()
 sanitize=1
 build_dir=""
 only_suites=""
+test_filter=""
 skip_suites=""
 extra_suites=()
 defaults_from=""
@@ -149,6 +161,7 @@ while [ $# -gt 0 ]; do
     --out) OUT=$(realpath -m "$2"); shift 2 ;;
     --build-dir) build_dir=$(realpath -m "$2"); shift 2 ;;
     --suites) only_suites="$2"; shift 2 ;;
+    --test) test_filter="$2"; shift 2 ;;
     --skip-suites) skip_suites="$2"; shift 2 ;;
     --extra-suite) extra_suites+=("$2"); shift 2 ;;
     --defaults-from) defaults_from=$(realpath -m "$2"); shift 2 ;;
@@ -166,6 +179,9 @@ if [ -n "$report_only" ]; then
   report "$report_only/runs"
   exit $?
 fi
+# The JVMs' directories of this run; a --test run's own, which --split never reads.
+RUNS=$OUT/runs
+[ -n "$test_filter" ] && RUNS=$OUT/runs-test
 
 # Suites whose subject is the defaults or the machine rather than an answer, so a configuration
 # breaks them by construction, and suites that do all their work in a JVM they start without the
@@ -407,7 +423,7 @@ run_one() {
   local leaf=$module
   [ -n "$leaf_suffix" ] && leaf=$module-$leaf_suffix
   [ "$(wc -l < "$OUT/shards/$module")" -gt 1 ] && leaf=$leaf-$part
-  local dir=$OUT/runs/${name//[^A-Za-z0-9=_.-]/_}/$leaf
+  local dir=$RUNS/${name//[^A-Za-z0-9=_.-]/_}/$leaf
   local -a suites=() own=()
   local suite line
   line=$(sed -n "$((part + 1))p" "$OUT/shards/$module")
@@ -416,7 +432,11 @@ run_one() {
     mapfile -t own < <(own_jvm_flags "$module" "$line")
     own+=(-Dvarka.ownJvm=true)
   fi
-  for suite in $line; do suites+=(-s "$suite"); done
+  for suite in $line; do
+    suites+=(-s "$suite")
+    # The runner's -z applies to the -s it follows, so each suite gets its own.
+    [ -n "$test_filter" ] && suites+=(-z "$test_filter")
+  done
   rm -rf "$dir"; mkdir -p "$dir/tmp"
   local start; start=$(date +%s)
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 java "${OPTS[@]}" "${own[@]}" \
@@ -440,9 +460,9 @@ may_launch() {
 
 # Each configuration's JVMs in the background, at most $jobs at once; the defaults first. The
 # SQL suites take the longer, so each configuration starts them first.
-rm -rf "$OUT/runs"
-mkdir -p "$OUT/runs"
-echo "${modules[*]}" > "$OUT/runs/modules"
+rm -rf "$RUNS"
+mkdir -p "$RUNS"
+echo "${modules[*]}" > "$RUNS/modules"
 all=("" "${configs[@]}")
 if [ "$runs_only" = 1 ]; then
   # A share of a fanned-out run: the defaults are their own share, so only one of the two runs.
@@ -450,7 +470,7 @@ if [ "$runs_only" = 1 ]; then
 elif [ -n "$defaults_from" ]; then
   [ -d "$defaults_from/runs/defaults" ] || {
     echo "no defaults run under $defaults_from" >&2; exit 1; }
-  cp -r "$defaults_from/runs/defaults" "$OUT/runs/defaults"
+  cp -r "$defaults_from/runs/defaults" "$RUNS/defaults"
   all=("${configs[@]}")
 fi
 running=0
@@ -467,14 +487,33 @@ for config in "${all[@]}"; do
 done
 wait
 
+# Under --test, a configuration whose JVMs ran no test at all matched nothing: a misspelt text,
+# or a test of another suite. Its runner exits 0, so the check is here, over the Tests: lines.
+unmatched=0
+if [ -n "$test_filter" ]; then
+  for d in "$RUNS"/*/; do
+    [ -f "$d/name" ] || continue
+    ran=$(cat "$d"/*/run.log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+      | grep -oE 'Tests: succeeded [0-9]+, failed [0-9]+, canceled [0-9]+' \
+      | awk '{ gsub(",", ""); n += $3 + $5 + $7 } END { print n + 0 }')
+    if [ "$ran" -eq 0 ]; then
+      echo "--test \"$test_filter\" ran 0 tests under $(cat "$d/name"): no test name in its" \
+        "suites contains that text" >&2
+      unmatched=1
+    fi
+  done
+fi
+
 if [ "$runs_only" = 1 ]; then
   # The share's own status: a JVM that failed or never wrote its exit code fails it. The report
   # and the declining check run over the merged runs (--report-only).
-  status=0
+  status=$unmatched
   while IFS= read -r f; do
     [ "$(cat "$f")" = 0 ] || status=1
-  done < <(find "$OUT/runs" -name exit)
+  done < <(find "$RUNS" -name exit)
   exit "$status"
 fi
-report "$OUT/runs"
-exit $?
+report "$RUNS"
+status=$?
+[ "$unmatched" = 0 ] || status=1
+exit "$status"

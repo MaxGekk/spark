@@ -2053,6 +2053,10 @@ def end_to_end(expect):
 
 
 def main(argv):
+    # Not for git's own call of the driver, whose four arguments are file names.
+    if not (len(argv) == 6 and argv[1] == "driver") and ("-h" in argv or "--help" in argv):
+        print(__doc__)
+        return 0
     if len(argv) == 6 and argv[1] == "driver":
         return driver(*argv[2:])
     if argv[1:] in (["--check"], ["--check", "--no-audit"]):

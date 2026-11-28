@@ -27,6 +27,25 @@ import collections
 import re
 import sys
 
+
+def _usage():
+    """Print this file's header comment, the way the shell tools answer --help: the comment
+    lines after the license block, found by its last line, not by a line number."""
+    lines = open(__file__, encoding="utf-8").read().splitlines()
+    header = []
+    for line in lines[lines.index("# limitations under the License.") + 1 :]:
+        if not line.startswith("#"):
+            break
+        if header or line.strip("#").strip():
+            header.append(line[2:])
+    print("\n".join(header))
+
+
+if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+    _usage()
+    sys.exit(0)
+
+
 events = sys.stdin.read().split("jdk.ExecutionSample")[1:]
 total = len(events)
 in_hash = in_equals = 0

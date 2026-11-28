@@ -883,7 +883,9 @@ def selftest():
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help"):
+    # `-h` or `--help` anywhere prints the usage: after a subcommand too, as in `pr --help`,
+    # which would otherwise be read as that subcommand's options.
+    if not argv or "-h" in argv or "--help" in argv:
         print(__doc__)
         return 0 if argv else 2
     if argv[0] == "--selftest":
