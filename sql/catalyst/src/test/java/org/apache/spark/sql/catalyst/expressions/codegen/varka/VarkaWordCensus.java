@@ -165,6 +165,7 @@ public final class VarkaWordCensus {
       case Fma x -> andW(andW(pure(x.a(), coalesce, absorb), pure(x.b(), coalesce, absorb),
           absorb), pure(x.c(), coalesce, absorb), absorb);
       case RoundToIntegral x -> pure(x.child(), coalesce, absorb);
+      case RoundToScale x -> pure(x.child(), coalesce, absorb);
       case CanonicalFloat x -> pure(x.child(), coalesce, absorb);
       case CanonicalBits x -> pure(x.child(), coalesce, absorb);
       // A hash step skips a null word: its validity is its seed's.

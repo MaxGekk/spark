@@ -266,6 +266,8 @@ public final class VarkaCanonicalIr {
       case "math" -> new MathUnary(MathFn.valueOf(parts[1]), node());
       case "fma" -> new Fma(node(), node(), node());
       case "round" -> new RoundToIntegral(RoundMode.valueOf(parts[1]), node());
+      case "roundScale" -> new RoundToScale(ScaleMode.valueOf(parts[1]),
+          Integer.parseInt(parts[2]), node(), ScaleOut.valueOf(parts[3]));
       case "canon" -> CanonicalFloat.of(node());
       case "canonBits" -> new CanonicalBits(node());
       case "hash" -> new HashStep(HashMix.valueOf(parts[1]), node(), node());

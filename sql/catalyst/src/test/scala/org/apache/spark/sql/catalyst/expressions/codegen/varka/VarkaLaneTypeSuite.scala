@@ -127,7 +127,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // slot and refuses an int child (VARKA-157), and the conversion, one side of which is
     // floating (VARKA-343), as is the reinterpretation's (VARKA-345).
     assert(everyIntNode.map(_.getClass).toSet + classOf[WidenLane] + classOf[MathUnary] +
-      classOf[Fma] + classOf[RoundToIntegral] + classOf[CanonicalFloat] +
+      classOf[Fma] + classOf[RoundToIntegral] + classOf[RoundToScale] + classOf[CanonicalFloat] +
       classOf[DecimalColumn] + classOf[DecimalWord] + classOf[WidenDecimal] +
       classOf[VarkaVectorIR.InterleaveDecimal] + classOf[ConvertLane] + classOf[ReinterpretLane] ===
       concreteNodeTypes(classOf[VarkaVectorIR]) - classOf[CrossLane]) // its child: another lane
@@ -517,6 +517,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
         case "MathUnary" => new MathUnary(MathFn.SQRT, c)
         case "Fma" => new Fma(c, l, c)
         case "RoundToIntegral" => new RoundToIntegral(RoundMode.RINT, c)
+        case "RoundToScale" => new RoundToScale(ScaleMode.HALF_UP, 2, c, ScaleOut.DOUBLE)
         case "CanonicalFloat" => CanonicalFloat.of(c)
         // A hash step on the lane's own primitive, and a canonical floating value's bits at the
         // integral lane of its width (VARKA-337).
@@ -559,7 +560,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
     val atLong = buildable.filter(_._1 == LaneType.LONG).map(_._2).toSet
     val atInt = buildable.filter(_._1 == LaneType.INT).map(_._2).toSet
-    assert(atInt + "MathUnary" + "Fma" + "RoundToIntegral" + "CanonicalFloat" ===
+    assert(atInt + "MathUnary" + "Fma" + "RoundToIntegral" + "RoundToScale" + "CanonicalFloat" ===
       types.map(_.getSimpleName).toSet - "DecimalColumn" - "DecimalWord",
       "every integral node type is emittable at INT but the decimal column and the decimal word")
     val sqrt = new MathUnary(MathFn.SQRT, new ColumnRef(0, LaneType.DOUBLE))

@@ -393,6 +393,11 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       (new HashStep(HashMix.MURMUR3_HIGH, l, c), 1, 1, VarkaMatrix.base),
       (new HashStep(HashMix.XXH64_INT, lc1, lc), 2, 0, VarkaMatrix.base),
       (new HashStep(HashMix.XXH64_LONG, lc1, lc), 2, 0, VarkaMatrix.base),
+      // Each mode's tie test, with the band's guard at scale 2 and without one at scale 0.
+      (new RoundToScale(ScaleMode.HALF_UP, 2, dc, ScaleOut.DOUBLE), 1, 0, VarkaMatrix.base),
+      (new RoundToScale(ScaleMode.HALF_EVEN, 2, dc, ScaleOut.DOUBLE), 1, 0, VarkaMatrix.base),
+      (new RoundToScale(ScaleMode.DOWN, 2, dc, ScaleOut.DOUBLE), 1, 0, VarkaMatrix.base),
+      (new RoundToScale(ScaleMode.HALF_UP, 0, dc, ScaleOut.DOUBLE), 1, 0, VarkaMatrix.base),
       (new IntArith(IntOp.DIV, Overflow.WRAP, dc, dc1), 2, 0, VarkaMatrix.base),
       (new IntArith(IntOp.DIV, Overflow.NULL, dc, dc1), 2, 0, VarkaMatrix.base),
       (new IntArith(IntOp.DIV, Overflow.FAIL, dc, dc1), 2, 0, VarkaMatrix.base),

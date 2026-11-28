@@ -59,6 +59,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Mat
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToIntegral;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToScale;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
@@ -402,6 +403,7 @@ public final class VarkaRangeAnalysis {
       case MathUnary n -> VarkaValueRange.UNKNOWN;
       case Fma n -> VarkaValueRange.UNKNOWN;
       case RoundToIntegral n -> VarkaValueRange.UNKNOWN;
+      case RoundToScale n -> VarkaValueRange.UNKNOWN;
       case CanonicalFloat n -> VarkaValueRange.UNKNOWN;
       // The bits of a float and a hash step span their whole lanes.
       case VarkaVectorIR.CanonicalBits n -> VarkaValueRange.UNKNOWN;

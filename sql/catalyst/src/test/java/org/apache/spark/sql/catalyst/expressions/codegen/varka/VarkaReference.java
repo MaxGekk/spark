@@ -179,6 +179,8 @@ public final class VarkaReference {
       case Fma n -> floatFma(n, row, isNull, lits);
       case RoundToIntegral n -> throw VarkaErrors.illegalArgument(
           "a rounding takes a double child, which is no int-lane value: " + n);
+      case RoundToScale n -> throw VarkaErrors.illegalArgument(
+          "a rounding to a scale answers a double, which is no int-lane value: " + n);
       // Spark's own normaliser, NormalizeNaNAndZero's, so the reference is not the lowering.
       case CanonicalFloat n -> map(n.child(), row, isNull, lits,
           v -> Float.floatToRawIntBits((Float) NormalizeFloatingNumbers$.MODULE$
@@ -537,6 +539,27 @@ public final class VarkaReference {
         double v = Double.longBitsToDouble(c.getAsLong());
         yield OptionalLong.of(Double.doubleToRawLongBits(
             Double.isNaN(v) ? Double.NaN : StrictMath.rint(v)));
+      }
+      // Spark's own calls (RoundBase's generated code): the shortest decimal by
+      // BigDecimal.valueOf, setScale in the mode, doubleValue; NaN and the infinities as they
+      // are. A lane in the node's band is one whose batch the kernel declines, answered here as
+      // the row engine answers it.
+      case RoundToScale n -> {
+        var c = longValue(n.child(), row, isNull, lits);
+        if (c.isEmpty()) {
+          yield c;
+        }
+        double v = Double.longBitsToDouble(c.getAsLong());
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+          yield c;
+        }
+        java.math.RoundingMode mode = switch (n.mode()) {
+          case HALF_UP -> java.math.RoundingMode.HALF_UP;
+          case HALF_EVEN -> java.math.RoundingMode.HALF_EVEN;
+          case DOWN -> java.math.RoundingMode.DOWN;
+        };
+        yield OptionalLong.of(Double.doubleToRawLongBits(java.math.BigDecimal.valueOf(v)
+            .setScale(n.scale(), mode).doubleValue()));
       }
       case CanonicalBits n -> {
         OptionalLong c = longValue(n.child(), row, isNull, lits);

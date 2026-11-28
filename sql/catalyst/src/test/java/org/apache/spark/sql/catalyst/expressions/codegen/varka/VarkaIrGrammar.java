@@ -70,6 +70,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Mat
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToIntegral;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToScale;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
@@ -412,6 +413,7 @@ public final class VarkaIrGrammar {
       case MathUnary n -> throw new IllegalArgumentException("a floating node: " + n);
       case Fma n -> throw new IllegalArgumentException("a floating node: " + n);
       case RoundToIntegral n -> throw new IllegalArgumentException("a floating node: " + n);
+      case RoundToScale n -> throw new IllegalArgumentException("a floating node: " + n);
       case CanonicalFloat n -> throw new IllegalArgumentException("a floating node: " + n);
       case VarkaVectorIR.CanonicalBits n -> throw new IllegalArgumentException(
           "the bits of a floating node: " + n);

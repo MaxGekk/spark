@@ -138,6 +138,9 @@ public final class VarkaReproductionSuite {
         // The rint construction's node over a double column (VARKA-344).
         new VarkaVectorIR.RoundToIntegral(VarkaVectorIR.RoundMode.RINT,
             new ColumnRef(0, LaneType.DOUBLE)),
+        // A double's rounding to a scale, the shortest decimal's (VARKA-346).
+        new VarkaVectorIR.RoundToScale(VarkaVectorIR.ScaleMode.HALF_EVEN, 2,
+            new ColumnRef(0, LaneType.DOUBLE), VarkaVectorIR.ScaleOut.DOUBLE),
         // The canonicalisation over a float sum (VARKA-337).
         VarkaVectorIR.CanonicalFloat.of(new IntArith(IntOp.ADD, Overflow.WRAP,
             new ColumnRef(0, LaneType.FLOAT), new LiteralSlot(0, LaneType.FLOAT))),

@@ -1221,7 +1221,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val missing = permitted -- seen - "NarrowLane" - "WidenLane" - "NullSafeEqual" -
       "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
       "BoolOutput" - "DecimalColumn" - "DecimalWord" - "NullValue" - "WidenDecimal" - "MathUnary" -
-      "Fma" - "RoundToIntegral" - "InterleaveDecimal" - "CanonicalFloat" - "HashStep" -
+      "Fma" - "RoundToIntegral" - "RoundToScale" - "InterleaveDecimal" - "CanonicalFloat" -
+      "HashStep" -
       "CanonicalBits" - "ConvertLane" - "CrossLane" - "ReinterpretLane"
     assert(missing.isEmpty,
       s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +

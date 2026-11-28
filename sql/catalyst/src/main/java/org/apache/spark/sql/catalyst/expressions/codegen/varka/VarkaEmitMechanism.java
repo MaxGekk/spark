@@ -79,6 +79,7 @@ enum VarkaEmitMechanism {
   GUARD_VALUE_RANGE(Family.GUARDS, "a re-armed value range guard"),
   GUARD_DIVIDE_BY_ZERO(Family.GUARDS, "a guard on a floating division's zero divisor"),
   GUARD_DECIMAL_SLOT(Family.GUARDS, "a decimal column's check of its slots' high words and digits"),
+  GUARD_ROUNDING_BAND(Family.GUARDS, "a guard on a double's rounding to a scale, its band"),
   GUARD_UNDER_ARM(Family.GUARDS, "a guard qualified by the IfElse arms its node sits under"),
   GUARD_EXACT_STATUS(Family.GUARDS, "a body folding two or more reasons into masks of their own"),
   GUARD_MIN_MAX(Family.GUARDS,
@@ -130,6 +131,7 @@ enum VarkaEmitMechanism {
       case VALUE_RANGE -> GUARD_VALUE_RANGE;
       case DIVIDE_BY_ZERO -> GUARD_DIVIDE_BY_ZERO;
       case DECIMAL_SLOT -> GUARD_DECIMAL_SLOT;
+      case ROUNDING_BAND -> GUARD_ROUNDING_BAND;
     };
   }
 }

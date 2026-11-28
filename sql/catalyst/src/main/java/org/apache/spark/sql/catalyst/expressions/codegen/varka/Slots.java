@@ -85,6 +85,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Mat
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToIntegral;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToScale;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
@@ -215,7 +216,8 @@ final class Slots {
 
   /**
    * The scratch local of a {@link RoundToIntegral}: its operand, read three times by the 2^52
-   * construction and twice more by the NaN's compare where it is emitted.
+   * construction and twice more by the NaN's compare where it is emitted. A {@link RoundToScale}
+   * parks four here ({@code VarkaScaleRoundingLowering#emit}).
    */
   final Map<VarkaVectorIR, int[]> roundTmp = new HashMap<>();
 
@@ -1044,6 +1046,13 @@ final class Slots {
           if (node instanceof RoundToIntegral) {
             s.roundTmp.put(node, new int[] {slot++});
           }
+          if (node instanceof RoundToScale) {
+            int[] tmp = new int[VarkaScaleRoundingLowering.SCRATCH];
+            for (int k = 0; k < tmp.length; k++) {
+              tmp[k] = slot++;
+            }
+            s.roundTmp.put(node, tmp);
+          }
           if (node instanceof CanonicalFloat) {
             s.canonTmp.put(node, new int[] {slot++});
           }
@@ -1723,6 +1732,7 @@ final class Slots {
         case MathUnary x -> { }
         case Fma x -> { }
         case RoundToIntegral x -> { }
+        case RoundToScale x -> { }
         case CanonicalFloat x -> { }
         case CanonicalBits x -> { }
         // The null skip blends by the word's validity, so that word has to survive.

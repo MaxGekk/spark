@@ -80,6 +80,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Mat
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToIntegral;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToScale;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
@@ -387,7 +388,14 @@ final class Analysis {
      * Spark may raise on. Unconditional, as the range guards are. It parks its low words while
      * it compares them.
      */
-    DECIMAL_SLOT(Family.REARMED, true, VarkaFusedKernel.STATUS_DECIMAL_SLOT);
+    DECIMAL_SLOT(Family.REARMED, true, VarkaFusedKernel.STATUS_DECIMAL_SLOT),
+    /**
+     * {@link RoundToScale}: a live lane in its scale's band, a non-integral magnitude between the
+     * bound below which the lowering computes the answer and the one from which the answer is
+     * the operand (VARKA-346). The node's own correctness, so never behind an option. It reads
+     * the magnitude out of its own scratch locals, so it parks nothing.
+     */
+    ROUNDING_BAND(Family.SELF, false, VarkaFusedKernel.STATUS_ROUNDING_BAND);
 
     final Family family;
     final boolean parksValue;
@@ -1020,6 +1028,11 @@ final class Analysis {
         case MathUnary n -> { }
         case Fma n -> { }
         case RoundToIntegral n -> { }
+        case RoundToScale n -> {
+          if (VarkaScaleRoundingLowering.hasBand(n.scale())) {
+            refuse(node, Refusal.ROUNDING_BAND);
+          }
+        }
         case CanonicalFloat n -> { }
         case CanonicalBits n -> { }
         case HashStep n -> { }
@@ -1762,6 +1775,7 @@ final class Analysis {
       // So does the fused multiply-add, over its three operands.
       case Fma n -> analyzeOp(node, false, n.a(), n.b(), n.c());
       case RoundToIntegral n -> analyzeOp(node, false, n.child());
+      case RoundToScale n -> analyzeOp(node, false, n.child());
       case CanonicalFloat n -> analyzeOp(node, false, n.child());
       case CanonicalBits n -> analyzeOp(node, false, n.child());
       // Known over a null word, the seed passing through: a null-skipping node.

@@ -103,6 +103,12 @@ public interface VarkaFusedKernel {
   int STATUS_DIVIDE_BY_ZERO = 1 << 7;
 
   /**
+   * A live lane of a {@code round}, {@code bround} or {@code truncate} of a double in its scale's
+   * declined band, a non-integral value whose shortest decimal no lane selects (VARKA-346).
+   */
+  int STATUS_ROUNDING_BAND = 1 << 8;
+
+  /**
    * Runs the fused loop over one batch.
    *
    * @param srcData address of each input column's values, by ordinal - int32 at this entry

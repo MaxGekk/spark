@@ -478,6 +478,9 @@ public final class VarkaGuardSpecs {
       // answers it first, and the slot table of VarkaDecimalLoadSuite is its oracle.
       case DECIMAL_SLOT ->
           throw new IllegalArgumentException("no guard spec for a decimal slot on " + node);
+      // The band is a set of doubles, not a range of integers: fires() reads it first.
+      case ROUNDING_BAND -> throw new IllegalArgumentException(
+          "a rounding band has no integer bound: " + node);
     };
     BigInteger lo = b[0];
     BigInteger hi = b[1];
@@ -501,6 +504,11 @@ public final class VarkaGuardSpecs {
    */
   private static boolean fires(VarkaVectorIR node, Analysis.Refusal reason, Values values,
       boolean isLong, List<Shift> shifts) {
+    if (reason == Analysis.Refusal.ROUNDING_BAND) {
+      BigInteger v = values.value(((RoundToScale) node).child());
+      return v != null && VarkaScaleRoundingLowering.inBand(((RoundToScale) node).scale(),
+          Math.abs(Double.longBitsToDouble(v.longValue())));
+    }
     if (reason == Analysis.Refusal.DIVIDE_BY_ZERO) {
       return zeroDivisor((IntArith) node, values);
     }
@@ -551,8 +559,8 @@ public final class VarkaGuardSpecs {
       case ColumnRef _, DecimalColumn _, VarkaVectorIR.DecimalWord _, LiteralSlot _, DateDiff _,
           IfElse _, Greatest _, Least _,
           DayOfWeek _, WeekDay _, DayOfWeekIso _, NextDay _, ThursdayOf _, Chrono _, ConstDivide _,
-          BoundedDivide _, BitOp _, BitCount _, MathUnary _, Fma _, RoundToIntegral _, Cond _,
-          CondValue _,
+          BoundedDivide _, BitOp _, BitCount _, MathUnary _, Fma _, RoundToIntegral _,
+          RoundToScale _, Cond _, CondValue _,
           VarkaVectorIR.NullValue _, BoolOutput _, WidenLane _, NarrowLane _, ConvertLane _,
           ReinterpretLane _,
           WidenDecimal _, VarkaVectorIR.InterleaveDecimal _, CanonicalFloat _, CanonicalBits _,

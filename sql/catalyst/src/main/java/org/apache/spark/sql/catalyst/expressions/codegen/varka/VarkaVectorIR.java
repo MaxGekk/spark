@@ -97,7 +97,8 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.ConstDivide,
             VarkaVectorIR.BoundedDivide, VarkaVectorIR.BitOp, VarkaVectorIR.BitCount,
             VarkaVectorIR.MathUnary, VarkaVectorIR.Fma, VarkaVectorIR.RoundToIntegral,
-            VarkaVectorIR.Cond, VarkaVectorIR.CanonicalFloat, VarkaVectorIR.CanonicalBits,
+            VarkaVectorIR.RoundToScale, VarkaVectorIR.Cond, VarkaVectorIR.CanonicalFloat,
+            VarkaVectorIR.CanonicalBits,
             VarkaVectorIR.HashStep,
             VarkaVectorIR.GuardedDay, VarkaVectorIR.GuardedRange, VarkaVectorIR.WidenLane,
             VarkaVectorIR.ConvertLane, VarkaVectorIR.ReinterpretLane,
@@ -197,6 +198,7 @@ public sealed interface VarkaVectorIR
       case MathUnary n -> n.child().laneType();
       case Fma n -> n.a().laneType();
       case RoundToIntegral n -> n.child().laneType();
+      case RoundToScale n -> LaneType.DOUBLE;
       case CanonicalFloat n -> n.child().laneType();
       case CanonicalBits n -> n.lane();
       case HashStep n -> n.mix().lane();
@@ -378,7 +380,8 @@ public sealed interface VarkaVectorIR
           DateDiff _, Greatest _, Least _, IfElse _, CondValue _, BoolOutput _, DayOfWeek _,
           WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _,
           DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
-          BitOp _, BitCount _, MathUnary _, Fma _, RoundToIntegral _, Compare _, NullSafeEqual _,
+          BitOp _, BitCount _, MathUnary _, Fma _, RoundToIntegral _, RoundToScale _, Compare _,
+          NullSafeEqual _,
           BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, CrossLane _,
           InRanges _, CanonicalFloat _, CanonicalBits _, HashStep _ -> {
         for (VarkaVectorIR child : childrenOf(node)) {
@@ -427,7 +430,7 @@ public sealed interface VarkaVectorIR
           ThursdayOf _, Year _,
           Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _, TruncDate _, WeekOfYear _,
           ConstDivide _, BoundedDivide _, BitOp _, BitCount _, MathUnary _, Fma _,
-          RoundToIntegral _,
+          RoundToIntegral _, RoundToScale _,
           Compare _, NullSafeEqual _, BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _,
           CrossLane _, InRanges _, CanonicalFloat _, CanonicalBits _, HashStep _ -> {
         boolean any = false;
@@ -653,6 +656,21 @@ public sealed interface VarkaVectorIR
    * lowerings that read them.
    */
   enum RoundMode { RINT }
+
+
+  /**
+   * How a {@link RoundToScale} rounds the shortest decimal to its scale: Spark's {@code round}
+   * is {@code HALF_UP}, {@code bround} {@code HALF_EVEN} and {@code truncate} {@code DOWN}, each
+   * {@code BigDecimal.setScale}'s mode of the same name.
+   */
+  enum ScaleMode { HALF_UP, HALF_EVEN, DOWN }
+
+  /**
+   * What a {@link RoundToScale} answers: {@code DOUBLE}, the rounded decimal as a double, which
+   * is {@code BigDecimal.doubleValue}. The {@code FLOAT} result, narrowed by rounding to odd, and
+   * the cast's unscaled long join it with the lowerings that build them (VARKA-346 2.6).
+   */
+  enum ScaleOut { DOUBLE }
 
   /**
    * The lane-wise bitwise operation a {@link BitOp} performs: the three logical ones and Java's
@@ -1974,6 +1992,53 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * Spark's {@code round}, {@code bround} or {@code truncate} of a double at a scale from 0 to
+   * 22: the double's shortest decimal ({@code BigDecimal.valueOf}) rounded to {@code scale}
+   * places by {@code mode}, as a double, NaN and the infinities returned as they are and a zero
+   * result always {@code +0.0}, since a {@code BigDecimal} has no negative zero. The lowering
+   * ({@code VarkaScaleRoundingLowering}) computes it exactly by IEEE operations below a bound per
+   * scale, answers the operand from a second bound up, and declines a batch holding a
+   * non-integral value between them, the band whose shortest decimal no lane selects
+   * ({@code Analysis.Refusal.ROUNDING_BAND}). Null-intolerant: the validity is the child's.
+   */
+  record RoundToScale(ScaleMode mode, int scale, VarkaVectorIR child, ScaleOut out, int hash)
+      implements VarkaVectorIR {
+    public RoundToScale {
+      Objects.requireNonNull(mode, "mode");
+      Objects.requireNonNull(out, "out");
+      if (child.laneType() != LaneType.DOUBLE) {
+        throw VarkaErrors.illegalArgument("a rounding to a scale takes a double child, not "
+            + child.laneType() + ", from a " + child.getClass().getSimpleName());
+      }
+      if (scale < 0 || scale > MAX_SCALE) {
+        throw VarkaErrors.illegalArgument("a rounding scale outside [0, " + MAX_SCALE + "]: "
+            + scale);
+      }
+      hash = hashOf(mode, scale, child, out);
+    }
+
+    /** The largest scale: {@code 10^22} is the largest power of ten exact as a double. */
+    public static final int MAX_SCALE = 22;
+
+    public RoundToScale(ScaleMode mode, int scale, VarkaVectorIR child, ScaleOut out) {
+      this(mode, scale, child, out, 0);
+    }
+    @Override public int hashCode() { return hash; }
+
+    @Override
+    public VarkaNodeProps props() {
+      // The lane calls VarkaScaleRoundingLowering.weight counts: the magnitude, its mode's tie
+      // test, the answer's division, sign, + 0.0 and blend, and, at a scale with a band, the
+      // band's compares and rint. A feature per mode and output, and per band: the guard is
+      // its own lowering. Null where the child is.
+      return new VarkaNodeProps(NEVER, false, STRICT, VarkaScaleRoundingLowering.weight(this),
+          getClass().getSimpleName() + '/' + mode + '/' + out
+              + (VarkaScaleRoundingLowering.hasBand(scale) ? "/band" : ""),
+          FILLS_NOTHING, RESTRICTS_NOTHING, LongNarrowReader.NONE);
+    }
+  }
+
+  /**
    * Spark's canonical form of a floating value, {@code NormalizeNaNAndZero}'s and the floating
    * step of {@code hash} and {@code xxhash64}: {@code -0.0} becomes {@code 0.0}, every NaN the
    * lane's canonical NaN ({@code 0x7fc00000} or {@code 0x7ff8000000000000}, the bits
@@ -3188,6 +3253,8 @@ public sealed interface VarkaVectorIR
       case Fma n -> "(fma " + kid.apply(n.a()) + " " + kid.apply(n.b()) + " "
           + kid.apply(n.c()) + ")";
       case RoundToIntegral n -> "(round:" + n.mode().name() + " " + kid.apply(n.child()) + ")";
+      case RoundToScale n -> "(roundScale:" + n.mode().name() + ":" + n.scale() + ":"
+          + n.out().name() + " " + kid.apply(n.child()) + ")";
       case CanonicalFloat n -> "(canon " + kid.apply(n.child()) + ")";
       case CanonicalBits n -> "(canonBits " + kid.apply(n.child()) + ")";
       case HashStep n -> "(hash:" + n.mix().name() + " " + kid.apply(n.seed()) + " "
@@ -3311,6 +3378,8 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.c()) + ")";
       case RoundToIntegral n ->
           "(round:" + n.mode().name() + " " + lineOf.applyAsInt(n.child()) + ")";
+      case RoundToScale n -> "(roundScale:" + n.mode().name() + ":" + n.scale() + ":"
+          + n.out().name() + " " + lineOf.applyAsInt(n.child()) + ")";
       case CanonicalFloat n -> "(canon " + lineOf.applyAsInt(n.child()) + ")";
       case CanonicalBits n -> "(canonBits " + lineOf.applyAsInt(n.child()) + ")";
       case HashStep n -> "(hash:" + n.mix().name() + " " + lineOf.applyAsInt(n.seed()) + " "
@@ -3610,6 +3679,7 @@ public sealed interface VarkaVectorIR
       case MathUnary n -> new VarkaVectorIR[] {n.child()};
       case Fma n -> new VarkaVectorIR[] {n.a(), n.b(), n.c()};
       case RoundToIntegral n -> new VarkaVectorIR[] {n.child()};
+      case RoundToScale n -> new VarkaVectorIR[] {n.child()};
       case CanonicalFloat n -> new VarkaVectorIR[] {n.child()};
       case CanonicalBits n -> new VarkaVectorIR[] {n.child()};
       case HashStep n -> new VarkaVectorIR[] {n.seed(), n.word()};
@@ -3696,6 +3766,7 @@ public sealed interface VarkaVectorIR
       case MathUnary n -> new MathUnary(n.fn(), children[0]);
       case Fma n -> new Fma(children[0], children[1], children[2]);
       case RoundToIntegral n -> new RoundToIntegral(n.mode(), children[0]);
+      case RoundToScale n -> new RoundToScale(n.mode(), n.scale(), children[0], n.out());
       case CanonicalFloat n -> CanonicalFloat.of(children[0]);
       case CanonicalBits n -> new CanonicalBits(children[0]);
       case HashStep n -> new HashStep(n.mix(), children[0], children[1]);

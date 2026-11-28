@@ -77,7 +77,8 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     // which the fdlibm ports build.
     val undrawn = permitted -- seen - "NullSafeEqual" - "BoolColumn" - "CondConst" -
       "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" - "BoolOutput" - "DecimalColumn" -
-      "DecimalWord" - "MathUnary" - "Fma" - "RoundToIntegral" - "CanonicalFloat" - "ConvertLane" -
+      "DecimalWord" - "MathUnary" - "Fma" - "RoundToIntegral" - "RoundToScale" -
+      "CanonicalFloat" - "ConvertLane" -
       "HashStep" - "CanonicalBits" - "ReinterpretLane" - "InterleaveDecimal" -
       "CrossLane" // the crossing is drawn from 343a5
     assert(undrawn.isEmpty, s"the grammars never drew: ${undrawn.toSeq.sorted.mkString(", ")}")
