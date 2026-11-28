@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 """Does every performance number quoted in the Varka documents trace to a committed
-benchmark results file? (sql/varka/AGENTS.md, "Measurements, not adjectives".)
+benchmark results file? (sql/varka/.agents/measurements.md, "Measurements, not adjectives".)
 
   dev/varka_quote_check.py              # report new orphans, exit with their count
   dev/varka_quote_check.py --all        # also list the numbers that were found
@@ -72,6 +72,8 @@ DOCS = [
     "sql/varka/Varka_MVP.md",
 ]
 DOC_GLOBS = [
+    # The detail files behind the pointers of sql/varka/AGENTS.md hold its moved sections.
+    "sql/varka/.agents/*.md",
     "sql/varka/plans/*.md",
     "sql/varka/plans/m*/*.md",
     "sql/varka/skills/*.md",

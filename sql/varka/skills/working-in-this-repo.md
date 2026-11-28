@@ -27,7 +27,7 @@ these files by `dev/varka_toc.py`.
   carry a leading `+` and a grep for `^<<<<<<<` sees none - the script's first
   version passed a conflicting PR that way.
 - Benchmark files are regenerated with `dev/varka_bench_regen.sh` and read with
-  `dev/varka_bench_diff.py`; `sql/varka/AGENTS.md`'s "Measurements" section says
+  `dev/varka_bench_diff.py`; `sql/varka/.agents/measurements.md` says
   how and why, including the committed 128-bit companion file, the machine canary
   (`dev/varka_bench_canary.sh`) the regen script runs first, and the quote check
   (`dev/varka_quote_check.py`, a gate step) that holds every quoted number to a

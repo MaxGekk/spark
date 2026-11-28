@@ -1380,7 +1380,7 @@ reason; no check is turned off for the whole pass.
 ## A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines
 
 VARKA-312. A catalyst suite can be a JUnit 5 class, and since then a new one whose helpers are
-Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
+Java is one (`sql/varka/.agents/java.md`). What to know when writing and running one:
 
 - **The class takes `@VarkaSuite`, each test a `@DisplayName` sentence.** The annotation registers
   `VarkaSuiteExtension`, the JUnit face of what `VarkaTestWatchdog` gives a ScalaTest suite: the

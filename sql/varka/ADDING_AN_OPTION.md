@@ -98,8 +98,7 @@ from a stream of its own.
 
 > *Check:* `build/sbt 'catalyst/testOnly *VarkaMatrixSuite *VarkaIrFuzzSuite'`, then
 > `dev/varka_matrix.sh --config demoOption=true --suites VarkaDemoOptionSuite`. The pull request's
-> option matrix runs the configuration over every suite (`AGENTS.md`, "Measurements, not
-> adjectives").
+> option matrix runs the configuration over every suite (`sql/varka/.agents/option-matrix.md`).
 
 **6. Regenerate, if the default changed a kernel** or the option's `Subject` is not the defaults
 (its arms are then pinned in `emitted_bytes.json` under `option_arms`). Run
@@ -108,7 +107,7 @@ lock itself, and skips them when nothing they read changed (`--dry-run` prints t
 bytes file alone is `VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'`.
 An arm that no session selects can be pinned by hand in that suite's `pinnedArms`, as
 `maskFromWord=true` is. Never edit a generated file. After a change to what the emitter writes,
-also do the AVX2 recheck that `AGENTS.md` describes.
+also do the AVX2 recheck that `sql/varka/.agents/checks.md` describes.
 
 > *Check:* `build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'` with no variable set, and
 > `git status` shows no generated file changed when the default kept every kernel.

@@ -2,7 +2,7 @@
 
 One folder for each milestone, `m<n>/`. A folder holds the milestone's own document, `PLAN.md`
 (a numbered task table) or `SCOPE.md` (a catalogue with no task numbers yet), and one plan file
-for each task, `VARKA-<n>.md`. How a plan is written and kept is in `sql/varka/AGENTS.md`,
+for each task, `VARKA-<n>.md`. How a plan is written and kept is in `sql/varka/.agents/plans.md`,
 "Plans are records, not scratch space".
 
 ## The milestone in flight

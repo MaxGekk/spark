@@ -31,8 +31,8 @@
 # -128bit-band.txt companion under --narrow, which is where
 # dev/varka_bench_regen.sh looks for it; a path after --band writes elsewhere.
 #
-# This is how a family gets its band (sql/varka/AGENTS.md, "Measurements, not
-# adjectives"): the first time someone has to read a move in it, ten runs with
+# This is how a family gets its band (sql/varka/.agents/measurements.md, "Measurements,
+# not adjectives"): the first time someone has to read a move in it, ten runs with
 # --band, committed with the results they band. Not before - banding every
 # family against a day that may never come costs a quiet machine for nothing.
 #

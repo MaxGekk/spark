@@ -23,7 +23,7 @@
                                               # write one entry file from a table row
 
 A plan that predicts a cost reads this table first and states its estimate at the ratio
-observed (sql/varka/AGENTS.md, "Plans are records, not scratch space"); a scored prediction
+observed (sql/varka/.agents/plans.md, "Plans are records, not scratch space"); a scored prediction
 adds an entry. The entries live under sql/varka/skills/calibration/, one file per entry, and
 the table is printed rather than committed: when it was a table in a skill file every task
 appended a row after the same last line, so every merge conflicted with every open branch

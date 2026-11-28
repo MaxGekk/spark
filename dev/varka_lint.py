@@ -45,7 +45,7 @@ naming files on the command line turns that scoping off.
   shell-usage      a script printing its usage with a hard-coded line range of "$0"
   shell-java-opts  JAVA_OPTS or SBT_OPTS given a -XX flag in a script that runs build/sbt: the
                    test JVMs sbt forks never see it (build-and-environment.md)
-  guava            a Guava import in Varka code (sql/varka/AGENTS.md)
+  guava            a Guava import in Varka code (sql/varka/.agents/java.md)
   nan-compare      in Varka code, two floating answers held equal by their raw bits or two NaNs
                    accepted by `isNaN(a) && isNaN(b)` outside VarkaSameAnswer and its contract
                    suites: a comparator states its NaN rule there, at a level (VARKA-556)
@@ -603,7 +603,7 @@ def rule_guava(ch):
             if re.match(r"\s*import\s+com\.google\.common\b", line) and ch.wrote(path, n):
                 yield (
                     f"{path}:{n}: guava: Varka code does not take new Guava dependencies "
-                    "(sql/varka/AGENTS.md); use the JDK"
+                    "(sql/varka/.agents/java.md); use the JDK"
                 )
 
 
