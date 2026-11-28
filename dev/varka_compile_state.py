@@ -85,6 +85,9 @@ def first_found(workflows, runs_of, artifacts_of):
 
 
 def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
     if argv == ["--selftest"]:
         result = unittest.main(argv=["selftest"], exit=False).result
         print("varka_compile_state selftest: " + ("ok" if result.wasSuccessful() else "FAILED"))

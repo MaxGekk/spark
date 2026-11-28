@@ -691,7 +691,7 @@ def selftest():
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] in (["-h"], ["--help"]):
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
         print(__doc__)
         sys.exit(0)
     if sys.argv[1:2] == ["--selftest"]:

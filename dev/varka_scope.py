@@ -36,4 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 from sparktestsupport.modules import varka_change_scope
 
 if __name__ == "__main__":
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(__doc__)
+        sys.exit(0)
     print(varka_change_scope(sys.stdin.read().split()))

@@ -149,7 +149,7 @@ def selftest():
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help"):
+    if not argv or "-h" in argv or "--help" in argv:
         print(__doc__)
         return 0 if argv else 2
     if argv[0] == "--selftest":

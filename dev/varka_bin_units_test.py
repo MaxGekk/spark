@@ -50,11 +50,18 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import yaml
-
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github/workflows/varka-option-matrix.yml"
 STEP = "Run this bin's units"
+
+
+def load_yaml(path):
+    """A YAML file, parsed. PyYAML is imported here so that --help needs no module beyond
+    Python's own."""
+    import yaml
+
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
 
 # Records every argument on one line, tab separated, in the file named by `--out` plus `.args`,
 # and exits 3 for a unit whose suites say FAIL.
@@ -75,7 +82,7 @@ exit 0
 
 def step_script():
     """The `run:` text of the bin step, which both stages' jobs run (VARKA-637)."""
-    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    doc = load_yaml(WORKFLOW)
     if doc["jobs"]["first"]["steps"] != doc["jobs"]["rest"]["steps"]:
         raise SystemExit(f"the two stages' bin jobs of {WORKFLOW} run different steps")
     for step in doc["jobs"]["rest"]["steps"]:
@@ -96,7 +103,7 @@ exit "${STUB_EXIT:-0}"
 def run_sweep_step(suite, exit_status=0):
     """Runs the sweep workflow's `Run the sweep` step for the first matrix row of `suite`;
     returns (exit status, the arguments the stub `java` got)."""
-    doc = yaml.safe_load(SWEEPS.read_text(encoding="utf-8"))
+    doc = load_yaml(SWEEPS)
     script = next(
         s["run"] for s in doc["jobs"]["sweep"]["steps"] if s.get("name") == "Run the sweep"
     )
@@ -399,7 +406,7 @@ class Watchdog(unittest.TestCase):
 def job_runs(job, first, tests="", rest="[{}]"):
     """Whether `job`'s `if:` admits it after a first stage that ended `first` and a gate whose
     `tests` output is given: the expression read as Python, with `!cancelled()` true."""
-    text = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["if"].strip()
+    text = load_yaml(WORKFLOW)["jobs"][job]["if"].strip()
     text = re.sub(r"^\$\{\{|\}\}$", "", text).replace("!cancelled()", "True")
     text = " ".join(text.replace("&&", " and ").replace("||", " or ").split())
     ns = SimpleNamespace
@@ -428,7 +435,7 @@ def bin_records(dst, name, units, stub=STUB, **env):
 def judge(records, download="success", first=("b000", "b001", "b002")):
     """Runs the gate's judging step over the merged `records`, the first stage being the bins
     `first`: (its `tests` output, its stdout)."""
-    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    doc = load_yaml(WORKFLOW)
     script = next(s["run"] for s in doc["jobs"]["gate"]["steps"] if s.get("id") == "judge")
     with tempfile.TemporaryDirectory() as tmp:
         shutil.copytree(records, Path(tmp, "target/varka-bins"))
@@ -519,7 +526,7 @@ class StageGate(unittest.TestCase):
         self.assertEqual(tests, "unknown")
         self.assertFalse(job_runs("rest", "failure", tests))
         self.assertFalse(job_runs("rest", "cancelled", "passed"))
-        doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        doc = load_yaml(WORKFLOW)
         upload = next(
             s for s in doc["jobs"]["rest"]["steps"] if s.get("name", "").startswith("Upload")
         )
@@ -582,7 +589,7 @@ def run_avx2_step(part, suites, module="catalyst"):
     """Runs the sweep workflow's AVX2 step for share `part` of `module` over `suites` (fully
     qualified, `@own ` before one that runs alone); returns (exit status, the runner's
     arguments)."""
-    doc = yaml.safe_load(SWEEPS.read_text(encoding="utf-8"))
+    doc = load_yaml(SWEEPS)
     steps = doc["jobs"]["avx2-128"]["steps"]
     script = next(s["run"] for s in steps if s.get("name") == AVX2_STEP)
     with tempfile.TemporaryDirectory() as tmp:
@@ -654,6 +661,9 @@ class Avx2Step(unittest.TestCase):
 
 
 def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
     if argv[:1] != ["--selftest"]:
         print(__doc__)
         return 2

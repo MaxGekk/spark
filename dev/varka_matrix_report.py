@@ -179,4 +179,7 @@ def main(runs, skips_path):
 
 
 if __name__ == "__main__":
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(__doc__)
+        sys.exit(0)
     sys.exit(main(*sys.argv[1:3]))

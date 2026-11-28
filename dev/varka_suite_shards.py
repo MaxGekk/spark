@@ -180,6 +180,9 @@ def write_weights(path, times):
 
 
 def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
     if argv == ["--self-test"]:
         import doctest
 
