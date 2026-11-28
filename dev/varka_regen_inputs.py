@@ -46,7 +46,7 @@ SAFE = [
     r"^docs/",
     r"^[^/]*\.md$",
     r"^sql/varka/[^/]+\.md$",
-    r"^sql/varka/(plans|skills|bench)/",
+    r"^sql/varka/(\.agents|plans|skills|bench)/",
     r"^sql/(core|catalyst)/benchmarks/",
     # The core module's tests, but for the cast suites and the helpers that write casts_suites.tsv.
     r"^sql/core/src/test/(?!.*/Varka(Suite(Check|Record|Arm)|ExpressionHarness"
@@ -128,6 +128,7 @@ def selftest():
         (["sql/core/src/test/java/org/apache/spark/sql/VarkaFooBenchmark.java"], None),
         (["sql/catalyst/src/test/java/org/apache/spark/sql/VarkaChainDepthBenchmark.java"], None),
         (["README.md", "docs/other.md", "sql/varka/VISION.md", "sql/varka/AGENTS.md"], None),
+        (["sql/varka/.agents/java.md"], None),
         (["sql/core/src/test/scala/x/VarkaFooSuite.scala", ".github/workflows/x.yml"], None),
         (["dev/varka_other.py"], None),
         (

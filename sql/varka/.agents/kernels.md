@@ -42,7 +42,8 @@ library, without a JDK build, and checks HotSpot loads it.
   rendered from the code's own constants by `VarkaProofFiles`, as `sql/varka/proofs/README.md`
   describes; a calendar division joins `ChronoDivide`'s table, whose rows are proven as they are
   added. A sweep of the whole decomposition is not the same check: it cannot see a constant whose
-  site has stopped being exact while a later step still absorbs the error (`VARKA-242.md` 9).
+  site has stopped being exact while a later step still absorbs the error
+  (`sql/varka/plans/m7/VARKA-242.md` 9).
 * **The suites run with the memory sanitizer on** (VARKA-263): `dev/varka_matrix.sh` passes
   `-Dvarka.sanitizeMemory=true`, so every mapping a kernel makes is checked against the buffers the
   evaluator handed it, and a suite that leaves Arrow memory allocated is aborted. A buffer given to

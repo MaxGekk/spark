@@ -29,7 +29,9 @@ reason) or which class does which step of a query: read `MAP.md` in this directo
 
 ## A row that already has a plan
 
-`dev/varka_task_new.sh` exits 1 with "this task has a plan", or "branch ... already exists".
+`dev/varka_task_new.sh` exits 1 with "this task has a plan", "branch ... already exists" or
+"<dir> already exists" (a worktree left from an earlier part). The cases it refuses are in
+`plans/README.md`, "A task's plan file".
 
 1. Read the plan file whole: its sequencing (section 8) names the parts (`360a`, `360b`, ...)
    and the order they merge in, and its outcome (section 9) says which have landed.
@@ -44,27 +46,31 @@ reason) or which class does which step of a query: read `MAP.md` in this directo
 
 ## A red option matrix
 
-1. The words. A *configuration* is the emit defaults with one option changed, written
-   `name=value` (`cse=false`), from `VarkaEmitOption.TABLE`; the defaults are the configuration
-   `defaults`, and a platform configuration is named `isa=...`. `dev/varka_matrix.sh --list`
-   prints them. A *unit* is one runner JVM, written `configuration|module|suite,suite,...`. A
-   *bin* is one CI job, named "Option matrix: <bin>" (`b021`), that runs several units, two at a
-   time. The definitions are in the header of `dev/varka_matrix_bins.py`.
+1. The words. A *configuration* is the emit defaults with one option changed, written `name=value`
+   (`cse=false`), from `VarkaEmitOption.TABLE`; the defaults are the configuration `defaults`, and a
+   platform is named `isa=...` (`isa=avx2`, `isa=w128`, `isa=arm`). `dev/varka_matrix.sh --list`
+   prints the configurations, not the platforms. A *unit* is one runner JVM, written
+   `configuration|module|suite,suite,...`. A *bin* is one CI job, named "Option matrix: <bin>"
+   (`b021`), that runs several units, two at a time. The definitions are in the header of
+   `dev/varka_matrix_bins.py`.
 2. Find the failing unit. The "Option matrix: report" job's summary lists each configuration's
    result. The red bin's artifact `varka-option-matrix-<bin>`
    (`gh run download <run id> -R <owner>/<repo> -n varka-option-matrix-<bin>`) holds
    `<bin>-failed/units.txt`, one line `exit <status>: <configuration>|<module>|<suites>` for each
    unit that failed.
 3. Read the message: in the same artifact, the files `run.log` and `junit/*.xml` under
-   `target/varka-units/<bin>/<bin>-u<k>/runs/<configuration>/<module>-<bin>-<k>/`. A platform
-   unit: read the section "A platform bin runs the defaults under a fixed instruction set" of
-   `sql/varka/skills/testing-and-debugging.md` first.
+   `<bin>-u<k>/runs/<configuration>/<module>-<bin>-<k>[-<part>]/`, relative to the download
+   directory. A platform unit: read the section "A platform bin runs the defaults under a fixed
+   instruction set" of `sql/varka/skills/testing-and-debugging.md` first.
 4. Rerun the one test locally, from the worktree's root:
    `dev/varka_matrix.sh --module <module> --config <configuration> --suites <Suite> --test
    "<text of the test's name>"`. It builds first and runs the defaults beside the configuration;
    its output is `target/varka-matrix/runs-test/<configuration>/<module>[-<k>]/run.log`, its JUnit
    XML in `junit/` there. CI's jobs also pass `--jvm-arg -Dvarka.series.size=4`. Without
-   `--test` it runs the whole unit, under `target/varka-matrix/runs/`.
+   `--test` it runs the whole unit, under `target/varka-matrix/runs/`. A platform is not a
+   `--config`: run the defaults under its JVM flags (`PLATFORMS` in `dev/varka_matrix_bins.py`),
+   such as `dev/varka_matrix.sh --module <module> --defaults --platform isa=avx2 --jvm-arg
+   -XX:UseAVX=2 --jvm-arg -XX:MaxVectorSize=32 --suites <Suite> --test "<text>"`.
 5. Before changing the test or the code: read `.agents/option-matrix.md`, which says when a test
    starts from `VarkaMatrix.base`, takes `PinsDefaults` or `C2Code`, or gets a reasoned line in
    `sql/varka/matrix/skips.tsv`. A skip is only for an answer a configuration breaks by design;
@@ -108,11 +114,11 @@ rather than a read of the compiler's families (`VarkaNodeCompiler` and the
 current as the last build.
 
 The generated files every type row rewrites (`coverage.json`, `emitted_bytes.json`,
-`width_audit.json`, `types.tsv`, the census and cast tables, the docs blocks) are never merged
-by hand. `sql/varka/.gitattributes` gives them a merge driver, `dev/varka_generated_merge.py`,
-which merges them per row and writes what it cannot compute (`option_arms`, the docs counts)
-from one side, listed as owed; after the merge, `dev/varka_regen_generated.sh` runs the owed
-regenerations in order, and CI's checks fail a stale file with its command (`VARKA-546.md`).
+`width_audit.json`, `types.tsv`, the census and cast tables, the docs blocks) are never merged by
+hand. `sql/varka/.gitattributes` gives them a merge driver, `dev/varka_generated_merge.py`, which
+merges them per row and writes what it cannot compute (`option_arms`, the docs counts) from one
+side, listed as owed; after the merge, `dev/varka_regen_generated.sh` runs the owed regenerations in
+order, and CI's checks fail a stale file with its command (`sql/varka/plans/m10/VARKA-546.md`).
 
 Adding an expression is the most common change here and has its own recipe:
 `ADDING_AN_EXPRESSION.md`, ten numbered steps each ending in a command whose result
@@ -231,6 +237,6 @@ loads, benchmarks. So:
   ScalaTest suites. Matching over Catalyst expressions is not one of them: a
   compiler family matches in a Java `switch` over type patterns with `when`
   guards, as well as in a Scala `match`, and what a port costs is at its boundary
-  with Scala code (`VARKA-175.md` 5). Existing Scala is not rewritten as a
+  with Scala code (`sql/varka/plans/m6/VARKA-175.md` 5). Existing Scala is not rewritten as a
   side effect of another task; the migration is its own work (milestone 3,
   VARKA-23).

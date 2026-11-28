@@ -67,6 +67,7 @@ Outside that script (each file's first lines name its own command):
 
 ### Directories under `sql/varka/`
 
+- `.agents/`: the detail files behind the pointers of `AGENTS.md`, the tool index among them.
 - `baselines/`: the scalar Java baseline of the calendar speedups, with its results.
 - `bench/`: the benchmarks against stock Spark, a module of its own; results in `benchmarks/`.
 - `census/`: TPC-H and TPC-DS codegen census output (`dev/varka_tpc_census.sh`).
