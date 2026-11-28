@@ -205,3 +205,41 @@ Left: the day-time baseline's 128-bit companion. Its committed file is from run 
 November 2026 at `a376a8215be`, the head of #1534, which holds this change; section 10 still named
 both companions as owed on 19 November 2026. Whether that file closes the row or a run on master is
 wanted is the owner's decision.
+
+## 12. The day-time baseline at 256 bits again (28 November 2026)
+
+The day-time class's 256-bit runner file is replaced again, from `benchmark.yml` run 46055735411
+of vecbricks/varka, on an AMD EPYC 7763. It measured `refs/pull/1791/head`, `3a7891ad404`, which
+is master `a5c8d1f0972` plus two plan-only commits (`VARKA-612.md` 9.5). Its filter sections still
+tie. `filter extract(HOUR FROM dt) >= 12` reads 67 / 67 ms by best time without nulls (1.00x) and
+67 / 65 ms with one row in ten null (1.03x). By average time it reads 71 / 74 ms (0.96x) and
+68 / 66 ms (1.03x). The fused control `filter dt > dt2` reads 1.6X and 1.7X. No filter section
+runs more than 10% slower than the row path.
+
+Left: the day-time 128-bit companion. A run on master was dispatched on 28 November 2026, at
+`fb7d8261711`: one of runs 46137362031 and 46137364599 of vecbricks/varka, which time this class
+and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVectorSize=16`. Both were still running
+when this was written. Its day-time file replaces the one from run 43582853857. Once its two
+`filter extract(HOUR FROM dt) >= 12` sections are read, the row's last item is scored.
+
+## 13. The day-time 128-bit companion, and the row closed (28 November 2026)
+
+The day-time class's 128-bit runner file is now run 46141665054 of vecbricks/varka, at master
+`1ad2c5c5bd0`, on an AMD EPYC 7763 at `-XX:MaxVectorSize=16` (the redispatch of 46137362031, which
+failed the CPU check; `VARKA-612.md` 9.6). It replaces run 43582853857. Its filter sections tie:
+
+| section | best time, row path / varka on | average time |
+|---|---|---|
+| `filter extract(HOUR FROM dt) >= 12`, no nulls | 70 / 70 ms, 1.00x | 76 / 75 ms, 1.01x |
+| the same, one row in ten null | 65 / 65 ms, 1.00x | 68 / 70 ms, 0.97x |
+| `filter dt > dt2`, no nulls | 100 / 101 ms, 0.99x | 105 / 105 ms, 1.00x |
+| the same, one row in ten null | 98 / 99 ms, 0.99x | 102 / 102 ms, 1.00x |
+
+At two lanes `filter dt > dt2` is `NONE` (row 503's refusal), so it ties as well. No filter
+section runs more than 10% slower than the row path. The row's last item is met.
+
+The decimal and day-time baselines have now been measured on the EPYC 7763 after #1486 at both
+widths: sections 10, 11, 12 and this one. The section the row was opened for ties the row path at
+both widths, and so does every filter section of the two files. The other conditions of the
+done-when were met when #1486 merged (sections 6 and 9, and its description's dry runs). The row
+is **Done**.
