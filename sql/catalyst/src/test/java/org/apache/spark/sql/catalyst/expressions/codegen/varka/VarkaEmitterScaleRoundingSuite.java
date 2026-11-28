@@ -17,6 +17,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.foreign.Arena;
@@ -41,10 +42,10 @@ import org.apache.spark.sql.types.DataTypes;
  * {@code bround} and {@code truncate} over a double at every scale from 0 to 22, built as part
  * 346b1b's compiler arm builds it, from Spark's own expression, and held bit for bit to its
  * {@code eval}, which rounds the double's shortest decimal. The cells of {@code VARKA-346.md}
- * 3.1, and below each scale's {@code L_s} its powers of two, its decimals of {@code s + 1} digits
- * near a tie or a multiple and a seeded draw, answer as Spark does; a batch with a non-integral
- * band value declines with the band's bit; a band value on a null row declines nothing, and a
- * null row stays null.
+ * 3.1, and below each scale's {@code L_s} its powers of two, the doubles at and near its ties
+ * and its multiples of {@code 10^-s} and a seeded draw, answer as Spark does; a batch with a
+ * non-integral band value declines with the band's bit; a band value on a null row declines
+ * nothing, and a null row stays null.
  */
 @VarkaSuite(ownJvm = true)
 public final class VarkaEmitterScaleRoundingSuite {
@@ -120,9 +121,10 @@ public final class VarkaEmitterScaleRoundingSuite {
 
   /**
    * The values at {@code scale} outside the band: the cells, then below {@code L_s} each power of
-   * two with its neighbours, the tie and multiple decimals of {@code s + 1} digits with three
-   * doubles either side, a seeded draw, an integral value inside the band and values from
-   * {@code K_s} up, each in both signs, and the NaNs.
+   * two with its neighbours, seeded ties and multiples at scale {@code s} (decimals of
+   * {@code s + 1} digits ending in 5, and of {@code s} digits) with three doubles either side, a
+   * seeded draw of small values, an integral value inside the band and values from {@code K_s}
+   * up, each in both signs, and the NaNs.
    */
   private static double[] values(int scale) {
     var out = new ArrayList<Double>();
@@ -138,13 +140,14 @@ public final class VarkaEmitterScaleRoundingSuite {
       }
     }
     var rnd = new SplittableRandom(346L + scale);
-    BigDecimal step = BigDecimal.ONE.movePointLeft(scale + 1);
+    BigDecimal step = BigDecimal.ONE.movePointLeft(scale);
+    BigDecimal half = BigDecimal.valueOf(5).movePointLeft(scale + 1);
     for (int i = 0; i < 600; i++) {
-      // A decimal of s + 1 fractional digits below L_s: a tie when its last digit is 5.
+      // Below L_s, floor(t / 10^-s) * 10^-s is a multiple of 10^-s; on even draws it is that
+      // plus 5 * 10^-(s + 1), a tie at scale s.
       double t = lower * rnd.nextDouble();
       BigDecimal dec = new BigDecimal(t).divideToIntegralValue(step).multiply(step)
-          .add(i % 2 == 0 ? step.multiply(BigDecimal.valueOf(5)).movePointLeft(1)
-              : BigDecimal.ZERO);
+          .add(i % 2 == 0 ? half : BigDecimal.ZERO);
       double d = dec.doubleValue();
       double up = d;
       double down = d;
@@ -213,6 +216,21 @@ public final class VarkaEmitterScaleRoundingSuite {
           c.release();
         }
       }
+    }
+  }
+
+  @Test
+  @DisplayName("a rounding to a scale takes a double child and a scale from 0 to 22 only")
+  void rejectsAnIntegralChildAndAScaleOutOfRange() {
+    var doubleChild = new VarkaVectorIR.ColumnRef(0, VarkaVectorIR.LaneType.DOUBLE);
+    assertThrows(IllegalArgumentException.class, () -> new VarkaVectorIR.RoundToScale(
+        VarkaVectorIR.ScaleMode.HALF_UP, 2,
+        new VarkaVectorIR.ColumnRef(0, VarkaVectorIR.LaneType.INT),
+        VarkaVectorIR.ScaleOut.DOUBLE));
+    for (int scale : new int[] {-1, VarkaVectorIR.RoundToScale.MAX_SCALE + 1}) {
+      assertThrows(IllegalArgumentException.class, () -> new VarkaVectorIR.RoundToScale(
+          VarkaVectorIR.ScaleMode.HALF_UP, scale, doubleChild, VarkaVectorIR.ScaleOut.DOUBLE),
+          "scale " + scale);
     }
   }
 

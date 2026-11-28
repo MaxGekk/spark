@@ -2188,9 +2188,13 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   `-XX:StartFlightRecording`.
 * **A declined batch names its guard.** Each runtime refusal reason has its
   own status bit (`VarkaFusedKernel`: day producer, month count,
-  `make_date`, int overflow, re-armed day range, value range), above them
-  the evaluator's own (input bound, derived input), and the debug line and
-  the `Fallback` event carry the word. A loop method whose guards share one
+  `make_date`, int overflow, re-armed day range, value range,
+  `STATUS_DECIMAL_SLOT` for a decimal column's slot that holds no value of
+  its type, `STATUS_DIVIDE_BY_ZERO` for a floating division by zero under
+  ANSI, `STATUS_ROUNDING_BAND` for a `round`, `bround` or `truncate` of a
+  double in its scale's declined band), above them the evaluator's own
+  (input bound, derived input), and the debug line and the `Fallback` event
+  carry the word. A loop method whose guards share one
   reason reports exactly it; one that holds guards of several reasons folds
   them into one mask and reports all of their bits, a candidate set, since a
   mask per reason would hold another vector register in the loop. The emit

@@ -575,7 +575,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // The floating records, which the loop cannot build at an integral lane: their validity's
     // and overflow check's shapes at DOUBLE (VARKA-489).
     Seq[VarkaVectorIR](sqrt, new Fma(fd, fd, new ColumnRef(1, LaneType.DOUBLE)),
-      new RoundToIntegral(RoundMode.RINT, fd), CanonicalFloat.of(fd))
+      new RoundToIntegral(RoundMode.RINT, fd), CanonicalFloat.of(fd),
+      new RoundToScale(ScaleMode.HALF_UP, 2, fd, ScaleOut.DOUBLE))
       .foreach { n =>
         VarkaNodePropsSuite.assertValidityShape(n)
         VarkaNodePropsSuite.assertOverflowCheckShape(n)

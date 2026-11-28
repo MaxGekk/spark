@@ -72,6 +72,20 @@ final class VarkaScaleRoundingLowering {
   /** The scratch locals the lowering parks: the operand, its magnitude, and two values. */
   static final int SCRATCH = 4;
 
+  /**
+   * {@link #lowerBound} and {@link #keepBound} by scale, 0 to {@link #MAX_SCALE}, computed once
+   * here: the guard, the weight and the suites read them per node and per value.
+   */
+  private static final double[] LOWER_BOUNDS = new double[MAX_SCALE + 1];
+  private static final double[] KEEP_BOUNDS = new double[MAX_SCALE + 1];
+
+  static {
+    for (int scale = 0; scale <= MAX_SCALE; scale++) {
+      LOWER_BOUNDS[scale] = computeLowerBound(scale);
+      KEEP_BOUNDS[scale] = computeKeepBound(scale);
+    }
+  }
+
   private VarkaScaleRoundingLowering() {
   }
 
@@ -89,6 +103,11 @@ final class VarkaScaleRoundingLowering {
    */
   static double lowerBound(int scale) {
     requireScale(scale);
+    return LOWER_BOUNDS[scale];
+  }
+
+  /** {@link #lowerBound} computed, once per scale, into {@link #LOWER_BOUNDS}. */
+  private static double computeLowerBound(int scale) {
     if (scale == 0) {
       return 0x1.0p52;
     }
@@ -108,6 +127,11 @@ final class VarkaScaleRoundingLowering {
    */
   static double keepBound(int scale) {
     requireScale(scale);
+    return KEEP_BOUNDS[scale];
+  }
+
+  /** {@link #keepBound} computed, once per scale, into {@link #KEEP_BOUNDS}. */
+  private static double computeKeepBound(int scale) {
     if (scale == 0) {
       return 0x1.0p52;
     }
