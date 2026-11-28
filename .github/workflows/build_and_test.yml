@@ -1554,8 +1554,8 @@ jobs:
   # This job needs the branch's full history: the quote check accepts a number that appears
   # in any committed version of a results file - plans quote the figure a change moved away
   # from (VARKA-106.md, section 2).
-  # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Six jobs in
-  # parallel, three for each module (VARKA-483, VARKA-507), each the sbt build of its module's
+  # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Seven jobs in
+  # parallel, four for catalyst and three for sql (VARKA-483, VARKA-507, VARKA-695), each the sbt build of its module's
   # tests and its share of the module's `*Varka*` suites, split by the committed weights in
   # sql/varka/ci/suite-times.tsv so that every job computes the same split; the sql jobs add the
   # Arrow cache serializer's suite, which is Varka's without the name, to whichever share it
@@ -1693,7 +1693,7 @@ jobs:
           ${{ fromJson(fromJson(needs.precondition.outputs.required).varka-scope == 'spark'
           && '["sql"]' || '["catalyst", "sql"]') }}
         # Catalyst's suites take four jobs and sql's three (VARKA-695): catalyst's width audit
-        # alone runs about as long as a third of the rest. The count is `VARKA_JOBS` below and
+        # alone runs about as long as a third of the rest. The count is the job's `VARKA_JOBS` and
         # not an `include` keyed on the module, which would add catalyst jobs to a run of sql's
         # alone.
         job: ['1', '2', '3', '4']

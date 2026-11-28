@@ -12,3 +12,10 @@
 # as weighed          4    1  28.1   55  20.4   44  20.4   45  20.4
 # after step 1        3   55  24.6   44  24.6   46  24.6
 # after step 1        4   32  18.5   33  18.5   46  18.5   34  18.5
+#
+# A job runs its suites in two JVMs at once, so its wall time is about the larger of its two
+# JVMs' loads, not its sum. With three jobs the audit's job held the 28.1-minute audit in one
+# JVM and its 28 other suites, about 1.7 minutes, in the other, so the audit already ran nearly
+# alone: a fourth job does not shorten the slowest job while the audit takes 28.1 minutes,
+# and only shortens the other jobs. Its gain on the slowest job comes with step 1, when the
+# audit is no longer the longest load.
