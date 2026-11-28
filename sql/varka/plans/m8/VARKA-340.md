@@ -518,6 +518,52 @@ of 1 November 2026. It scores the 128-bit halves of prediction 2: `hour(ntz)` an
 `CAST(tm AS TIMESTAMP_NTZ)` faster than the row path, and `year(ntz)`'s ratio recorded. With it,
 9's "the measurement is committed with its predictions scored" is complete.
 
+### 10.5 Part 5: step 6 at 128 bits (28 November 2026)
+
+`VarkaTimestampNtzFieldsBaselineBenchmark-jdk25-runner-epyc7763-128bit-results.txt` and its
+provenance are replaced from run 46137364599 of vecbricks/varka, at master `fb7d8261711`, on an AMD
+EPYC 7763 at `-XX:MaxVectorSize=16`. The class's code is the same as in part 4's 256-bit run.
+The replaced file is step 1's row-path baseline of 1 November 2026. All fourteen sections fuse
+whole, and each ran every batch as a kernel.
+
+Best time, row path over varka on, from one run:
+
+| section | no nulls | one row in ten null |
+|---|---|---|
+| `year(ntz)` | 1.36x (163 / 120 ms) | 1.03x (152 / 147 ms) |
+| `weekofyear(ntz)` | 2.29x (279 / 122 ms) | 1.65x (263 / 159 ms) |
+| `hour(ntz)` | 0.98x (131 / 133 ms) | 1.02x (126 / 124 ms) |
+| `CAST(ntz AS TIME)` | 1.15x (93 / 81 ms) | 1.25x (94 / 75 ms) |
+| `CAST(ntz AS TIME(3))` | 0.68x (91 / 133 ms) | 0.72x (93 / 129 ms) |
+| `CAST(tm AS TIMESTAMP_NTZ)` | 1.17x (126 / 108 ms) | 0.93x (133 / 143 ms) |
+| `make_timestamp_ntz(d, tm)` | 1.10x (191 / 174 ms) | 0.68x (172 / 254 ms) |
+
+The two-lane gain is a fraction of the 256-bit one in part 4: at most 2.29x against 3.7X to 11.3X.
+
+Prediction 2 of 4, scored at 128 bits:
+
+* `hour(ntz)` faster than the row path: **wrong**. It ties, at 0.98x and 1.02x.
+* `CAST(tm AS TIMESTAMP_NTZ)` faster: **right without nulls** (1.17x), **wrong with them**
+  (0.93x). Both ratios are under the 1.3x a claim needs, so they are directions only.
+* `year(ntz)`, ratio recorded: 1.36x and 1.03x.
+
+**Found: two fused shapes slower than the row path at two 64-bit lanes.** Both are past the 1.3x
+a claim needs, so one run is enough to state them as losses.
+
+* `CAST(ntz AS TIME(3))` reads 0.68x and 0.72x, or 45.6 against 66.4 ns a row without nulls. It
+  has no check: its truncation is a long `ConstDivide`. So row 612's check refusal does not cover
+  it.
+* `make_timestamp_ntz(d, tm)` with nulls reads 0.68x, or 85.9 against 126.8 ns a row. It is the
+  `FAIL` add of step 5, which row 612's 9.4 sends to `twoLaneMeasured` (`VARKA-612.md` 9.6).
+
+The cause of either was not read from the code here. They are new findings beyond this row's
+done-when, so they are handed to the lead to file as rows.
+
+With this file, 9's last condition holds: the measurement is committed at both widths with its
+predictions scored. The other conditions of 9 were the work of parts 1 to 3, merged as #1397,
+#1434 and #1612 (10.1 to 10.3), with the sweep narrowed to the kernel sweep by 10.3's decision 3.
+The row is **Done**.
+
 ### Decisions taken while the owner was away (20 November 2026)
 
 1. **What "the next unbuilt step" is.** Steps 1 to 5 are merged and step 6's measurement is the
