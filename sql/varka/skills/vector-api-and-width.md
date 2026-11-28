@@ -688,7 +688,7 @@ not only for tidiness, because the JIT does not always eliminate them.
 Width-dependent effects can invert which body looks expensive, so a slot change
 wants a regeneration at both widths rather than an argument that it cannot
 matter. And when a review calls something dead code, the honest response is to
-regenerate the numbers that describe the bytecode it was in - `sql/varka/AGENTS.md`
+regenerate the numbers that describe the bytecode it was in - `sql/varka/.agents/measurements.md`
 already says so, and here it was the difference between a real finding and an
 attribution that was mostly an artifact.
 

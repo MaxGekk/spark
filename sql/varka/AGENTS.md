@@ -7,6 +7,100 @@ rule in `sql/core/.../execution/Varka*`, and `docs/sql-varka.md`.
 To find where something lives (a directory, a class, a generated file, a tool, a decline
 reason) or which class does which step of a query: read `MAP.md` in this directory.
 
+## Starting a row
+
+1. Find the row: `grep -n '^| <n> | ' sql/varka/plans/m*/PLAN.md`. `plans/README.md` names the
+   milestone in flight; a row of the next milestone's plan is not built before the owner's word.
+2. Read the row whole: its state in bold, the rows it waits on, and its **Done when**. If a row
+   it needs is not Done, stop and report. An expression's row: step 0 of
+   `ADDING_AN_EXPRESSION.md`.
+3. If the row has a plan file (`ls sql/varka/plans/m*/VARKA-<n>.md`), go to the next section.
+4. Run `dev/varka_task_new.sh <n> "<title>"` from the main checkout: the worktree, the branch and
+   the plan file from the template, with the hooks installed (`plans/README.md`, "A task's plan
+   file").
+5. Before writing the plan: read `.agents/plans.md`. Fill in its admission check (section 2 of the
+   template); the first commit is the plan.
+6. Build. Before each commit: read `.agents/checks.md`. Before naming a branch, writing a title,
+   pushing or merging: read `.agents/pull-requests.md`.
+7. When the work lands, the row opens with its state in bold (`**Done**`, `**Done in part**`,
+   `**Started**`; the list is in the header of `dev/varka_plan_lint.py`) and says what was built
+   and measured, and the plan's section 9 says the same; `dev/varka_plan_lint.py --offline`
+   checks the row.
+
+## A row that already has a plan
+
+`dev/varka_task_new.sh` exits 1 with "this task has a plan", "branch ... already exists" or
+"<dir> already exists" (a worktree left from an earlier part). The cases it refuses are in
+`plans/README.md`, "A task's plan file".
+
+1. Read the plan file whole: its sequencing (section 8) names the parts (`360a`, `360b`, ...)
+   and the order they merge in, and its outcome (section 9) says which have landed.
+2. Check what master already holds: `git log origin/master --oneline --grep '\[VARKA-<n>\]'`.
+3. Check that no branch is in flight for the part: `git branch --list 'varka-<n>*'` and
+   `dev/varka_worktree.sh list`. A branch someone else holds is theirs; ask before taking it.
+4. Make the worktree and the branch by hand from `origin/master`, named as
+   `.agents/pull-requests.md` says ("The branch"), then run `dev/varka_precommit.sh
+   --install-hook` in the new worktree.
+5. Continue the plan file that exists; do not start a second one. From here, steps 5 to 7 of
+   "Starting a row" apply.
+
+## A red option matrix
+
+1. The words. A *configuration* is the emit defaults with one option changed, written `name=value`
+   (`cse=false`), from `VarkaEmitOption.TABLE`; the defaults are the configuration `defaults`, and a
+   platform is named `isa=...` (`isa=avx2`, `isa=w128`, `isa=arm`). `dev/varka_matrix.sh --list`
+   prints the configurations, not the platforms. A *unit* is one runner JVM, written
+   `configuration|module|suite,suite,...`. A *bin* is one CI job, named "Option matrix: <bin>"
+   (`b021`), that runs several units, two at a time. The definitions are in the header of
+   `dev/varka_matrix_bins.py`.
+2. Find the failing unit. The "Option matrix: report" job's summary lists each configuration's
+   result. The red bin's artifact `varka-option-matrix-<bin>`
+   (`gh run download <run id> -R <owner>/<repo> -n varka-option-matrix-<bin>`) holds
+   `<bin>-failed/units.txt`, one line `exit <status>: <configuration>|<module>|<suites>` for each
+   unit that failed.
+3. Read the message: in the same artifact, the files `run.log` and `junit/*.xml` under
+   `<bin>-u<k>/runs/<configuration>/<module>-<bin>-<k>[-<part>]/`, relative to the download
+   directory. A platform unit: read the section "A platform bin runs the defaults under a fixed
+   instruction set" of `sql/varka/skills/testing-and-debugging.md` first.
+4. Rerun the one test locally, from the worktree's root:
+   `dev/varka_matrix.sh --module <module> --config <configuration> --suites <Suite> --test
+   "<text of the test's name>"`. It builds first and runs the defaults beside the configuration;
+   its output is `target/varka-matrix/runs-test/<configuration>/<module>[-<k>]/run.log`, its JUnit
+   XML in `junit/` there. CI's jobs also pass `--jvm-arg -Dvarka.series.size=4`. Without
+   `--test` it runs the whole unit, under `target/varka-matrix/runs/`. A platform is not a
+   `--config`: run the defaults under its JVM flags (`PLATFORMS` in `dev/varka_matrix_bins.py`),
+   such as `dev/varka_matrix.sh --module <module> --defaults --platform isa=avx2 --jvm-arg
+   -XX:UseAVX=2 --jvm-arg -XX:MaxVectorSize=32 --suites <Suite> --test "<text>"`.
+5. Before changing the test or the code: read `.agents/option-matrix.md`, which says when a test
+   starts from `VarkaMatrix.base`, takes `PinsDefaults` or `C2Code`, or gets a reasoned line in
+   `sql/varka/matrix/skips.tsv`. A skip is only for an answer a configuration breaks by design;
+   a wrong answer is a bug to fix.
+6. Done is the unit green locally under that configuration and the matrix rerun green on the
+   branch.
+
+## Read before acting
+
+Each line names when to read a file; the file holds the rules for that case.
+
+- Before writing or editing a plan file, a milestone's `PLAN.md` or `SCOPE.md`, or a lesson
+  under `skills/`: read `.agents/plans.md`.
+- Before making a performance claim, regenerating a benchmark, or quoting a number in a
+  document: read `.agents/measurements.md`.
+- Before committing, and before pushing a change to what the emitter writes: read
+  `.agents/checks.md` (the pre-commit hook and the AVX2 recheck).
+- Before writing or changing a test the option matrix runs, adding a line to
+  `sql/varka/matrix/skips.tsv`, or adding an emit option: read `.agents/option-matrix.md`.
+- Before changing what the compiler or the emitter writes, a bounded lowering, a buffer a kernel
+  reads, or the fallback; or to ask what a projection compiles to: read `.agents/kernels.md`.
+- Before writing or touching Java, writing a suite or a benchmark, or passing a Guava,
+  incubator-module or Class-File API type across a module or into Scala: read `.agents/java.md`.
+- Before citing or adding a paper under `papers/`: read `.agents/papers.md`.
+- Before merging, or when master's run is red: read `.agents/master-green.md`.
+- Before you look for, run or add a `dev/varka*` tool: read `.agents/tools.md`, the index of
+  them all. The scripts that gate, push and watch a pull request are in `dev/varka_ops/`; read
+  its `INDEX.md` and `AGENTS.md` first. Worktrees are listed and the merged ones removed with
+  `dev/varka_worktree.sh list|gc`.
+
 ## What the engine covers, without reading the compiler
 
 `coverage.json` in this directory lists every expression the compiler fuses, with
@@ -20,11 +114,11 @@ rather than a read of the compiler's families (`VarkaNodeCompiler` and the
 current as the last build.
 
 The generated files every type row rewrites (`coverage.json`, `emitted_bytes.json`,
-`width_audit.json`, `types.tsv`, the census and cast tables, the docs blocks) are never merged
-by hand. `sql/varka/.gitattributes` gives them a merge driver, `dev/varka_generated_merge.py`,
-which merges them per row and writes what it cannot compute (`option_arms`, the docs counts)
-from one side, listed as owed; after the merge, `dev/varka_regen_generated.sh` runs the owed
-regenerations in order, and CI's checks fail a stale file with its command (`VARKA-546.md`).
+`width_audit.json`, `types.tsv`, the census and cast tables, the docs blocks) are never merged by
+hand. `sql/varka/.gitattributes` gives them a merge driver, `dev/varka_generated_merge.py`, which
+merges them per row and writes what it cannot compute (`option_arms`, the docs counts) from one
+side, listed as owed; after the merge, `dev/varka_regen_generated.sh` runs the owed regenerations in
+order, and CI's checks fail a stale file with its command (`sql/varka/plans/m10/VARKA-546.md`).
 
 Adding an expression is the most common change here and has its own recipe:
 `ADDING_AN_EXPRESSION.md`, ten numbered steps each ending in a command whose result
@@ -77,249 +171,12 @@ failure it guards against rather than the day it happened, and a reason that nam
 keeps the fact. `dev/varka_precommit.sh` flags `used to`, `the old` and `since VARKA-<n>` on the
 lines a commit adds to Varka's code.
 
-## Plans are records, not scratch space
-
-`plans/` holds one folder per milestone, `m<n>/`, with the milestone's own documents and one
-file per task named by the task's id, `m<n>/VARKA-<id>.md`; a task's plan lives in the folder of
-the milestone whose table holds its row (a row moved to the scope catalogue goes with it). They
-are written *as the work happens*: a task file states what was planned, then what was actually
-built, what was measured and where the plan turned out wrong. Predictions written
-before a measurement stay in the file after it, scored honestly - the project
-keeps count. Do not retro-edit a task file to look prescient; add the correction
-and say what it corrects. A cost prediction - a test's or a suite's added time, a
-check's overhead - reads the calibration table first (`dev/varka_calibration.py` prints it;
-`skills/testing-and-debugging.md` says how it is kept) and is stated at the ratio the table has
-observed unless the plan says why not; once scored, it joins the table as a file of its own under
-`skills/calibration/`, which `dev/varka_calibration.py --add-row` writes from the row.
-
-A milestone's file is named for the stage it is in. While it is a scope
-catalogue - numbered items with design input, no task numbers assigned yet - it
-is `m<n>/SCOPE.md`; when it becomes a task plan with a numbered task
-table it is `m<n>/PLAN.md`. Milestone 3's file says in its own opening
-paragraph that it "is no longer the scope document it opened as", which is
-exactly the transition the two names make visible from the outside.
-
-A milestone's plan may only be renamed or renumbered if every inbound reference
-is updated with it. Other plans cite sections and items by number.
+## Tasks are called by their id
 
 **Tasks are called by their id, `VARKA-<n>`**, in plans, skills, code comments, test titles,
 benchmark labels and pull request titles (their form: `.agents/pull-requests.md`); the number is the
 one the task tables have always used, and "task 128" is how the record wrote it before 4 October
 2026, when the plans moved into milestone folders and every reference was rewritten.
-
-## Measurements, not adjectives
-
-Any performance claim in code comments, plans or docs traces to a committed
-benchmark result file. The methodology is fixed (`plans/m2/VARKA-14.md` 2.1): at least
-five iterations over two-second windows, generated on an otherwise idle machine,
-and any claim resting on a ratio under ~1.3x is re-run and compared by minimums
-before it is written down. When a change moves committed numbers, regenerate the
-affected results files in one run rather than patching quoted figures case by
-case, and requote the docs from that run.
-
-The tooling for that lives in `dev/`. `dev/varka_bench_regen.sh <module> <Class>`
-regenerates one benchmark at both vector widths, refuses a busy machine, writes
-the narrow run to a committed `-128bit-results.txt` companion and a provenance
-sidecar (commit, JDK, kernel, CPU, load), and ends by diffing the wide file
-against the committed one. `dev/varka_bench_diff.py` is that diff on its own:
-before/after between two files or against a git revision, or A/B pairs inside
-one file (`--within FILE --ab "label A" "label B"`), controls listed first.
-Read the controls before anything else: a run whose scalar anchors are flat but
-whose earliest sections all dropped was started on a machine still hot from a
-test suite, and its numbers are the machine's, not the code's.
-
-A diff's "moved 14.2%" means nothing on its own, because an unchanged file moves
-too, and by a different amount per case: over ten runs the parity file's median
-case moves 5%, its worst 227%. So a family's moves are read against its *band*,
-a committed per-case tier (`<Class>-jdk25-band.txt` beside the results, from
-`dev/varka_bench_band.py`) that the regen script's diff picks up by itself.
-The rule for when a family gets one: **the first time someone has to read a
-move in it**, not before. Then `dev/varka_bench_repeat.sh <module> <Class> 10
---band` runs the unchanged benchmark ten times on the quiet machine and writes
-the band, `--narrow` the same for the 128-bit companion, and both are committed
-with the results they band. Until a family has one the flat threshold applies,
-and a move read against it is read with that said.
-
-Two more guards. `dev/varka_bench_canary.sh` runs three fixed loops - a
-compute-bound control, a cache-resident vector add, a memory-bound one - and
-compares them with the committed baseline for this host; the regen script runs
-it first and stops when the machine is not in its baseline state, because the
-same code has measured its memory-bound kernels 20-27% apart on different days
-with every compute-bound row flat. And `dev/varka_quote_check.py` checks that
-every number with decimals quoted in the plans, the lesson files, the docs and the
-README appears in a committed results file, now or in its history; the ones
-that predate the tool are in `dev/varka_quote_allowlist.txt` with a reason
-each, and that list only shrinks. It is a step of the gate.
-
-Before committing, `dev/varka_precommit.sh` (or install it once with
-`--install-hook`) checks the staged files for the rules that slip most: a
-non-ASCII byte outside a string literal, a source line over 100 columns, a
-`TODO`/`FIXME` marker under a Varka directory, a comment that narrates history
-(`used to`, `the old`, `since VARKA-<n>`) in Varka's code, the quote check when a
-document changed, `ruff check` plus `ruff format --check` on Python files
-(CI's Python linter runs both), and the rules of `dev/varka_lint.py`: a license
-header on a new source file, a third-party import its module never had (Maven may
-lack what sbt resolves transitively), a new file no CI module claims, the skip
-list's integrity, `task N` for `VARKA-N`, repeated benchmark case ids, a Varka conf
-without a binding policy, two shell traps and Guava in Varka code. The hook also
-installs a commit-msg check of the attribution line and a pre-push check that
-refuses a branch pushed to vecbricks/varka and re-checks what is pushed; check a
-pull request's title and body with `dev/varka_msg_check.py pr --title ... --body-file
-...` before opening it (VARKA-492).
-The laptop is AVX-512 and CI's runners are AVX2, so before pushing a change
-to what the emitter writes, run the width audit at the preferred width once more under
-`JDK_JAVA_OPTIONS=-XX:UseAVX=2` (a `--jvm-arg` does not reach the audit's probe JVM):
-masked `BYTE` and `SHORT` loads and stores, and masks at two 64-bit lanes, have no
-lowering there, and the laptop cannot show it otherwise.
-And beside the emitter suite's curated matrices,
-`VarkaIrFuzzSuite` runs random IR trees over random columns, null patterns,
-lengths and `VarkaEmitOptions` variants against the shared
-`VarkaReferenceEvaluator`; a failure names its seed and iteration and replays
-with `-Dvarka.fuzz.seed=<seed> -Dvarka.fuzz.only=<iteration>`. A new option is
-fuzzed the day it lands: the suite draws from `VarkaEmitOption.TABLE`, and
-`VarkaEmitOptionSuite` fails until a new record component has its table entry.
-The same entry gives it its configurations in the option matrix
-(`dev/varka_matrix.sh`, `m7/VARKA-248.md` 3.2), which reruns the Varka suites
-with one option changed at a time. A test starts from `VarkaMatrix.base`, not
-`VarkaEmitOptions.DEFAULTS`, so the matrix reaches its kernels; a test whose
-subject is the defaults' emitted structure takes the tag `PinsDefaults`; a test
-whose subject is what C2 makes of a kernel takes `C2Code`, which runs it only
-under a configuration that changes what C2 is given (`VarkaMatrixRuns.C2_OPTIONS`);
-and an answer test a configuration breaks by design gets a line in
-`sql/varka/matrix/skips.tsv` with its reason. A local `git merge` or rebase,
-on a branch that has the rule, merges that file with git's union driver, so two
-branches appending skips do not conflict (GitHub's own merge check may not use
-it). Union also keeps a line one side removed or edited next to the other's
-append, so after such a merge run `dev/varka_lint.py sql/varka/matrix/skips.tsv`,
-which reads every line and flags a test named twice.
-A Varka pull request's Build runs
-the suites at the defaults only: its option configurations are checked by the
-`varka-option-matrix` workflow, which runs all of them, dispatched on its branch
-on the fork or with `pr` and `sha` on vecbricks/varka. On the fork a configuration
-runs a SQL test only where the Build of the same commit recorded that it moves
-something the test compiled or emitted (`VarkaTestReach`); a test the record
-lacks, or one `skips.tsv` names under the configuration, still runs. A run on
-vecbricks/varka reuses no Build, so it has no record and runs every test. An option
-read anywhere but the compiler and the emitter - by an evaluator as it runs, say -
-changes answers no record sees, so its configuration goes in
-`VarkaTestReach.FULL`, with the reason, and runs every test.
-
-A regeneration ends with the requote: `dev/varka_bench_diff.py --git HEAD <file>
---requote` lists, under each moved row, every document line that quotes its old
-number, and the regeneration is done when that list is empty or every line left
-says on purpose that it quotes the number a change moved away from. The checks
-that need volume run from `dev/varka_nightly.sh` - the canary, the fuzzer at ten
-thousand iterations with the day's seed, the exhaustive sweeps, the guard against
-the C2 deoptimization cycle, optionally the gate - into a dated log under
-`target/varka-nightly/`.
-
-A task starts with `dev/varka_task_new.sh <n> "<title>"`. What it makes, the one plan
-template, the milestone in flight and the cases the script refuses are in `plans/README.md`.
-
-For an emitter question, `dev/varka_emit.sh "year(d)" "month(d)"` prints what
-a projection compiles to, its shape hash, and per emitted method the bytecode
-size and the `IntVector`/`VectorMask` invocation counts on the scale the
-emitter suite's op-count tests use - so a plan's registered op counts come
-from the tool, not from reading the emitter. `--asm` adds C2's assembly for the
-dense loop and its mnemonic frequencies; `--options k=v` selects any
-`VarkaEmitOptions` variant by name. `--table --variant k=v` prints the
-op-count table a plan registers instead - one row per expression, one column
-per variant, deltas against the defaults - ready to paste.
-
-`-XX:+PrintAssembly`, and so `--asm` and the assembly suite, need the hsdis
-disassembler plugin, which no JDK ships. `dev/varka_hsdis_build.sh` builds it
-in seconds from the JDK's one source file and the distribution's capstone
-library, without a JDK build, and checks HotSpot loads it. Worktrees are
-listed and the merged ones removed with `dev/varka_worktree.sh list|gc`. The scripts that gate,
-push and watch a pull request are in `dev/varka_ops/`; read its `INDEX.md` and `AGENTS.md` first.
-Before you look for, run or add a `dev/varka*` tool: read `.agents/tools.md`, the index of them all.
-
-A lesson that will outlive the task that learned it - especially a negative
-result, which is what stops the next person re-litigating a settled question -
-goes in `sql/varka/skills/`, one file per topic, as a new `##` section in the
-file it belongs to. `SKILLS.md` at the repository root is the index over them
-and is generated: run `dev/varka_toc.py SKILLS.md --from sql/varka/skills`
-after adding one, which the pre-commit hook checks. The split is for retrieval -
-the record is two hundred kilobytes and nothing needs all of it to answer one
-question - so put the lesson where a reader looking for that topic would find
-it, rather than opening a file per lesson.
-
-## Java code: modern Java 25, on the code a change touches
-
-Set by the owner on 4 October 2026. They apply to the Java a change writes or touches and to
-every Scala-to-Java port; existing Java that a change does not touch is not swept to match.
-
-**The language.**
-
-* **A record for every data carrier.** A type that holds values and has no mutable identity is a
-  `record`, with its invariants checked in the compact constructor. A class only where mutable
-  state or inheritance is the point.
-* **Closed sets are sealed, and matched exhaustively.** A closed set of cases is a sealed
-  interface of records, consumed by a pattern-matching `switch` with record patterns where they
-  destructure, never by an `instanceof`-and-cast ladder. A switch over a sealed type or an enum
-  has no `default`, so that a new case is a compile error at every consumer instead of a silent
-  fallthrough. The IR (`VarkaVectorIR`) is the model.
-* **`var` where the right-hand side names the type** (`var groups = new ArrayList<Integer>()`),
-  the type written out where it does not (`int widest = widestDriver(driver)`).
-* **Text blocks for multi-line strings; the diamond, method references, and `String.replace`
-  over `replaceAll` for a literal.**
-* **`List.of`, `Set.of`, `Map.of` for collections nothing modifies** - they reject nulls, which
-  matters where a value arrives from Scala.
-* **Statements before `super(...)`** (flexible constructor bodies, final in 25) for validating
-  arguments in the few class hierarchies there are.
-* **`ThreadLocal` for per-thread mutable buffers**, such as the fallback scratch; `ScopedValue`
-  only for immutable context passed down a call, which Varka has not needed so far.
-
-**What it runs on.**
-
-* **The JDK, not a library**, for anything the JDK covers: no new Guava or Commons use in Varka's
-  Java (and see the shading rule below for the Guava already in Spark).
-* **`jdk.incubator.vector` is the one incubator module, and the reason the engine exists**;
-  preview features stay off - no `StableValue`, no `StructuredTaskScope` - and so does anything
-  that would need `--enable-preview` in Spark's build.
-* **No allocation, streams, lambdas or boxing on a path that runs per batch or per row**: the
-  runtime helpers an emitted kernel calls and the evaluators' batch loops. Streams, lambdas and
-  records are welcome in the compiler, which runs once per shape; even there a plain loop beats a
-  stream that is harder to read.
-* **Explicit imports.** No `import module`: it hides what a file depends on, and Spark's
-  checkstyle expects imports by name.
-
-**The suites.**
-
-* **A new catalyst suite whose helpers are Java is a JUnit 5 class under `@VarkaSuite`**
-  (VARKA-312), each `@Test` carrying its sentence as a `@DisplayName`, the way a ScalaTest test is
-  named: `@DisplayName("a reduction that fails differently is not smaller")`, not a method name
-  standing in for one. The sentence is the test's name in sbt's output, the matrix's report, the
-  JUnit XML and `sql/varka/matrix/skips.tsv`. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`,
-  and the annotation's `watchdogMinutes` and `ownJvm` are the ScalaTest traits' parameters;
-  `dev/varka_matrix.sh` finds a `Varka...Suite` under it beside the Scala suites, so the gate and
-  CI run it with no change. `sql/varka/skills/testing-and-debugging.md` says how to write and run
-  one.
-* **An existing ScalaTest suite moves only when a task touches it**, as for other code, and the
-  sql/core suites stay ScalaTest: their base is Spark's `SharedSparkSession`, which no JUnit
-  extension provides yet.
-
-**What stays as it is.** Spark's interop surface stays Scala - the `SparkPlan` subclasses, the
-Catalyst rules, the ScalaTest suites over Spark's sessions - as the migration rule below says.
-Test helpers are Java, and an existing ScalaTest suite is a thin Scala layer over them. A new benchmark is Java on `VarkaBenchmarkBase`, the
-catalyst test tree's adapter over Spark's harness (VARKA-224), and a Scala benchmark is ported
-when a task touches it, the port proving itself by reproducing its committed results; the engine module's tests are JUnit 5 as they are, and no
-new assertion library comes in. A refactor is proven by `emitted_bytes.json` byte-identical, a
-port by the coverage and family-chain oracles. Lines stay within 100 columns, and `dev/lint-java`
-passes, and so does `dev/varka_errorprone.sh`: Error Prone over Varka's Java, and NullAway over
-every class `dev/varka_nullaway_pending.txt` does not list (VARKA-266).
-
-## Papers are transcribed, not paraphrased from memory
-
-`papers/` holds machine transcriptions of the third-party papers this work reads
-closely - currently one, Neri and Schneider's calendar algorithms. They are there
-so a plan can cite a constant, a theorem number or a range bound with the
-argument at hand. Two rules follow from what they are. They carry their own
-authors and licence and are **not** this project's documentation, so nothing in
-`papers/` is Apache-licensed, compiled or shipped. And they are lossy - a PDF's
-typography carries part of every formula - so **when a constant, an exponent or
-an inequality decides something, read the PDF, not the transcription**. Each file
-opens with what its conversion lost. See `papers/README.md` before adding one.
 
 ## Processes: started, waited on and stopped by PID, never by pattern
 
@@ -371,55 +228,8 @@ loads, benchmarks. So:
   `sql/varka/ci/step-budget.tsv` (`dev/varka_ci_times.py gate <dir>` for a laptop gate or
   nightly; a Build's check carries the same table for its CI steps).
 
-## Master stays green, ahead of everything else
+## Java first
 
-* **A red master comes first.** Master is green only when the latest run of `varka-master.yml`
-  on its current head that was not cancelled succeeded; when that run was cancelled, rerun it.
-  When master is red, or a merge breaks a suite every pull request runs, other work waits: no
-  new pull requests, no feature merges, and no refactor starts until master is green again. The
-  exceptions are the pull request that makes master green and the plan or results pull requests
-  the owner allows. Read the failure before calling it anything: a test near its time budget
-  fails on a slower runner class and looks like a slow runner, but it is a loss of headroom.
-* **Fix forward when the fix is small and sure; otherwise revert.** When the cause needs design
-  work, the default is a revert of the pull request that turned master red, with a dated note on
-  why it must be redesigned: in its row's plan, or, for a pull request with no row, in the
-  revert's description and a new Filed row. On 23 November 2026 #1626 (row 611) pushed the
-  emitted-bytes pin test past its 600 s limit on AVX2 runners (511 to 551 s before it). The run on
-  #1626's own merge passed on an AVX-512 runner, and the next master run, 45256702183, failed 3 of
-  3 attempts, all on EPYC 7763s. The owner decided to revert #1626 before row 489's refactor.
-* **Check before merging that a pull request cannot turn master red.** If master moved since its
-  last green CI and the pull request commits generated records or test-time-sensitive changes,
-  merge master, regenerate and rerun before merging. #1646 merged a generated record built before
-  #1628 and turned master red on 23 November 2026. A test past half its time limit on the slowest
-  runner class is a finding, not a pass.
-
-## House rules that bite here specifically
-
-* Java in a non-core module cannot pass a Guava type to a `core` API. Maven shades
-  `core`, relocating `com.google.common` to `org.sparkproject.guava`, so a signature
-  like `NonFateSharingCache(Cache)` arrives at javac with the relocated parameter
-  type. Scala is unaffected - scalac reads the Scala pickle, which shading does not
-  rewrite - and SBT does not shade at all, so only the Maven CI job catches it. Keep
-  Guava inside the module that owns it and reimplement the few lines locally when a
-  `core` utility cannot be reached without one; `SKILLS.md` records the mechanism and
-  the seconds-long local check. The same applies in reverse to Scala: a Scala call
-  site passing a Guava type compiles but names a method the shaded artifact does not
-  have.
-* A Java class holding an incubator-module type (`jdk.incubator.vector`) in a field
-  needs `--add-modules` in **two** places under Maven: `scala-maven-plugin`'s
-  `javacArgs`, which compiles it, and that plugin's `jvmArgs`, because zinc extracts
-  the class's API afterwards by calling `Class.getDeclaredFields()` reflectively in the
-  compiler's own JVM. Missing the second gives `NoClassDefFoundError` *after* a
-  successful compile, and only the Maven CI job sees it - the sbt launcher already runs
-  with the module resolved. `SKILLS.md` records the mechanism and a seconds-long local
-  check. The engine module needs neither block because it has no parent pom and uses
-  `maven-compiler-plugin` directly.
-* Scala cannot see `java.lang.classfile` types: Scala 2.13's typechecker reports
-  "illegal cyclic reference" when completing them, and the Maven build's scaladoc
-  pass fails on it. Emitter-adjacent code that touches the Class-File API stays in
-  Java, with no class-file type in any signature and fully-qualified names inside
-  method bodies; Scala reaches it through plain `byte[] -> String` shims.
-  `build/sbt catalyst/doc` is the local gate that reproduces the CI failure.
 * **The project is migrating from Scala to modern Java (25+): prefer Java for new
   Varka code wherever possible.** Records, sealed interfaces and pattern-matching
   switches are already the house style in the IR and emitter; match it. Reach for
@@ -427,47 +237,6 @@ loads, benchmarks. So:
   ScalaTest suites. Matching over Catalyst expressions is not one of them: a
   compiler family matches in a Java `switch` over type patterns with `when`
   guards, as well as in a Scala `match`, and what a port costs is at its boundary
-  with Scala code (`VARKA-175.md` 5). Existing Scala is not rewritten as a
+  with Scala code (`sql/varka/plans/m6/VARKA-175.md` 5). Existing Scala is not rewritten as a
   side effect of another task; the migration is its own work (milestone 3,
   VARKA-23).
-* Every hot loop method stays small by construction (`GROUP_BUDGET`): C2's compile
-  time grows steeply with vector-op count, and a wide method is slower to compile
-  *and* slower to run. Sibling methods, not longer methods. Two recorded exceptions:
-  the budget partitions *between* outputs and never splits inside one, so a single
-  output wider than the budget still forms one method - the capped `IN` chain
-  (VARKA-20, up to 33 ops in the benchmarked shape) is the known case, its ~30 ms
-  one-time C2 compile per fresh shape accepted because the task-18 class cache
-  amortizes it and the measured win at the cap is 4.0x; and calendar outputs over
-  one date share a method up to `FUSED_CEILING` (400 ops), because the
-  shared civil-from-days prefix makes the wider method less work rather than more
-  (VARKA-32, 2.15x on four fields). Beyond that, the emit cost model's prediction bounds a group
-  in `GROUP_BUDGET`'s place where it can (VARKA-254: with the plan's margins, a call-site budget
-  and a group it prices), and the budget binds everywhere else; a group the prediction widens is
-  checked on call sites at every later join and split after the build however narrow. Whether two
-  plain chains over a shared subchain should share a method under the budget's rule is VARKA-43's
-  open question (VARKA-17 measured the merge as a loss; the parity file has read it as a win since
-  VARKA-46 moved the validity OR ahead of the vector work).
-* **A new bounded lowering comes with its proof file** (VARKA-242). A lowering exact only over a
-  bound - a magic multiply over a range, a fold, a perfect hash, a form that rounds - ships with a
-  file under `sql/varka/proofs/` that proves it over that bound and finds where it first fails,
-  rendered from the code's own constants by `VarkaProofFiles`, as `sql/varka/proofs/README.md`
-  describes; a calendar division joins `ChronoDivide`'s table, whose rows are proven as they are
-  added. A sweep of the whole decomposition is not the same check: it cannot see a constant whose
-  site has stopped being exact while a later step still absorbs the error (`VARKA-242.md` 9).
-* **The suites run with the memory sanitizer on** (VARKA-263): `dev/varka_matrix.sh` passes
-  `-Dvarka.sanitizeMemory=true`, so every mapping a kernel makes is checked against the buffers the
-  evaluator handed it, and a suite that leaves Arrow memory allocated is aborted. A buffer given to
-  a kernel is registered where it is obtained (`VarkaMemorySanitizer.register` or `guard`, which
-  also puts a canary past a buffer Varka allocates), an address becomes a segment only through
-  `VarkaSegments.map` or the engine's `VarkaVectorSupport.ofAddress` (the pre-commit hook rejects
-  a raw `.reinterpret(`), and a buffer Varka allocates under the flag leaves room for the canary.
-  Benchmarks and the JIT-measuring suites run with it off (`--no-sanitizer`), since its branches
-  change what C2 compiles. The kernel warm-up (`VarkaKernelWarmup`) runs each job in a window of
-  its own over its own arena, registered at the rows a call can reach and not at the allocation's
-  padding, so the code C2 compiles from it keeps the branch a batch in a window takes
-  (`VarkaSanitizedWarmupSuite`). A violation is not a kernel failure and is never a fallback: in a
-  warm-up it ends the job and is handed to the next `VarkaKernelWarmup.awaitIdle`, which throws it.
-* The ghost fallback is a correctness contract: a Varka failure degrades to the
-  row engine and never fails a query. Anything that can return a *wrong* answer
-  rather than fail - a cache key, for one - gets its own differential coverage,
-  because the fallback cannot catch it.

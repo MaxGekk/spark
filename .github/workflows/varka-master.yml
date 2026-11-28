@@ -24,10 +24,10 @@
 # The jobs are named rather than left to the precondition, which on master diffs the head
 # against itself and selects nothing: Varka's suites, engine, bench drivers, assembly gate and
 # docs checks, the linters with every step, and the Java 25 Maven build, which is the only place
-# the shading and incubator-module failures of sql/varka/AGENTS.md's house rules appear. Spark's
-# module matrix is the weekly run's (varka-weekly-matrix.yml): each pull request already ran the
-# modules its own change touches, and a merge that touches a Spark file would otherwise start
-# 35 jobs for two hours on the twenty slots this repository shares with benchmark.yml.
+# the shading and incubator-module failures of sql/varka/.agents/java.md's build traps appear.
+# Spark's module matrix is the weekly run's (varka-weekly-matrix.yml): each pull request already ran
+# the modules its own change touches, and a merge that touches a Spark file would otherwise start 35
+# jobs for two hours on the twenty slots this repository shares with benchmark.yml.
 #
 # The fork the pull requests' Builds run on, MaxGekk/spark, runs this workflow too, on its own
 # master, when varka-fork-sync.yml has moved that master to this repository's and dispatches it

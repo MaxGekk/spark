@@ -63,7 +63,7 @@ a dispatch of `benchmark.yml`" below. Design: `plans/m8/VARKA-591.md`, `plans/m8
 
 **3. Three thresholds, three decisions.** They do not compete:
 
-* *Does this claim need more than one run?* `sql/varka/AGENTS.md`, "Measurements, not
+* *Does this claim need more than one run?* `sql/varka/.agents/measurements.md`, "Measurements, not
   adjectives": "any claim resting on a ratio under ~1.3x is re-run and compared by minimums
   before it is written down". This is about a ratio you want to quote (a gain, or a tie).
   The pair run is that re-run: its `best` column is the comparison by minimums.

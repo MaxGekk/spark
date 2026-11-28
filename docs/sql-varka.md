@@ -2832,7 +2832,7 @@ The real current edges, stated with their numbers where they have one:
   shape's first execution pays a one-time C2 compile of roughly 1 ms per
   vector op; the class cache amortizes it across every later task of that
   shape, and the exception is registered with the `GROUP_BUDGET` rule in
-  `sql/varka/AGENTS.md`.
+  `sql/varka/.agents/kernels.md`.
 
 ## Building, testing and running benchmarks
 

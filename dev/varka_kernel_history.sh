@@ -84,8 +84,9 @@ if [ "$build" -eq 1 ] || [ ! -s target/varka-matrix/classpath ]; then
   dev/varka_matrix.sh --module catalyst --list > /dev/null
 fi
 # The test JVM's options as sbt gives them. The JIT is what is measured, so the memory sanitizer
-# stays off, as for the benchmarks and the other JIT probes (sql/varka/AGENTS.md): the options
-# file does not carry it (dev/varka_matrix.sh adds it to its own runs), and nothing here adds it.
+# stays off, as for the benchmarks and the other JIT probes (sql/varka/.agents/kernels.md): the
+# options file does not carry it (dev/varka_matrix.sh adds it to its own runs), and nothing here
+# adds it.
 mapfile -t opts < target/varka-matrix/jvm.opts
 cp="$root/sql/catalyst/target/scala-2.13/classes:$(cat target/varka-matrix/classpath)"
 main=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelHistoryProbe

@@ -67,6 +67,7 @@ Outside that script (each file's first lines name its own command):
 
 ### Directories under `sql/varka/`
 
+- `.agents/`: the detail files behind the pointers of `AGENTS.md`, the tool index among them.
 - `baselines/`: the scalar Java baseline of the calendar speedups, with its results.
 - `bench/`: the benchmarks against stock Spark, a module of its own; results in `benchmarks/`.
 - `census/`: TPC-H and TPC-DS codegen census output (`dev/varka_tpc_census.sh`).
@@ -114,9 +115,8 @@ historical), and the generated records listed above.
 ### Tools, CI, public documents
 
 - Tools: `dev/varka_*` (106 entries, `ls dev | grep -c '^varka'`), `dev/varka_ops/` (gate, push,
-  watch a pull request), `dev/varka_canary/` (machine probes). There is no single index yet.
-  Today's lists: `dev/varka_ops/INDEX.md` for `dev/varka_ops/`; the tables under "Development
-  and benchmarking tools" in `docs/sql-varka.md`; and the tools named in `AGENTS.md` here.
+  watch a pull request), `dev/varka_canary/` (machine probes). The index of every `dev/varka*`
+  entry is `sql/varka/.agents/tools.md`; `dev/varka_ops/INDEX.md` lists `dev/varka_ops/`.
 - CI: `.github/workflows/varka-*.yml` (16 files) and Spark's `build_and_test.yml`.
 - Public documents: `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md` at the root;
   `docs/sql-varka.md` is the architecture guide (glossary, configuration, troubleshooting).
