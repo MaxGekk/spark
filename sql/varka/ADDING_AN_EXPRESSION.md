@@ -113,7 +113,7 @@ Two rules of the long lane that the int lane does not have:
 
 The type's suites: `git ls-files | grep 'Varka<Type>.*Suite'`, where `<Type>` is the
 `conformance` column of `types.tsv` (`TimestampNtz` gives the `VarkaTimestampNtz*Suite` files).
-A new catalyst suite is JUnit 5 under `@VarkaSuite` (`sql/varka/AGENTS.md`, "The suites").
+A new catalyst suite is JUnit 5 under `@VarkaSuite` (`sql/varka/.agents/java.md`, "The suites").
 
 ## The path
 

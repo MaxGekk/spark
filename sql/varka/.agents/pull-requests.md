@@ -73,4 +73,4 @@ and the steps that open or fix a pull request.
 - **A builder agent**, one that was given a single task, commits on its branch and reports. It
   does not push, open a pull request or merge unless its task says so.
 
-Before any merge, read "Master stays green, ahead of everything else" in `sql/varka/AGENTS.md`.
+Before any merge, read `.agents/master-green.md`.

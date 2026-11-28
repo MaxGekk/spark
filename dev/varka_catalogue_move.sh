@@ -20,12 +20,12 @@
 #   dev/varka_catalogue_move.sh 8 9          # move m8's catalogue to m9 and rewrite citations
 #   dev/varka_catalogue_move.sh --check 8 9  # fail if any tracked file still cites the old path
 #
-# sql/varka/AGENTS.md: when a milestone's catalogue becomes a task plan, the furthest-out
+# sql/varka/.agents/plans.md: when a milestone's catalogue becomes a task plan, the furthest-out
 # catalogue moves forward with its item numbers unchanged, and a plan may be renamed only if every
 # inbound reference is updated with it. The files that move are the catalogue (SCOPE.md), its
 # reading notes (READING_*.md) and the plans of the rows the catalogue holds, which live beside it
-# (AGENTS.md, "Plans are records"): MOVED_PLANS below, derived from the old milestone's task
-# table. Plans of rows the new milestone takes stay where they are.
+# (sql/varka/.agents/plans.md, "Plans are records"): MOVED_PLANS below, derived from the old
+# milestone's task table. Plans of rows the new milestone takes stay where they are.
 #
 # The script is idempotent: a second run moves nothing and rewrites only citations that arrived
 # since the first, such as those a merge of master brings in. Run it again after every such merge,

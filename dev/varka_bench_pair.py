@@ -34,12 +34,12 @@ a neighbour on the runner disturbed.
 each row's change in percent twice (+ is faster, - is slower, the sign of the diff tool): from
 each side's median rate over its files, and from each side's best, its fastest run. The two answer
 different questions - the median the typical run, the best what the code can do when nothing
-disturbs it - and `sql/varka/AGENTS.md` asks a ratio under about 1.3x to be compared by minimum
-times. A row is *slower* when both changes are at most -threshold and *faster* when both are at
-least +threshold; a row whose median moves past the threshold while its best does not is marked
-as the median's alone, which is how drift shared by every row of a run reads (VARKA-224's pair:
-all eight rows slower by median, seven equal or faster by best). The exit status is 1 if any row
-is slower, which is the gate. The last line gives the widest change either way, which on an A/A
+disturbs it - and `sql/varka/.agents/measurements.md` asks a ratio under about 1.3x to be compared
+by minimum times. A row is *slower* when both changes are at most -threshold and *faster* when both
+are at least +threshold; a row whose median moves past the threshold while its best does not is
+marked as the median's alone, which is how drift shared by every row of a run reads (VARKA-224's
+pair: all eight rows slower by median, seven equal or faster by best). The exit status is 1 if any
+row is slower, which is the gate. The last line gives the widest change either way, which on an A/A
 pair - the head against itself, `dev/varka_bench_pair.sh --base HEAD` - is the runner's own
 spread for that class. `settled` says
 whether the rounds so far already show every row within `--within` percent either way, in which

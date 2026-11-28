@@ -56,7 +56,7 @@ import re
 import subprocess
 
 DOCS = ["SKILLS.md", "README.md", "docs/sql-varka.md", "sql/varka/AGENTS.md"]
-DOC_GLOBS = ["sql/varka/plans/*.md", "sql/varka/plans/m*/*.md"]
+DOC_GLOBS = ["sql/varka/.agents/*.md", "sql/varka/plans/*.md", "sql/varka/plans/m*/*.md"]
 
 ROW = re.compile(r"^(.*?)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)X\s*$")
 HEADER = re.compile(r"^(.*?):\s+Best Time\(ms\)")
@@ -72,7 +72,7 @@ def parse(text):
     overwrites the first: the file's own diff then silently reports one row where
     there are two, and `--requote` treats the survivor's shifted key as absent
     rather than moved, which is a false all-clear on the closing step
-    `sql/varka/AGENTS.md` makes mandatory.
+    `sql/varka/.agents/measurements.md` makes mandatory.
     """
     rates, order, seen, table = {}, [], {}, ""
     for line in text.splitlines():
