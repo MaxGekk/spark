@@ -1572,7 +1572,7 @@ jobs:
   # none of its steps fails the run: without its archive the matrix compiles for itself.
   #
   # A Spark change that builds catalyst or sql runs this job and sql's three beside Spark's module
-  # matrix (the precondition says why), and not catalyst's three: the module matrix runs every
+  # matrix (the precondition says why), and not catalyst's four: the module matrix runs every
   # Varka suite of both modules, and catalyst's record nothing the option matrix reads. Such a
   # change goes without catalyst's emitted-bytes verdict, its new tests' reruns and the lane walk,
   # which a change confined to Varka's files gets. Nor do they save the dependency caches, their
@@ -1675,11 +1675,15 @@ jobs:
       (!cancelled()) && needs.precondition.result == 'success'
       && fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
       && (needs.admit.result == 'success' || needs.admit.result == 'skipped')
-    name: "Varka suites: ${{ matrix.module }} ${{ matrix.part }}"
+    name: "Varka suites: ${{ matrix.module }} ${{ matrix.job }} of ${{ matrix.module == 'catalyst' && '4' || '3' }}"
     runs-on: ubuntu-latest
     # The suites under the defaults; a pull request's option configurations are its dispatched
     # option matrix's (VARKA-521). A fix's new tests also build the merge base, a second tree.
     timeout-minutes: 150
+    env:
+      # How many jobs split the module's suites: the job's name spells the same expression,
+      # since a job's name cannot read `env`.
+      VARKA_JOBS: ${{ matrix.module == 'catalyst' && '4' || '3' }}
     strategy:
       fail-fast: false
       # Each module times each share; sql's alone beside Spark's module matrix (see above).
@@ -1688,17 +1692,14 @@ jobs:
         module: >-
           ${{ fromJson(fromJson(needs.precondition.outputs.required).varka-scope == 'spark'
           && '["sql"]' || '["catalyst", "sql"]') }}
-        shard: [0/3, 1/3, 2/3]
-        include:
-          - shard: 0/3
-            part: 1 of 3
-            slug: 1of3
-          - shard: 1/3
-            part: 2 of 3
-            slug: 2of3
-          - shard: 2/3
-            part: 3 of 3
-            slug: 3of3
+        # Catalyst's suites take four jobs and sql's three (VARKA-695): catalyst's width audit
+        # alone runs about as long as a third of the rest. The count is `VARKA_JOBS` below and
+        # not an `include` keyed on the module, which would add catalyst jobs to a run of sql's
+        # alone.
+        job: ['1', '2', '3', '4']
+        exclude:
+          - module: sql
+            job: '4'
     steps:
     - name: Bootstrap composite actions
       uses: actions/checkout@v6
@@ -1783,9 +1784,9 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: target/varka-scoped
-        key: varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-${{ github.run_id }}
+        key: varka-scoped-times-${{ matrix.module }}-${{ matrix.job }}of${{ env.VARKA_JOBS }}-${{ github.run_id }}
         restore-keys: |
-          varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-
+          varka-scoped-times-${{ matrix.module }}-${{ matrix.job }}of${{ env.VARKA_JOBS }}-
           varka-scoped-times-${{ matrix.module }}-
     # Where a recent Build saved its compile state, this job starts from it and sbt compiles only
     # what differs from it; without one, or with one sbt cannot use, it compiles clean as before
@@ -1818,7 +1819,7 @@ jobs:
     # The lane walk of the docs job (VARKA-474 2.3), here too: the files it reads are Varka
     # sources, whose changes run this job and not the docs one. It runs in a second.
     - name: Every lane and type is wired where no compiler checks
-      if: matrix.module == 'catalyst' && matrix.shard == '0/3'
+      if: matrix.module == 'catalyst' && matrix.job == '1'
       run: ./dev/varka_new_lane.py --check
     # The sql suites record, as they run at the defaults, which option configurations move each
     # test (VarkaTestReach), so that the option matrix dispatched on this commit runs a
@@ -1829,19 +1830,20 @@ jobs:
     # that matrix's configurations read instead of planning and computing them again; the
     # directory is outside target/varka-scoped, which the cache restores, so no Build reads an
     # earlier one's.
-    - name: Run the Varka suites of ${{ matrix.module }}, ${{ matrix.part }}
+    - name: Run the Varka suites of ${{ matrix.module }}, ${{ matrix.job }} of ${{ env.VARKA_JOBS }}
       run: |
         if [ "${{ matrix.module }}" = sql ]; then
           export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
           export VARKA_HARNESS_STORE=$PWD/target/varka-harness-store
         fi
-        ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+        ./dev/varka_scoped_suites.sh ${{ matrix.module }} \
+          --shard "$(( ${{ matrix.job }} - 1 ))/${{ env.VARKA_JOBS }}"
     # One job of each module saves its Coursier cache and one job the SBT and Maven cache, which
-    # every module's jobs share, so the six jobs do not race to save the same key. They save even
+    # every module's jobs share, so the seven jobs do not race to save the same key. They save even
     # when a suite failed: the dependencies resolved all the same.
     - name: Save the Coursier local repository
       if: >-
-        !cancelled() && matrix.shard == '0/3' && steps.cache-save.outputs.save == 'true'
+        !cancelled() && matrix.job == '1' && steps.cache-save.outputs.save == 'true'
         && steps.coursier-cache.outputs.cache-hit != 'true'
       continue-on-error: true
       uses: actions/cache/save@v4
@@ -1850,7 +1852,7 @@ jobs:
         key: ${{ steps.coursier-cache.outputs.cache-primary-key }}
     - name: Save SBT and Maven
       if: >-
-        !cancelled() && matrix.module == 'sql' && matrix.shard == '0/3'
+        !cancelled() && matrix.module == 'sql' && matrix.job == '1'
         && steps.cache-save.outputs.save == 'true' && steps.build-cache.outputs.cache-hit != 'true'
       continue-on-error: true
       uses: actions/cache/save@v4
@@ -1866,7 +1868,7 @@ jobs:
     # job).
     - name: Save the compile state
       if: >-
-        matrix.module == 'sql' && matrix.shard == '0/3'
+        matrix.module == 'sql' && matrix.job == '1'
         && fromJson(needs.precondition.outputs.required).varka-scope != 'spark'
       continue-on-error: true
       run: |
@@ -1875,7 +1877,7 @@ jobs:
         ls -l target/varka-compile-state.tgz
     - name: Upload the compile state
       if: >-
-        matrix.module == 'sql' && matrix.shard == '0/3'
+        matrix.module == 'sql' && matrix.job == '1'
         && fromJson(needs.precondition.outputs.required).varka-scope != 'spark'
       continue-on-error: true
       uses: actions/upload-artifact@v4
@@ -1889,7 +1891,7 @@ jobs:
       continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
-        name: varka-matrix-reach-${{ matrix.module }}-${{ matrix.slug }}
+        name: varka-matrix-reach-${{ matrix.module }}-${{ matrix.job }}of${{ env.VARKA_JOBS }}
         path: target/varka-reach.tsv
         retention-days: 1
     # A share none of whose JVMs ran the harness writes no file, and uploads nothing.
@@ -1898,7 +1900,7 @@ jobs:
       continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
-        name: varka-harness-store-${{ matrix.module }}-${{ matrix.slug }}
+        name: varka-harness-store-${{ matrix.module }}-${{ matrix.job }}of${{ env.VARKA_JOBS }}
         path: target/varka-harness-store/harness-*.bin
         if-no-files-found: ignore
         retention-days: 1
@@ -1908,7 +1910,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: varka-scoped-junit-${{ matrix.module }}-${{ matrix.slug }}
+        name: varka-scoped-junit-${{ matrix.module }}-${{ matrix.job }}of${{ env.VARKA_JOBS }}
         path: |
           target/varka-scoped/runs/defaults/*/junit/*.xml
           target/varka-scoped-quiet*/runs/defaults/*/junit/*.xml
@@ -1959,7 +1961,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: target/varka-scoped
-        key: varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-${{ github.run_id }}
+        key: varka-scoped-times-${{ matrix.module }}-${{ matrix.job }}of${{ env.VARKA_JOBS }}-${{ github.run_id }}
 
   varka-docs:
     needs: [precondition]
