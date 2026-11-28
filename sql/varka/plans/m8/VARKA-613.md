@@ -336,6 +336,41 @@ other `*BaselineQueriesSuite`, `VarkaEndToEndSuite`, `VarkaSparkFuzzSuite`,
   machine or widens it. The blend declines under all three rules, so the row's done-when does not
   depend on that second run.
 
+### 9.6 The day-time baseline at 256 bits after the decline (28 November 2026)
+
+The decline merged as #1619 on 22 November 2026. The class's 256-bit runner file,
+`VarkaDayTimeIntervalBaselineBenchmark-jdk25-runner-epyc7763-results.txt`, is now run 46055735411
+of vecbricks/varka, on an AMD EPYC 7763. It measured `refs/pull/1791/head`, `3a7891ad404`, which
+is master `a5c8d1f0972` plus two plan-only commits (`VARKA-612.md` 9.5 has the run's details).
+
+Prediction 5 of 6.1 at 256 bits, the blend at 1.0X within 5%: **wrong.** By best time the row
+path and varka on read 93 and 134 ms without nulls (0.69x) and 99 and 134 ms with one row in ten
+null (0.74x), or 46.7 against 66.8 and 49.3 against 66.9 ns a row. Step 4's done-when is not met.
+This is one run, but a second one would not change the reading. The gap is far past 5%, and the
+varka on arm's rate is the same as in the replaced file from before the change: 15.1 to 15.0 M
+rows/s without nulls, 15.0 to 15.0 with them. The row path's rate moved by 3% and 6%.
+
+**Why, from the code (**[I]**: the run does not print the plan it timed).** The run's class check
+and its timed arm read two different plans. `requireBaseline` reads the section's plan from
+`varka.sql(query).queryExecution().executedPlan()`. That plan's root consumes rows, so the decline
+fires and the class is `NONE`, as listed. But each arm is timed through
+`VarkaSqlBenchmarkBase.noop`, a write to the `noop` source. Under that write the rule keeps every
+partial projection's `VarkaProjectExec` by design: it treats the write as a columnar consumer, and
+`VarkaPartialDeclineSuite`'s test "a columnar consumer keeps every partial projection's kernel"
+holds it to that. So the varka on arm still times the kernel for `DAY` with the merge of the three
+residual extracts, as it did before #1619. This also bears on 3.1. Section 3.1 keeps the partial
+projection under a columnar consumer because `VARKA-12.md` 6.3 measured it winning there (1.5x).
+Under this write, the runner reads it at 0.69x and 0.74x.
+
+Registered before the 128-bit file is read: the blend's varka on arm there reads within 10% of the
+committed 128-bit file's 94.4 and 93.7 ns a row, so 0.5X to 0.6X. Its plan under the write is the
+same, and row 612's refusal does not reach `extract`.
+
+**Owed.** The 128-bit half comes from runs 46137362031 and 46137364599 of vecbricks/varka, which
+time this class and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVectorSize=16`. Both
+were dispatched on master `fb7d8261711` on 28 November 2026 and were still running when this was
+written. The done-when then waits on question 10.3.
+
 ## Decisions taken while the owner was away (20 November 2026)
 
 1. **Where the reason lives.** A declined projection has no Varka node, so no fusion report can
@@ -375,3 +410,21 @@ other `*BaselineQueriesSuite`, `VarkaEndToEndSuite`, `VarkaSparkFuzzSuite`,
    useful after 103b, and the blend is the only committed loss. The alternative is to leave the
    section losing until 103b, which the owner's "no fused shape slower than the row path" rules
    out.
+3. **The blend under the baseline's `noop` write (9.6, 28 November 2026).** The decline fires
+   under a row consumer, but the baselines time through a `noop` write, which the rule treats as
+   a columnar consumer and keeps the kernel. So the section still reads 0.69x and 0.74x at 256
+   bits. There are three ways forward:
+   * (a) Time the baselines' arms through a row consumer, so that each section measures the plan
+     its class check reads. `VarkaSqlBenchmarkBase.noop` is shared, so this changes the timed plan
+     of every baseline that has a partial or row-consumer-sensitive section.
+   * (b) Let the rule decline the residual-heavy blend under that write too. This reverses 3.1's
+     choice, which rests on `VARKA-12.md` 6.3's 1.5x, a milestone-2 reading that this run
+     contradicts for the blend.
+   * (c) Accept the baseline as timing the columnar consumer, and score the done-when on a row
+     consumer some other way.
+
+   Recommended: (b), because the loss is in what users get under a columnar consumer, not only
+   in what the baseline times. (b) has to be measured, though: the rule would decline a shape
+   that `VARKA-12.md` 6.3 saw win, so `VarkaPartialProjectionProbe` should first be run under a
+   `noop` write on the EPYC 7763. I cannot decide it. It is a change of the rule's scope, and of
+   what the baselines measure, which both rows 598 and 612 read too.
