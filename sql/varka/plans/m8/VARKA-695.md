@@ -401,6 +401,10 @@ Not built yet.
 
 ## 10. Questions for the owner
 
+*Answered on 28 November 2026, by the owner's word of that day:* question 1, yes, a probe is
+one child JVM; question 2, yes, the forced censuses may lose the split; question 3, no row yet,
+commit 1 prints the failing test's name and the owner decides then. The plan stands as written.
+
 1. **Is "a probe" in the done-when one child JVM?** The plan reads it so: the 300 s is half a child
    JVM's budget (`childTimeoutSeconds`), and C meets it by making each child shorter. If a probe is
    a whole width's audit, C does not count, and no option here meets the target on an EPYC 9V74,
