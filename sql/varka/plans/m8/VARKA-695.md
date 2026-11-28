@@ -83,7 +83,9 @@ rows read "vector" without the second phase at 128 bits.
 Each projection applies the derived ratio of section 2 (a second phase dropped divides a probe's
 time by 1.46) and, for a split, divides a probe's time by the number of JVMs plus each JVM's setup
 `o`: its start and the build of every audited shape before the first one runs, unmeasured, guessed
-at 10 to 40 s **[A]**, measured by commit 1. "Slowest" is the slowest child JVM.
+at 10 to 40 s **[A]**, measured by commit 1. "Slowest" is the slowest child JVM. A probe's time
+already holds one setup, so n JVMs add n - 1 setups per probe: a sum written "907 + 3o" is three
+probes split in two.
 
 | option | 9V74 slowest / sum | 9V45 | 7763 | aarch64 | census |
 |---|---|---|---|---|---|
@@ -120,8 +122,9 @@ at 10 to 40 s **[A]**, measured by commit 1. "Slowest" is the slowest child JVM.
   `emitted_bytes.json`), so a hot epilogue does not change how the loop body compiles **[A]**.
 
 **Recommendation: C and E together, each behind a switch, defaults set from commit 1's reading.**
-E cuts the cost (about 265 s a Build on an AVX-512 runner, about 200 s on an AVX2 one) and C brings
-every JVM under 300 s on all four classes when `o` is under about 75 s. Both are built and both
+E cuts the cost (about 265 s a Build on an AVX-512 runner, about 200 s on an AVX2 one), and C and E
+together bring every JVM under 300 s on all four classes when `o` is under about 75 s (C alone
+leaves the EPYC 7763's 128-bit probe at 316 s plus `o`). Both are built and both
 switches stay, so the readings can pick and the reference form stays runnable (the owner's practice
 of building competing forms and keeping the loser as a reference). Nothing leaves the census: the
 row's "say in the census which width its epilogue column no longer covers" becomes a sentence that
@@ -134,20 +137,28 @@ suite sets on the child's command line:
 
 - `-Dvarka.audit.phases=both|ragged`, absent meaning `both`. Under `ragged`, `runHot` skips
   `phase(rows)` and the `EPILOGUE_PHASE` marker and runs `phase(raggedRows)` alone.
-- `-Dvarka.audit.shard=k/n`, absent meaning `0/1`. `main` numbers the entries after the name
-  filter, as now, and keeps those whose index `i` has `i % n == k`. The class name keeps the global
-  index (`CLASS_PREFIX + i`), so a shape's class name does not depend on `n`. `main` prints
+- `-Dvarka.audit.shard=k/n`, absent meaning `0/1`, with `k` 0-based. Two functions in the probe
+  object: `private[varka] def parseShard(text: String): (Int, Int)`, which accepts `k/n` with
+  `1 <= n <= 8` and `0 <= k < n` and throws an `IllegalArgumentException` quoting the text
+  otherwise, and `private[varka] def inShard(index: Int, k: Int, n: Int): Boolean = index % n == k`.
+  `main` numbers the entries after the name filter, as now (`zipWithIndex` after the optional
+  substring filter, which only a hand run sets), and keeps those with `inShard(i, k, n)`. The class
+  name keeps that index (`CLASS_PREFIX + i`), so with no name filter a shape's class name does not
+  depend on `n`. `main` prints
   `VARKA_AUDIT_SHARD=k/n` after the host lines so the parent can check it ran what it asked for.
 - Times. After building the entries `main` prints `VARKA_AUDIT_SETUP_MS=<ms>`, the JVM's uptime
   then (`ManagementFactory.getRuntimeMXBean.getUptime`), which is the JVM's start plus the shape
-  build. `runHot` reads the wall clock and
-  `ManagementFactory.getCompilationMXBean.getTotalCompilationTime` (or -1 when
-  `isCompilationTimeMonitoringSupported` is false) at its start, before the first phase, between
-  the phases and at the end, and prints, inside the shape's markers,
-  `VARKA_AUDIT_TIMES <emit ms> <first ms> <first compile ms> <second ms> <second compile ms>
-  VARKA_AUDIT_TIMES_END` (one line; `first` is 0 under `ragged`). The end mark is there because a
+  build. `runHot` takes four readings of the wall clock (`System.nanoTime`, as ms) `w0` to `w3` and
+  of `ManagementFactory.getCompilationMXBean.getTotalCompilationTime` (ms, cumulative over the
+  JVM) `c0` to `c3`: 0 on entry to `runHot`, 1 just before the first phase (after the emit, the
+  class load and the input setup), 2 after the first phase (before the marker), 3 after the second
+  phase. It prints, inside the shape's markers, one line
+  `VARKA_AUDIT_TIMES <w1-w0> <w2-w1> <c2-c1> <w3-w2> <c3-c2> VARKA_AUDIT_TIMES_END`, the five
+  numbers being emit, first phase, first phase's compiling, second phase, second phase's
+  compiling. Under `ragged` readings 1 and 2 are the same instant, so the second and third numbers
+  are 0. When `isCompilationTimeMonitoringSupported` is false the two compile numbers are -1. The end mark is there because a
   compiler thread's record can be glued onto any probe line (`VarkaProbeOutput`); a parser
-  `timesIn(line): Option[Seq[Long]]` in the probe object reads the five numbers between the marks
+  `private[varka] def timesIn(line: String): Option[Seq[Long]]` in the probe object reads the five numbers between the marks
   with `VarkaProbeOutput.between` and returns None for anything else.
 
 **The suite** (`VarkaWidthAuditSuite.scala`, line numbers from #1839's head `9ce244f84b7`):
@@ -155,9 +166,14 @@ suite sets on the child's command line:
 - Two settings beside `parallelProbes` (`:311`), read like it: `forcedPhases`, from
   `-Dvarka.widthAudit.forcedPhases`, `both` or `ragged`, anything else an
   `IllegalArgumentException` naming the key; and `shards`, from `-Dvarka.widthAudit.shards`, an
-  integer from 1 to 8. Defaults `both` and 1 until commit 4.
-- `Census` (`:99`) gains `times: ProbeTimes`, a new private case class of six `Long` sums (setup,
-  emit, first, first compile, second, second compile) and the count of shapes timed. `verdicts`
+  integer from 1 to 8. Defaults `both` and 1 until commit 4. A forced probe is one whose
+  `maxVectorSizeBytes` is defined, the probes asked for 16, 32 and 64 bytes; the preferred and the
+  preferred-again probe are not forced and always run both phases. A skipped forced probe runs
+  nothing, so its stand-in's form is the one it gets.
+- `Census` (`:99`) gains a last field `times: ProbeTimes`, a new private case class
+  `ProbeTimes(setupMs: Long, emitMs: Long, firstMs: Long, firstCompileMs: Long, secondMs: Long,
+  secondCompileMs: Long, shapesTimed: Int)`: `setupMs` the sum of each JVM's one setup line, the
+  next five the sums of the shapes' times lines, `shapesTimed` the number of those lines. `verdicts`
   and `render` do not read it, so the census file cannot move with it.
 - `audit(probe)` (`:121`) becomes `audit(probe, shard: Int)`: it adds
   `-Dvarka.audit.shard=$shard/$shards` always, and `-Dvarka.audit.phases=ragged` when
@@ -165,27 +181,41 @@ suite sets on the child's command line:
   `, shard ${shard + 1} of $shards` when `shards > 1`; the reader collects the setup and times
   lines into `times` and requires the `VARKA_AUDIT_SHARD` line to equal what was asked
   (`run.requireSuccess` first, then an `assert` naming the probe and shard).
-- `mergeShards(probe: Probe, parts: Seq[Census]): Census`, new: every part's `preferredBits`,
+- `private def mergeShards(probe: Probe, parts: Seq[Census]): Census`, new: every part's `preferredBits`,
   `useAVX`, `conversionsFallBack`, `featuresFailure` and `subwordMasksFallBack` must be equal, or it
   throws an `IllegalStateException` naming the probe, the field and the values; `refusals`,
   `declined` and `epilogueOnly` are unions whose key sets must be disjoint (a shape in two shards
-  throws, naming it); `unattributed` is the concatenation, distinct; `times` the sums.
-- `beforeAll` (`:332`) submits one task per (probe, shard) to the pool and reports each task's
-  line as now, `"${probe.name}, shard k of n took $seconds s on P processors"` (the `, shard ...`
-  part only when `shards > 1`), followed by `"; setup S s, emit E s, first phase F s (compiling
-  C s), second phase G s (compiling H s), over K shapes"`. `took N s on` stays the first number
-  after the name, since the done-when's reading greps it. Then per probe it merges its shards'
-  results: the first failed shard is the probe's failure, wrapped in a `RuntimeException` naming
-  the shard; else `Success(mergeShards(...))`. Stand-ins are given the merged result as now.
-- `render`'s description (`:644`): the sentence "taken in one JVM per width with the shapes run in
-  this order" becomes, built from the two settings, "taken per width in `<shards>` JVM(s), the k-th
-  of which runs every `<shards>`-th shape from the k-th in this order", and after it one sentence:
+  throws, naming it); `unattributed` is the concatenation in shard order with repeats dropped;
+  `times` the field-by-field sums. The maps' order does not matter: `render` and `verdicts` sort by
+  shape name. Every probe that runs is sharded, the preferred-again one included.
+- `beforeAll` (`:332`) submits one task per (probe, shard), probe by probe in `probePlan`'s order
+  and shard 0 first, to the pool, whose size `parallelProbes` now caps JVMs, not probes. Each task
+  reports through `report` (which prefixes `VARKA-AUDIT-PROBE `) one line; seconds are whole,
+  truncated as now, and each sum of ms is printed as whole seconds the same way. With `shards = 2`
+  (numbers illustrative):
+
+      VARKA-AUDIT-PROBE the audit probe asked for -XX:MaxVectorSize=16 (128 bits), shard 1 of 2 took 164 s on 4 processors; setup 21 s, emit 3 s, first phase 0 s (compiling 0 s), second phase 139 s (compiling 101 s), over 336 shapes
+
+  With `shards = 1` the `, shard 1 of 1` part is left out and the line is otherwise the same, so
+  `took N s on` stays the first number after the name, which the done-when's reading greps. Then,
+  per probe, the shards' results are taken in shard order: the lowest-numbered failed shard is the
+  probe's failure, wrapped in a `RuntimeException` naming the shard; else
+  `Success(mergeShards(...))`. Stand-ins are given the merged result as now.
+- `render`'s description (`:644`): the words "taken in one JVM per width with the shapes run in
+  this order" stay as they are at `shards = 1`, and at n above 1 become "taken in n JVMs per width,
+  the first running the 1st, (n+1)-th, (2n+1)-th... shape in this order, the second the 2nd,
+  (n+2)-th..., and so on" with n written as a digit. After the description's last sentence one
+  more, by `forcedPhases`:
   under `ragged`, "At the host's preferred width each shape runs a batch every lane count divides
   and then one none divides, so its epilogue's refusals are told from its loop body's; at a forced
   width it runs only the second batch, whose refusals are the loop body's and the epilogue's
   together, so no width's column leaves out the epilogue"; under `both`, "Each shape runs a batch
   every lane count divides and then one none divides, so every width's column includes the
-  epilogue's refusals." This is the census change the done-when allows, named.
+  epilogue's refusals." This is the census change the done-when allows, named, and the row's "say
+  in the census which width its epilogue column no longer covers": the answer written there is none.
+  The check-mode test "sql/varka/width_audit.json is this host's census" passes when only the
+  description differs (it compares the widths and logs an `info` line otherwise), so a commit that
+  changes the text need not regenerate; commit 4 regenerates once.
 - The doc comments that state the old counts are rewritten as the code is (`AGENTS.md`, "A comment
   describes the code as it is"): the class doc's "forks [[VarkaWidthAuditProbe]] once per width",
   `childTimeoutSeconds`'s "at most five probes one after another", `parallelProbes`'s "probePlan
@@ -195,12 +225,14 @@ suite sets on the child's command line:
 
 - `.github/workflows/build_and_test.yml`, after the step "Run the Varka suites of ..." (`:1832` on
   master), a step `Print the width audit's probe times`, `if: ${{ !cancelled() && matrix.module ==
-  'catalyst' }}`, running
+  'catalyst' }}`, running, from the checkout's root (the job's working directory, as for the suites step),
   `grep -h 'VARKA-AUDIT-PROBE' target/varka-scoped*/runs/*/*/run.log || echo "the width audit did
   not run in this job"`. It names no shard key, so it does not conflict with #1840's change of
   `matrix.shard` to `matrix.job`. Before writing it, confirm the path: `dev/varka_matrix.sh` writes
   `"$dir/run.log"` (`:446`) with `dir=$RUNS/<config>/<leaf>` (`:426`); the JUnit artifact's paths
-  (`runs/defaults/catalyst-20/junit/`) show the layout.
+  (`runs/defaults/catalyst-20/junit/`) show the layout. If `run.log` is elsewhere, use the path the
+  script writes; if the scoped runner writes none, have `report` also append the line to
+  `target/varka-width-audit-probes.log` under the checkout and grep that.
 - `.github/workflows/varka-width-audit.yml`, the step "Take the census": `./build/sbt
   "catalyst/testOnly *VarkaWidthAuditSuite" 2>&1 | tee "$RUNNER_TEMP/width-audit.log" | tail -60`,
   and a step after it, `if: always()`, printing `grep -hE 'VARKA-AUDIT-PROBE|\*\*\* FAILED'
@@ -254,7 +286,9 @@ results files do not count.
    not read": a clean line, a line with a `PrintCompilation` record glued before and after (the
    suite's `record`), a line with four numbers, and one with no end mark; the last two read None.
 3. `VarkaWidthAuditSuite`, "the shards' censuses of a width merge into one, and a shard of other
-   answers fails the merge": two parts with disjoint shapes merge into the union of each map; parts
+   answers fails the merge": parts built with `Census(...)` in its field order (`preferredBits`,
+   `useAVX`, `conversionsFallBack`, `featuresFailure`, `refusals`, `declined`, `unattributed`,
+   `epilogueOnly`, `subwordMasksFallBack`, `times`) and `Probe("test", None)`; two parts with disjoint shapes merge into the union of each map; parts
    differing in `preferredBits` throw naming the field; parts sharing a shape throw naming it.
    Catches a merge that keeps one shard's map, which a census with that shard's shapes alone would
    still pass on a runner (its check is cancelled off the laptop).
@@ -271,13 +305,14 @@ by design:
 
 1. **E**: `-Dvarka.widthAudit.forcedPhases=ragged` against the committed file: `same`.
 2. **C**: `-Dvarka.widthAudit.shards=2` and then `=3`, both against the committed file: `same`.
-3. **Both, the AVX2 shape**: under `JDK_JAVA_OPTIONS="-XX:UseAVX=2 ..."` (the laptop's way of
-   showing an AVX2 host, `sql/varka/AGENTS.md`), a regeneration at the old settings and one at
-   `ragged` with `shards=2`, compared with each other: `same`. Never commit a `UseAVX=2` file.
+3. **The AVX2 shape**: under `JDK_JAVA_OPTIONS="-XX:UseAVX=2 ..."` (the laptop's way of showing an
+   AVX2 host, `sql/varka/AGENTS.md`), a regeneration at the old settings, kept as the reference;
+   then (3a, commit 2) one at `forcedPhases=ragged`, and (3b, commit 3) one at `ragged` with
+   `shards=2`, each compared with the reference: `same`. Never commit a `UseAVX=2` file.
 4. **The defaults**: after commit 4, a plain regeneration; `git diff sql/varka/width_audit.json`
    shows the description line alone.
 
-A `differ` in 1 or 2 stops that option: record the moved shapes and lines in the results file, keep
+A `differ` in 1, 2, 3a or 3b stops that option: record the moved shapes and lines in the results file, keep
 its default at the old form, and ask the owner (risk 1 and 2).
 
 ### 5.3 The suite itself
@@ -294,10 +329,14 @@ request, the Build's new step and the width-audit workflow (x86_64 and aarch64) 
 lines; copy them with the run and job ids and each job's CPU line. The runner class is whatever the
 pool gives; an EPYC 7763 reading, if one comes, is the one the default n rests on.
 
-**The rule for the defaults (commit 4):** `forcedPhases = ragged` if identity check 1 and 3 read
-`same`; `shards = 2` if checks 2 and 3 read `same` and commit 1's runner readings put the setup `o`
-under 30 s, else `shards = 3`. With `o` at 30 s, n = 2 projects 255 s on the EPYC 7763 reading's
-preferred probe (450 s), the largest of the four classes.
+**The rule for the defaults (commit 4)**, from laptop readings so no push is needed before it:
+`o` is the largest `setup` of any probe in a check-mode run of commit 1 on the laptop pinned to
+four cores (`taskset -c 0-3 build/sbt 'catalyst/testOnly *VarkaWidthAuditSuite'`, the admission
+check's way). `forcedPhases = ragged` if checks 1 and 3a read `same`, else `both`. `shards = 2` if
+checks 2 and 3b read `same` and `o` is at most 30 s; `shards = 3` if they read `same` and `o` is
+above 30 s; `shards = 1` if either reads `differ`. With `o` at 30 s, n = 2 projects 255 s on the
+EPYC 7763 reading's preferred probe (450 s), the largest of the four classes. The runner readings
+after the push score the predictions and the done-when; they do not set the defaults.
 
 ### 6.1 Predictions, registered before the run
 
@@ -313,7 +352,7 @@ with most near 1, so each band below is wide on purpose.
 4. At n = 2 each shard JVM takes 50 to 65% of its unsharded probe, and identity check 2 reads `same`.
 5. At the defaults the slowest JVM of the pull request's Build and of its width-audit runs is under
    250 s on an AVX-512 runner and on the aarch64 one, and the audit's suite time in a check-mode
-   Build on an AVX-512 runner is 800 to 1,000 s against 1,055 to 1,172 s now.
+   Build on an AVX-512 runner is 900 to 1,100 s against 1,055 to 1,172 s now.
 
 ## 7. Risks
 
@@ -324,9 +363,9 @@ with most near 1, so each band below is wide on purpose.
    so a `differ` in check 2 is a finding about the census, not only about C: record it and ask the
    owner before choosing a default.
 3. **`o` is larger than guessed**: every shard JVM builds all 886 shapes (`VarkaWidthAuditShapes.all`
-   resolves every coverage row) before filtering. Commit 1 measures it; above 60 s, building only a
-   shard's own rows needs the shapes API changed, which this step does not do: then n = 2 and the
-   reading is recorded.
+   resolves every coverage row) before filtering. Commit 1 measures it, and the rule of 6 then
+   takes n = 3. Above 60 s, building only a shard's own rows would need the shapes API changed,
+   which this step does not do: record the reading in section 9 for a later row.
 4. **A conflict with #1840** in `build_and_test.yml`: the new step uses `matrix.module` only.
    Whichever merges second rebases; the step's text does not change.
 5. **Single readings on a mixed pool**: the EPYC 7763 took 1.7 to 1.9 times as long as the EPYC 9V45
@@ -341,14 +380,15 @@ Start from `origin/master` once #1839 is merged; if it is not, branch from
 
 1. **Print each probe's times, and the probe lines in the CI logs.** The probe's setup and times
    lines and `timesIn`; `ProbeTimes` in `Census` and the times in the report line; unit test 5.1.2;
-   both workflow changes of 3.2. No behaviour moves; the census does not change.
+   both workflow changes of 3.2. No behaviour moves; the census does not change. Then the
+   four-core laptop run of 6 that reads `o`, into the results file.
 2. **A forced probe can run the second phase alone.** The `varka.audit.phases` property, the
    `forcedPhases` setting (default `both`), the description's sentence for each value; identity
-   checks 1 and 3 (E's half).
+   checks 1 and 3a.
 3. **A probe can run its shapes in shards.** The `varka.audit.shard` property and its parser,
    `shards` (default 1), `audit(probe, shard)`, `mergeShards`, `beforeAll`'s tasks, the
    description's JVM sentence, the doc comments; unit tests 5.1.1 and 5.1.3; identity checks 2 and
-   3 (C's half).
+   3b.
 4. **The defaults, the census and the record.** The defaults by 6's rule; the regeneration
    (`dev/varka_regen_generated.sh --all`, which must move only the census's description); identity
    check 4; `results/VARKA-695-step2.txt`; section 9 here and row 695's note. Before the pull
@@ -364,7 +404,8 @@ Not built yet.
 1. **Is "a probe" in the done-when one child JVM?** The plan reads it so: the 300 s is half a child
    JVM's budget (`childTimeoutSeconds`), and C meets it by making each child shorter. If a probe is
    a whole width's audit, C does not count, and no option here meets the target on an EPYC 9V74,
-   an EPYC 7763 or the aarch64 runner, since the preferred probe alone is 330, 450 and about 428 s.
+   an EPYC 7763 or the aarch64 runner, since the preferred probe alone is 330, 450 and about 428 s. The row's 600 s budget is now
+   1,200 s (section 2); the plan keeps the row's 300 s.
 2. **Should the forced censuses lose their split of epilogue lines from loop-body lines?** Under E
    they do. Nothing reads it today (`epilogueOnly` is read for the preferred probe only), and the
    file never kept it. The plan's answer: yes.
@@ -382,5 +423,7 @@ more than 600 s. The week's lines are read with
 
     for repo in vecbricks/varka MaxGekk/spark; do for wf in varka-master.yml build_main.yml varka-width-audit.yml; do gh run list -R $repo --workflow $wf --created ">=<merge date>" --json databaseId --jq '.[].databaseId' | while read id; do gh run view $id -R $repo --log 2>/dev/null | grep -oE 'VARKA-AUDIT-PROBE .* took [0-9]+ s'; done; done; done
 
-(a workflow a repository does not have prints an error and is skipped), and the largest number is
+with `<merge date>` the merge's date as `YYYY-MM-DD` (a workflow a repository does not have prints
+an error and is skipped; the fork's Build is `build_main.yml` and master's `varka-master.yml`, both
+read from the runs of 28 November 2026), and the largest number is
 written into section 9 with the count of lines read.
