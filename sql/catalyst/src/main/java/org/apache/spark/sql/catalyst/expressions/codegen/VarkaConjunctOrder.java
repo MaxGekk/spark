@@ -328,10 +328,12 @@ public final class VarkaConjunctOrder {
       List<Step> onSpark = before(full, r);
       List<Step> onVarka = new ArrayList<>(fusedSteps);
       onVarka.addAll(before(residualOrder, r));
-      for (List<List<Step>> sides : List.of(List.of(onSpark, onVarka),
-          List.of(onVarka, onSpark))) {
-        for (Step step : sides.get(0)) {
-          if (holds(sides.get(1), step)) {
+      // Side 0 reads Spark's steps against Varka's, side 1 Varka's against Spark's.
+      for (int side = 0; side < 2; side++) {
+        List<Step> from = side == 0 ? onSpark : onVarka;
+        List<Step> other = side == 0 ? onVarka : onSpark;
+        for (Step step : from) {
+          if (holds(other, step)) {
             continue;
           }
           Expression tested = nullTestOf(step, conjuncts);
@@ -339,14 +341,14 @@ public final class VarkaConjunctOrder {
             unexplained = true;
             continue;
           }
-          if (dropsNullsOf(sides.get(1), tested, conjuncts)) {
+          if (dropsNullsOf(other, tested, conjuncts)) {
             continue;
           }
           // A null test Spark runs before r is pulled there by the conjunct it is placed just
           // before: one that reads its column, or, after a NULL conjunct, one that may raise and
           // so takes the null tests written before it along (precedingNotNullChecks). The second
           // puller need not read the column at all.
-          int placedBefore = sides.get(0) == onSpark ? placedBefore(full, step, conjuncts) : -1;
+          int placedBefore = side == 0 ? placedBefore(full, step, conjuncts) : -1;
           boolean demoted = false;
           for (int f = 0; f < conjuncts.size(); f++) {
             if (isFused[f] && nullTested(conjuncts.get(f)) == null
