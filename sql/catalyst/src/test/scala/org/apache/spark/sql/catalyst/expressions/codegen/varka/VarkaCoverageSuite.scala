@@ -1509,7 +1509,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("log(x2, x)", "StrictMath.log(x) / StrictMath.log(x2), null where either is at or "
         + "below 0.0", math = Some(MathCell(exactForms.head))),
       Row("exp(x) * 2.0D + 1.0D", "the arithmetic around the call in the kernel",
-        math = Some(MathCell(exactForms.head))))),
+        math = Some(MathCell(exactForms.head))),
+      Row("pow(x, x2)", "exact: a per-lane StrictMath.pow call, as Spark's code makes, "
+        + "fdlibm's weak branch included",
+        math = Some(MathCell(exactForms.head, operator = Some(VarkaMathBinding.Operator.POW)))))),
     Family("Math functions as conditions", predicates = true, Seq(
       Row("sin(x) < 0.5D", "the call, then the floating compare in Spark's order",
         math = Some(MathCell(exactForms(2)))))),

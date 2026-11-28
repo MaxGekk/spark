@@ -177,6 +177,8 @@ public final class VarkaReference {
       case MathUnary n -> map(n.child(), row, isNull, lits,
           v -> Float.floatToRawIntBits(mathFloat(n.fn(), Float.intBitsToFloat(v))));
       case Fma n -> floatFma(n, row, isNull, lits);
+      case MathBinary n -> throw VarkaErrors.illegalArgument(
+          n.fn() + " takes DOUBLE operands only, which are no int-lane value");
       case RoundToIntegral n -> throw VarkaErrors.illegalArgument(
           "a rounding takes a double child, which is no int-lane value: " + n);
       // Spark's own normaliser, NormalizeNaNAndZero's, so the reference is not the lowering.
@@ -527,6 +529,15 @@ public final class VarkaReference {
             mathDouble(n.fn(), Double.longBitsToDouble(c.getAsLong()))));
       }
       case Fma n -> doubleFma(n, row, isNull, lits);
+      case MathBinary n -> {
+        var l = longValue(n.left(), row, isNull, lits);
+        if (l.isEmpty()) {
+          yield l;
+        }
+        var r = longValue(n.right(), row, isNull, lits);
+        yield r.isEmpty() ? r : OptionalLong.of(Double.doubleToRawLongBits(mathDouble2(n.fn(),
+            Double.longBitsToDouble(l.getAsLong()), Double.longBitsToDouble(r.getAsLong()))));
+      }
       // StrictMath's rint, never the lowering's construction, so the reference stays independent
       // of the code it checks, and the canonical NaN for a NaN, as Spark's MathUtils.rint.
       case RoundToIntegral n -> {
@@ -848,6 +859,19 @@ public final class VarkaReference {
       case LOG10 -> StrictMath.log10(v);
       case LOG1P -> StrictMath.log1p(v);
       case CBRT -> Math.cbrt(v);
+      case POW -> throw VarkaErrors.illegalArgument(fn + " takes two operands");
+    };
+  }
+
+  /**
+   * A two-operand {@code fn} as Spark's generated code computes it: {@code StrictMath.pow}.
+   * Called by name, as {@link #mathDouble} is.
+   */
+  private static double mathDouble2(MathFn fn, double x, double y) {
+    return switch (fn) {
+      case POW -> StrictMath.pow(x, y);
+      case SQRT, SIN, COS, TAN, ASIN, ACOS, ATAN, EXP, EXPM1, LOG, LOG10, LOG1P, CBRT ->
+          throw VarkaErrors.illegalArgument(fn + " takes one operand");
     };
   }
 
@@ -855,7 +879,7 @@ public final class VarkaReference {
   private static float mathFloat(MathFn fn, float v) {
     return switch (fn) {
       case SQRT -> (float) Math.sqrt(v);
-      case SIN, COS, TAN, ASIN, ACOS, ATAN, EXP, EXPM1, LOG, LOG10, LOG1P, CBRT ->
+      case SIN, COS, TAN, ASIN, ACOS, ATAN, EXP, EXPM1, LOG, LOG10, LOG1P, CBRT, POW ->
           throw VarkaErrors.illegalArgument(fn + " takes a DOUBLE operand only");
     };
   }

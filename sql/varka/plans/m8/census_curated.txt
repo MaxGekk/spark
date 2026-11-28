@@ -93,7 +93,7 @@ mod|NUM|same||semantics|30,95,346,577|integral is semantics (zero divisor); floa
 negative|NUM,IVL|same|byte,short,int,bigint,ym,dt,float,double,dec^|semantics|330,104,103,342,348,359|the minimum value overflows; not for dec, whose unscaled value within 18 digits is never the minimum: dec to precision 18 fuses under a comparison or a null test (348) and as an output (348b), and counts fused with 359 (2.8)
 pmod|NUM|same||semantics|30,346,577|integral is semantics (item 33's sign rule; pmod(-1, Int.MinValue) is Int.MaxValue, SPARK-59934); floating by the one-FMA remainder (346); decimal: a remainder by a variable divisor, row 577
 positive|NUM,IVL|same||plumbing|333|rewritten to its child
-pow|double|double||ulp|367,358|StrictMath; fused behind the guard on fdlibm's weak branch, its exact exponents as exact nodes (358)
+pow|double|double|double|done|358|exact: a per-lane StrictMath.pow call, fdlibm's weak branch included; the guard and exact nodes are the opt-in form's (VARKA-358)
 power|double|double||ulp|367,358|alias of pow
 radians|double|double|double|done|342|Math.toRadians is one multiply, bit-exact
 rint|double|double|double|done|344|round half even to an integer, the 2^52 construction

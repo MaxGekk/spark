@@ -57,6 +57,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lea
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathUnary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathBinary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToIntegral;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
@@ -401,6 +402,7 @@ public final class VarkaRangeAnalysis {
       // A floating value has no integer range.
       case MathUnary n -> VarkaValueRange.UNKNOWN;
       case Fma n -> VarkaValueRange.UNKNOWN;
+      case MathBinary n -> VarkaValueRange.UNKNOWN;
       case RoundToIntegral n -> VarkaValueRange.UNKNOWN;
       case CanonicalFloat n -> VarkaValueRange.UNKNOWN;
       // The bits of a float and a hash step span their whole lanes.

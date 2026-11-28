@@ -78,6 +78,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lea
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathUnary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathBinary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.RoundToIntegral;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
@@ -1019,6 +1020,7 @@ final class Analysis {
         case BitCount n -> { }
         case MathUnary n -> { }
         case Fma n -> { }
+        case MathBinary n -> { }
         case RoundToIntegral n -> { }
         case CanonicalFloat n -> { }
         case CanonicalBits n -> { }
@@ -1761,6 +1763,8 @@ final class Analysis {
       case MathUnary n -> analyzeOp(node, false, n.child());
       // So does the fused multiply-add, over its three operands.
       case Fma n -> analyzeOp(node, false, n.a(), n.b(), n.c());
+      // And the two-operand call, over both.
+      case MathBinary n -> analyzeOp(node, false, n.left(), n.right());
       case RoundToIntegral n -> analyzeOp(node, false, n.child());
       case CanonicalFloat n -> analyzeOp(node, false, n.child());
       case CanonicalBits n -> analyzeOp(node, false, n.child());

@@ -265,6 +265,7 @@ public final class VarkaCanonicalIr {
       case "bitCount" -> new BitCount(node());
       case "math" -> new MathUnary(MathFn.valueOf(parts[1]), node());
       case "fma" -> new Fma(node(), node(), node());
+      case "math2" -> new MathBinary(MathFn.valueOf(parts[1]), node(), node());
       case "round" -> new RoundToIntegral(RoundMode.valueOf(parts[1]), node());
       case "canon" -> CanonicalFloat.of(node());
       case "canonBits" -> new CanonicalBits(node());

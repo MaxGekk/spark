@@ -50,6 +50,7 @@ import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.Multiply;
 import org.apache.spark.sql.catalyst.expressions.NaNvl;
 import org.apache.spark.sql.catalyst.expressions.NumericEvalContext$;
+import org.apache.spark.sql.catalyst.expressions.Pow;
 import org.apache.spark.sql.catalyst.expressions.Rint;
 import org.apache.spark.sql.catalyst.expressions.Sqrt;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
@@ -64,6 +65,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Int
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathBinary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathFn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathUnary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not;
@@ -183,6 +185,8 @@ public final class VarkaSameAnswerContractSuite {
     // either operand's payload.
     t.add(otherNaN("x + x2", add(x, x2), sum, true));
     t.add(otherNaN("x * x2", new Multiply(x, x2, ctx()), arith(IntOp.MUL, X_IR, X2_IR), true));
+    // Open: fdlibm's pow answers the sum of two NaN operands, so its payload is the sum's.
+    t.add(otherNaN("pow(x, x2)", new Pow(x, x2), new MathBinary(MathFn.POW, X_IR, X2_IR), true));
     t.add(otherNaN("x + a NaN literal of other bits",
         add(x, Literal.create(Double.longBitsToDouble(X3), DataTypes.DoubleType)),
         arith(IntOp.ADD, X_IR, new LiteralSlot(0, LaneType.DOUBLE)), true));

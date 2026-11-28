@@ -77,7 +77,8 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     // which the fdlibm ports build.
     val undrawn = permitted -- seen - "NullSafeEqual" - "BoolColumn" - "CondConst" -
       "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" - "BoolOutput" - "DecimalColumn" -
-      "DecimalWord" - "MathUnary" - "Fma" - "RoundToIntegral" - "CanonicalFloat" - "ConvertLane" -
+      "DecimalWord" - "MathUnary" - "MathBinary" - "Fma" - "RoundToIntegral" - "CanonicalFloat" -
+      "ConvertLane" -
       "HashStep" - "CanonicalBits" - "ReinterpretLane" - "InterleaveDecimal" -
       "CrossLane" // the crossing is drawn from 343a5
     assert(undrawn.isEmpty, s"the grammars never drew: ${undrawn.toSeq.sorted.mkString(", ")}")
@@ -186,6 +187,15 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     intercept[Exception](VarkaVectorIR.withChildren(fma, x, y))
     intercept[Exception](
       VarkaVectorIR.withChildren(fma, new ColumnRef(0), new ColumnRef(1), new ColumnRef(2)))
+  }
+
+  test("a two-operand math call is rebuilt over its own children, in order") {
+    val x = new ColumnRef(0, LaneType.DOUBLE)
+    val y = new ColumnRef(1, LaneType.DOUBLE)
+    val pow = new MathBinary(MathFn.POW, x, y)
+    assert(VarkaVectorIR.withChildren(pow, VarkaVectorIR.childrenOf(pow): _*) == pow)
+    assert(VarkaVectorIR.withChildren(pow, y, x) == new MathBinary(MathFn.POW, y, x))
+    intercept[Exception](VarkaVectorIR.withChildren(pow, x, new ColumnRef(0)))
   }
 
   test("a floating conversion is rebuilt over its own child and keeps its target") {

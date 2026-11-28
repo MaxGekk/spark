@@ -164,6 +164,8 @@ public final class VarkaWordCensus {
       case MathUnary x -> pure(x.child(), coalesce, absorb);
       case Fma x -> andW(andW(pure(x.a(), coalesce, absorb), pure(x.b(), coalesce, absorb),
           absorb), pure(x.c(), coalesce, absorb), absorb);
+      case MathBinary x -> andW(pure(x.left(), coalesce, absorb),
+          pure(x.right(), coalesce, absorb), absorb);
       case RoundToIntegral x -> pure(x.child(), coalesce, absorb);
       case CanonicalFloat x -> pure(x.child(), coalesce, absorb);
       case CanonicalBits x -> pure(x.child(), coalesce, absorb);

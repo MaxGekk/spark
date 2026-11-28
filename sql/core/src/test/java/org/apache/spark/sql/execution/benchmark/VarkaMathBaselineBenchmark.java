@@ -62,10 +62,10 @@ import org.apache.spark.sql.VarkaBenchmark;
  * ({@link VarkaSqlBenchmarkBase#requireBaseline(SparkSession, String, String, Fusion)}); the
  * results file notes the class of each section that fuses. The {@code sin}, {@code tan} and
  * {@code sec} sections are {@code WHOLE}, the trigonometric functions fusing (VARKA-356), and so
- * are {@code cbrt}, {@code exp}, {@code expm1}, every logarithm and {@code exp(x) * 2 + 1}
- * (VARKA-358); every other section is {@code NONE}, its function declining (VARKA-345.md 0,
- * item 12). A row that fuses a section sets its new class, so that its fusion cannot turn a
- * baseline section into a fused one unnoticed.
+ * are {@code cbrt}, {@code exp}, {@code expm1}, every logarithm, both {@code pow} sections and
+ * {@code exp(x) * 2 + 1} (VARKA-358); every other section is {@code NONE}, its function
+ * declining (VARKA-345.md 0, item 12). A row that fuses a section sets its new class, so that
+ * its fusion cannot turn a baseline section into a fused one unnoticed.
  *
  * <p>To run this benchmark, on a GitHub runner (the results come back as an artifact):
  * <pre>
@@ -194,7 +194,7 @@ public class VarkaMathBaselineBenchmark extends VarkaSqlBenchmarkBase {
       new Form("DOUBLE exp(x)", "exp(X)", Fusion.WHOLE),
       new Form("DOUBLE log(p)", "log(P)", Fusion.WHOLE),
       new Form("DOUBLE log10(p)", "log10(P)", Fusion.WHOLE),
-      new Form("DOUBLE pow(p, y)", "pow(P, Y)", Fusion.NONE),
+      new Form("DOUBLE pow(p, y)", "pow(P, Y)", Fusion.WHOLE),
       new Form("DOUBLE atan2(y, x)", "atan2(Y, X)", Fusion.NONE),
       new Form("DOUBLE sinh(x)", "sinh(X)", Fusion.NONE),
       new Form("DOUBLE hypot(x, y)", "hypot(X, Y)", Fusion.NONE),
@@ -219,7 +219,7 @@ public class VarkaMathBaselineBenchmark extends VarkaSqlBenchmarkBase {
       new Form("DOUBLE log(2.0, p)", "log(2.0D, P)", Fusion.WHOLE),
       new Form("DOUBLE log(c, p)", "log(C, P)", Fusion.WHOLE),
       new Form("DOUBLE ln(q), one row in ten non-positive", "ln(Q)", Fusion.WHOLE, 1),
-      new Form("DOUBLE pow(p, 3.0)", "pow(P, 3.0D)", Fusion.NONE));
+      new Form("DOUBLE pow(p, 3.0)", "pow(P, 3.0D)", Fusion.WHOLE));
 
   /** Every section, in the order they run: each null density, then each function. */
   static List<Section> sections() {

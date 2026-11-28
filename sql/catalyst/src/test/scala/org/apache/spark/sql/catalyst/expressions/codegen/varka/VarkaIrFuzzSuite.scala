@@ -1222,7 +1222,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
       "BoolOutput" - "DecimalColumn" - "DecimalWord" - "NullValue" - "WidenDecimal" - "MathUnary" -
       "Fma" - "RoundToIntegral" - "InterleaveDecimal" - "CanonicalFloat" - "HashStep" -
-      "CanonicalBits" - "ConvertLane" - "CrossLane" - "ReinterpretLane"
+      "CanonicalBits" - "ConvertLane" - "CrossLane" - "ReinterpretLane" - "MathBinary"
     assert(missing.isEmpty,
       s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +
         "state here why the node type is deliberately out of the fuzzer's reach")

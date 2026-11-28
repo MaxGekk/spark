@@ -38,6 +38,7 @@ import org.apache.spark.sql.catalyst.expressions.Greatest;
 import org.apache.spark.sql.catalyst.expressions.If;
 import org.apache.spark.sql.catalyst.expressions.Least;
 import org.apache.spark.sql.catalyst.expressions.NaNvl;
+import org.apache.spark.sql.catalyst.expressions.Pow;
 import org.apache.spark.sql.catalyst.expressions.Rint;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.optimizer.NormalizeNaNAndZero;
@@ -131,8 +132,9 @@ public final class VarkaSameAnswer {
   private sealed interface Step<N> {
     /**
      * A two-operand floating arithmetic; {@code eitherPayload} where its NaN over two NaNs may be
-     * either operand's: an add or a multiply, which a tier may swap, and a remainder, which no
-     * tier pins. A subtraction or a division returns its left operand's.
+     * either operand's: an add or a multiply, which a tier may swap, a remainder, which no tier
+     * pins, and a two-operand math call ({@code pow}), whose fdlibm code answers {@code x + y}
+     * there (VARKA-358). A subtraction or a division returns its left operand's.
      */
     record Arith<N>(N left, N right, boolean eitherPayload) implements Step<N> {}
 
@@ -175,7 +177,8 @@ public final class VarkaSameAnswer {
 
   /**
    * Whether {@code node}'s value on the row is a NaN whose payload Java leaves open: one made by an
-   * add, a multiply or a remainder from two NaN operands of different bits, or passed on from one.
+   * add, a multiply, a remainder or a {@code pow} from two NaN operands of different bits, or
+   * passed on from one.
    * A node whose own value is not a NaN is never open, whatever its children. An arithmetic over
    * one NaN returns that NaN, quieted, on every tier, and a subtraction or a division over two
    * returns one payload on every tier (on x86 the left one's), so it is fixed; a node of one child
@@ -279,6 +282,9 @@ public final class VarkaSameAnswer {
               new Step.Pick<>(row.holds(i.cond()) ? i.thenNode() : i.elseNode());
           case VarkaVectorIR.Greatest g -> new Step.FirstNaN<>(List.of(g.left(), g.right()));
           case VarkaVectorIR.Least l -> new Step.FirstNaN<>(List.of(l.left(), l.right()));
+          // fdlibm's pow answers the sum of two NaN operands, whose payload the same method gave
+          // as either operand's on one JVM (VARKA-358).
+          case VarkaVectorIR.MathBinary m -> new Step.Arith<>(m.left(), m.right(), true);
           // Listed, not defaulted, so that a new value node is a compile error here until it says
           // how its value is made from its children's (a condition or a calendar node, never
           // floating, is matched by its family).
@@ -350,6 +356,10 @@ public final class VarkaSameAnswer {
         }
         if (n instanceof Rint || n instanceof NormalizeNaNAndZero) {
           return new Step.Canonical<>();
+        }
+        // The IR front's MathBinary rule: fdlibm answers the sum of two NaN operands.
+        if (n instanceof Pow p) {
+          return new Step.Arith<>(p.left(), p.right(), true);
         }
         if (children.size() == 1) {
           return new Step.Pass<>(children.get(0));

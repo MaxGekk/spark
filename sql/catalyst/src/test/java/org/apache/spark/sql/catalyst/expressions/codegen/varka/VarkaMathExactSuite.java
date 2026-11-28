@@ -28,6 +28,7 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.OptionalLong;
 import java.util.SplittableRandom;
 import java.util.function.IntPredicate;
 
@@ -47,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Int
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathBinary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathFn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathUnary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
@@ -73,7 +75,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Ove
  *
  * <p>Every answer is compared by its raw bits, a NaN's too: a NaN passed through from the input
  * keeps its payload, and one the function makes from a number ({@code asin(2.0)}) is the bits the
- * one method computes on this JVM for both sides.
+ * one method computes on this JVM for both sides. The one exception is a two-operand function
+ * over two NaNs, whose answer the same method gave as either operand's payload on one JVM; there
+ * two NaNs agree, by {@link VarkaSameAnswer}'s row level.
  */
 @VarkaSuite(ownJvm = true)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -85,18 +89,25 @@ public final class VarkaMathExactSuite {
   /** The rows of one sampled batch. */
   private static final int BATCH = 1 << 14;
 
+  /**
+   * The sampled inputs a function under a planted fault, about 2^20: the other class's method
+   * differs on thousands of inputs in a million where it differs at all, so a sixteenth of the
+   * differential's draws sees it, and the suite stays inside its watchdog with 19 functions.
+   */
+  private static final int PLANT_SAMPLES = SAMPLES >> 4;
+
   private static final ColumnRef X = new ColumnRef(0, LaneType.DOUBLE);
 
-  /** The second column, the base of {@code log(b, x)}. */
+  /** The second column: the base of {@code log(b, x)}, or the second operand. */
   private static final ColumnRef B = new ColumnRef(1, LaneType.DOUBLE);
 
   /** The inputs a function's own draw takes, and its fixed vectors' extra edges. */
-  private enum Domain { TRIG, UNIT, PLAIN, EXP, LOG, LOG1P }
+  private enum Domain { TRIG, UNIT, PLAIN, EXP, LOG, LOG1P, POW }
 
   /**
    * Spark's generated code for a function, evaluated by scalar Java: its answer for the operand
-   * {@code x} and, for {@code log(b, x)}, the base {@code b}, or null where the code sets
-   * {@code isNull}.
+   * {@code x} and, for a two-operand function, the second operand {@code b}, or null where the
+   * code sets {@code isNull}.
    */
   @FunctionalInterface
   private interface Code {
@@ -105,9 +116,9 @@ public final class VarkaMathExactSuite {
 
   /**
    * A function as the kernel computes it and as Spark's generated code does. {@code columns} is 1,
-   * or 2 for {@code log(b, x)}; {@code classesDiffer} says whether a call of the other class's
-   * method answers otherwise on x86 ({@code VARKA-356.md} item 0.3); {@code logNull} whether the
-   * function carries the log family's domain null.
+   * or 2 for {@code log(b, x)} and {@code pow}; {@code classesDiffer} says whether
+   * a call of the other class's method answers otherwise on x86 ({@code VARKA-356.md} item 0.3);
+   * {@code logNull} whether the function carries the log family's domain null.
    */
   private record Fn(String name, VarkaVectorIR root, long[] lits, int columns, Code spark,
       Domain domain, boolean classesDiffer, boolean logNull) {}
@@ -189,7 +200,9 @@ public final class VarkaMathExactSuite {
             (c, b) -> nullAtOrBelow(c, 0.0, StrictMath.log(c) / StrictMath.log(2.5)), fault),
         new Fn("log(b, x)", logOfBase, bits(0.0), 2,
             (c, b) -> c <= 0.0 || b <= 0.0 ? null : StrictMath.log(c) / StrictMath.log(b),
-            Domain.LOG, true, true));
+            Domain.LOG, true, true),
+        new Fn("pow", new MathBinary(MathFn.POW, X, B), new long[0], 2,
+            (c, y) -> StrictMath.pow(c, y), Domain.POW, true, false));
   }
 
   private static final List<Fn> FUNCTIONS = functions(FloatingFault.NONE);
@@ -205,15 +218,42 @@ public final class VarkaMathExactSuite {
    */
   private static @Nullable String mismatch(Fn f, double x, double b, boolean valid, long got) {
     Double want = f.spark().eval(x, b);
-    String at = f.name() + "(" + hex(x) + (f.columns() == 2 ? ", base " + hex(b) : "") + ")";
+    String at = f.name() + "(" + hex(x) + (f.columns() == 2 ? ", " + hex(b) : "") + ")";
     if (want == null) {
       return valid ? at + ": want null, got " + hex(Double.longBitsToDouble(got)) : null;
     }
     if (!valid) {
       return at + ": want " + hex(want) + ", got null";
     }
+    if (f.root() instanceof MathBinary && VarkaSameAnswer.sameAnswer(f.root(),
+        Double.doubleToRawLongBits(want), got, operands(f.root(), want, x, b))) {
+      // Two NaN operands: fdlibm's pow answers a sum of the two, and a method of that form
+      // answered x's payload in the kernel and y's in this scalar call on one JVM (VARKA-358),
+      // so Spark's own answer is either NaN: the open NaN of VarkaSameAnswer's row level.
+      return null;
+    }
     return Double.doubleToRawLongBits(want) == got ? null
         : at + ": want " + hex(want) + ", got " + hex(Double.longBitsToDouble(got));
+  }
+
+  /**
+   * The row {@link VarkaSameAnswer}'s rule reads: Spark's answer {@code want} at {@code root},
+   * the two columns' values below it, and no condition.
+   */
+  private static VarkaSameAnswer.IrRow operands(VarkaVectorIR root, double want, double x,
+      double b) {
+    return new VarkaSameAnswer.IrRow() {
+      @Override public OptionalLong value(VarkaVectorIR node) {
+        return node.equals(root) ? OptionalLong.of(Double.doubleToRawLongBits(want))
+            : node.equals(X) ? OptionalLong.of(Double.doubleToRawLongBits(x))
+            : node.equals(B) ? OptionalLong.of(Double.doubleToRawLongBits(b))
+            : OptionalLong.empty();
+      }
+
+      @Override public boolean holds(VarkaVectorIR.Cond cond) {
+        return false;
+      }
+    };
   }
 
   private static boolean validAt(Output out, int i) {
@@ -242,14 +282,31 @@ public final class VarkaMathExactSuite {
     };
   }
 
+  /**
+   * {@code pow}'s own hard pairs: {@code x} within {@code 2^-20} of 1 with {@code |y|} past
+   * {@code 2^31}, fdlibm's weak branch; a negative {@code x} with an integral {@code y} and with a
+   * non-integral one; and an integral {@code y} over any {@code x}.
+   */
+  private static double[] powDraw(SplittableRandom rnd) {
+    double sign = rnd.nextBoolean() ? 1.0 : -1.0;
+    return switch (rnd.nextInt(4)) {
+      case 0 -> new double[] {1.0 + sign * Math.scalb(rnd.nextDouble(), -20 - rnd.nextInt(33)),
+          (rnd.nextBoolean() ? 1.0 : -1.0) * Math.scalb(1.0 + rnd.nextDouble(),
+              31 + rnd.nextInt(30))};
+      case 1 -> new double[] {-rnd.nextDouble(0.0, 1e3), rnd.nextInt(-64, 65)};
+      case 2 -> new double[] {-rnd.nextDouble(0.0, 1e3), rnd.nextDouble(-64.0, 64.0)};
+      default -> new double[] {Double.longBitsToDouble(rnd.nextLong()), rnd.nextInt(-1100, 1100)};
+    };
+  }
+
   /** The function's own hard inputs. */
   private static double ownDraw(Domain domain, SplittableRandom rnd) {
     return switch (domain) {
       // The trigonometric functions' hard reductions.
       case TRIG -> (rnd.nextBoolean() ? 1 : -1)
           * Math.pow(10.0, rnd.nextDouble(Math.log10(0x1p20), 300.0));
-      // The inverse functions' edges near +-1.
-      case UNIT, PLAIN -> Math.copySign(1.0 - Math.scalb(rnd.nextDouble(), -rnd.nextInt(53)),
+      // The inverse functions' edges near +-1; pow's pairs are drawn by powDraw.
+      case UNIT, PLAIN, POW -> Math.copySign(1.0 - Math.scalb(rnd.nextDouble(), -rnd.nextInt(53)),
           rnd.nextBoolean() ? 1.0 : -1.0);
       // From below exp's subnormal edge, -708.05, and its underflow to zero, to past its
       // overflow at 709.78.
@@ -277,7 +334,8 @@ public final class VarkaMathExactSuite {
    * The number of inputs of {@code f}'s sampled differential its kernel answers otherwise than
    * Spark's code, the first few named in {@code firstFew}.
    */
-  private static long sampledMismatches(Fn f, VarkaEmitOptions options, List<String> firstFew) {
+  private static long sampledMismatches(Fn f, VarkaEmitOptions options, int samples,
+      List<String> firstFew) {
     assumeTrue(Lane.emitLanes(options, Lane.DOUBLE) != 0, "no baked lane count for the call");
     var loaded = VarkaEmitterFixtures.load(
         VarkaEmitterFixtures.emit(List.of(f.root()), f.columns(), f.lits().length, options));
@@ -290,12 +348,18 @@ public final class VarkaMathExactSuite {
             VarkaEmitterFixtures.alloc(arena, BATCH / 8), 0);
       }
       Output out = VarkaEmitterFixtures.makeLongOutput(arena, BATCH);
-      int perDraw = Math.max(1, SAMPLES / DRAWS / BATCH);
+      int perDraw = Math.max(1, samples / DRAWS / BATCH);
       for (int d = 0; d < DRAWS; d++) {
         for (int b = 0; b < perDraw; b++) {
-          for (Col col : cols) {
-            for (int i = 0; i < BATCH; i++) {
-              col.data().set(ValueLayout.JAVA_LONG, i * 8L, draw(f, d, rnd));
+          for (int i = 0; i < BATCH; i++) {
+            if (f.domain() == Domain.POW && d == 4) {
+              double[] xy = powDraw(rnd);
+              cols[0].data().set(ValueLayout.JAVA_DOUBLE, i * 8L, xy[0]);
+              cols[1].data().set(ValueLayout.JAVA_DOUBLE, i * 8L, xy[1]);
+            } else {
+              for (Col col : cols) {
+                col.data().set(ValueLayout.JAVA_LONG, i * 8L, draw(f, d, rnd));
+              }
             }
           }
           run(loaded.kernel(), f, cols, out, BATCH);
@@ -342,7 +406,7 @@ public final class VarkaMathExactSuite {
     var failures = new ArrayList<String>();
     for (Fn f : FUNCTIONS) {
       var firstFew = new ArrayList<String>();
-      long n = sampledMismatches(f, VarkaMatrixRuns.BASE, firstFew);
+      long n = sampledMismatches(f, VarkaMatrixRuns.BASE, SAMPLES, firstFew);
       if (n != 0) {
         failures.add(n + " mismatches, " + firstFew);
       }
@@ -368,7 +432,7 @@ public final class VarkaMathExactSuite {
         Double.MIN_NORMAL, -Double.MIN_NORMAL, Double.MIN_VALUE, -Double.MIN_VALUE,
         Math.PI / 2, -Math.PI / 2, Math.PI, -Math.PI, 3 * Math.PI / 2, 0x1p20, -0x1p20,
         Math.PI / 4, 0x1p-28, 1e300, -1e300, 709.782712893384, -708.0498449419841,
-        -745.1332191019411, 2.0, 0.5};
+        -745.1332191019411, 2.0, 0.5, 0x1p31, -0x1p31};
     var bits = new ArrayList<Long>();
     for (double e : edges) {
       long b = Double.doubleToRawLongBits(e);
@@ -406,8 +470,9 @@ public final class VarkaMathExactSuite {
 
   /**
    * {@code f}'s mismatches on the fixed vectors, over every null pattern, three lengths and two
-   * and eight lanes. A second column, the base of {@code log(b, x)}, holds the vectors in reverse,
-   * nulled by the same pattern one row on, so each edge meets the others as a base.
+   * and eight lanes. A second column, the base of {@code log(b, x)} or {@code y} of {@code pow},
+   * holds the vectors in reverse, nulled by the same pattern one row on, so each edge meets the
+   * others as the second operand.
    */
   private static List<String> fixedVectorFailures(Fn f) {
     long[] vectors = fixedVectors();
@@ -466,9 +531,10 @@ public final class VarkaMathExactSuite {
    * intrinsics and differ from {@code StrictMath}'s on thousands of inputs in a million
    * ({@code VARKA-356.md} item 0.3), and so are {@code Math.exp}, {@code log}, {@code log10}
    * and {@code cbrt} against Spark's {@code StrictMath.exp}, {@code log} and {@code log10} and
-   * {@code Math.cbrt}, so the differential must fail for those and the compositions over them;
-   * {@code asin}, {@code acos}, {@code atan}, {@code expm1} and {@code log1p} are
-   * {@code StrictMath}'s whichever class is called, so the planted call changes nothing for them.
+   * {@code Math.cbrt}, and {@code Math.pow} against {@code StrictMath.pow}, so the differential
+   * must fail for those and the compositions over them; {@code asin}, {@code acos}, {@code atan},
+   * {@code expm1} and {@code log1p} are {@code StrictMath}'s whichever class is called, so the
+   * planted call changes nothing for them.
    * Asserted on x86 only: on another host the classes may agree.
    */
   @Test
@@ -479,7 +545,7 @@ public final class VarkaMathExactSuite {
     VarkaEmitOptions planted =
         VarkaMatrixRuns.BASE.withFloatingFault(VarkaEmitOptions.FloatingFault.MATH_OTHER_CLASS);
     for (Fn f : FUNCTIONS) {
-      long n = sampledMismatches(f, planted, new ArrayList<>());
+      long n = sampledMismatches(f, planted, PLANT_SAMPLES, new ArrayList<>());
       assertTrue(f.classesDiffer() ? n > 0 : n == 0, f.name() + " under the planted call: " + n
           + " mismatches");
     }

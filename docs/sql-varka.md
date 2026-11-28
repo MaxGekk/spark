@@ -290,7 +290,7 @@ An entry is a function or operator of the census; a type counts *fused* for it o
 | `IntegerType` (`int`) | INT | 92 | 68 | 2 | plumbing 4, semantics 18 | 0 | 139 |
 | `LongType` (`bigint`) | LONG | 87 | 62 | 2 | plumbing 5, semantics 18 | 0 | 97 |
 | `FloatType` (`float`) | FLOAT | 68 | 38 | 2 | plumbing 5, semantics 23 | 0 | 66 |
-| `DoubleType` (`double`) | DOUBLE | 104 | 64 | 2 | plumbing 4, semantics 24, ulp 10 | 0 | 97 |
+| `DoubleType` (`double`) | DOUBLE | 104 | 65 | 2 | plumbing 4, semantics 24, ulp 9 | 0 | 98 |
 | `DecimalType` (`dec`) | LONG, words per value: 1 to precision 18, 2 to precision 38 | 68 | 4 | 32 | plumbing 3, semantics 29 | 3 | 113: 81 to precision 18, 32 at precision 19 to 38 |
 | `DateType` (`date`) | INT | 63 | 51 | 1 | plumbing 1, semantics 10 | 0 | 109 |
 | `TimestampNTZType` (`ntz`) | LONG | 54 | 51 | 0 | plumbing 1, semantics 2 | 0 | 77 |
@@ -306,7 +306,7 @@ One row per section of Spark's function registry, and per family of the operator
 | :--- | ---: | ---: | ---: | ---: | :--- | :--- |
 | conditional | 11 | 1 | 11 | 10 | float, dec | 329, 331, 338, 341, 348, 359 |
 | predicate | 16 | 6 | 15 | 8 | bool, dec | 27, 329, 331, 336, 338, 341, 347, 348, 359, 497 |
-| math | 61 | 25 | 41 | 8 | bool, byte, short, int, bigint, float, double, dec, time, ym, dt | 30, 95, 103, 104, 329, 330, 333, 341, 342, 344, 346, 348, 349, 351, 356, 357, 358, 359, 360, 361, 362, 363, 367, 577, 621, 663 |
+| math | 61 | 26 | 42 | 8 | bool, byte, short, int, bigint, float, double, dec, time, ym, dt | 30, 95, 103, 104, 329, 330, 333, 341, 342, 344, 346, 348, 349, 351, 356, 357, 358, 359, 360, 361, 362, 363, 367, 577, 621, 663 |
 | bitwise | 13 | 13 | 13 | 0 |  |  |
 | datetime | 41 | 27 | 36 | 0 | byte, short, int, bigint, float, double, dec, ntz, time, ym, dt | 103, 329, 339, 340, 343, 351 |
 | hash | 2 | 0 | 2 | 2 | dec | 337, 359, 368 |
@@ -326,7 +326,7 @@ The math functions that do not fuse yet, by the plan row that fuses them (the on
 | :--- | :--- | :--- | :--- | :--- |
 | `atan2` | 356 | none | Spark's, bit for bit | exact; no contract |
 | `acosh`, `asinh`, `atanh`, `cosh`, `sinh`, `tanh` | 357 | none | Spark's, bit for bit | exact; no contract |
-| `hypot`, `pow`, `power` | 358 | none | Spark's, bit for bit | exact; no contract |
+| `hypot`, `power` | 358 | none | Spark's, bit for bit | exact; no contract |
 
 #### Casts by mode
 
@@ -1399,6 +1399,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `log(2.0D, x)` | `math` |  | a constant base: StrictMath.log(2.0) folded as the divisor | exact: per-lane StrictMath call | per-lane: compare to mask, mask cast, blend, mask broadcast, other, mask logic, load or store, mask test |
 | `log(x2, x)` | `math` |  | StrictMath.log(x) / StrictMath.log(x2), null where either is at or below 0.0 | exact: per-lane StrictMath call | per-lane: compare to mask, mask cast, blend, mask broadcast, other, mask logic, load or store, mask test |
 | `exp(x) * 2.0D + 1.0D` | `floatingArithmetic`, `math` |  | the arithmetic around the call in the kernel | exact: per-lane StrictMath call | per-lane: mask broadcast, other, mask logic, load or store, compare to mask, mask test |
+| `pow(x, x2)` | `math` |  | exact: a per-lane StrictMath.pow call, as Spark's code makes, fdlibm's weak branch included | exact: per-lane StrictMath call | per-lane: mask broadcast, other, mask logic, load or store, compare to mask, mask test |
 
 #### Math functions as conditions
 
@@ -1685,7 +1686,7 @@ operands (a row counts once for each type it reads):
 | `byte` | 60 | 0 | 0 | 0 | 0 | 8 | 52 |
 | `date` | 130 | 17 | 0 | 0 | 1 | 0 | 112 |
 | `dec` | 115 | 1 | 50 | 16 | 0 | 0 | 48 |
-| `double` | 112 | 0 | 0 | 1 | 0 | 0 | 111 |
+| `double` | 113 | 0 | 0 | 1 | 0 | 0 | 112 |
 | `dt` | 41 | 2 | 0 | 7 | 0 | 0 | 32 |
 | `float` | 67 | 0 | 0 | 0 | 0 | 0 | 67 |
 | `int` | 197 | 14 | 0 | 5 | 1 | 1 | 176 |

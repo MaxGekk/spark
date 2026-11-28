@@ -70,6 +70,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Las
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathFn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathBinary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathUnary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Fma;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ReinterpretLane;
@@ -283,6 +284,7 @@ final class VarkaVectorWalk {
       case BitCount n -> emitBitCount(cb, n, dense, analysis, s, computed);
       case MathUnary n -> emitMathUnary(cb, n, dense, analysis, s, computed);
       case Fma n -> emitFma(cb, n, dense, analysis, s, computed);
+      case MathBinary n -> emitMathBinary(cb, n, dense, analysis, s, computed);
       case RoundToIntegral n ->
           VarkaRoundingLowering.emitRint(cb, n, dense, analysis, s, computed);
       case CanonicalFloat n -> emitCanonicalFloat(cb, n, dense, analysis, s, computed);
@@ -1248,7 +1250,7 @@ final class VarkaVectorWalk {
     }
     String operator = switch (n.fn()) {
       case SQRT -> "SQRT";
-      case SIN, COS, TAN, ASIN, ACOS, ATAN, EXP, EXPM1, LOG, LOG10, LOG1P, CBRT ->
+      case SIN, COS, TAN, ASIN, ACOS, ATAN, EXP, EXPM1, LOG, LOG10, LOG1P, CBRT, POW ->
           throw VarkaErrors.illegalState(n.fn() + " is a per-lane call");
     };
     cb.getstatic(VECTOR_OPERATORS, operator, VO_UNARY);
@@ -1309,6 +1311,53 @@ final class VarkaVectorWalk {
       cb.dup_x2();                                              // [v, k, r, k]
       cb.pop();                                                 // [v, k, r]
       cb.invokevirtual(lane.vector, "withLane", DOUBLE_WITH_LANE);
+    }
+  }
+
+  /**
+   * {@code MathBinary}: {@code [] -> [r]}, each lane {@code k} of {@code r} the scalar
+   * {@code fn(a.lane(k), b.lane(k))} Spark's code calls, unrolled over the baked lane count as
+   * {@link #emitMathLaneCall} is. No local is taken: {@code b} rides under the vector being
+   * rebuilt, which starts as {@code a} and is still {@code a} at lane {@code k} when lane
+   * {@code k} is read. Per lane, from {@code [b, acc]}: both vectors copied, {@code acc[k]} read,
+   * moved under the copy of {@code b} by {@code dup2_x1} and {@code pop2}, {@code b[k]} read, the
+   * call, then {@code acc.withLane(k, r)} as the one-operand call writes it. Null-intolerant, so
+   * a node that owns its word stores the operands' AND; a null lane is called too, the call being
+   * pure.
+   */
+  private static void emitMathBinary(CodeBuilder cb, MathBinary n, boolean dense,
+      Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
+    emitValue(cb, n.left(), dense, analysis, s, computed);
+    emitValue(cb, n.right(), dense, analysis, s, computed);
+    line(cb, analysis, n);
+    Lane lane = analysis.laneOf(n);
+    if (lane != Lane.DOUBLE || analysis.lanes == 0 || analysis.lane.bits != Long.SIZE) {
+      throw VarkaErrors.illegalState("a per-lane " + n.fn() + " needs a double vector at a "
+          + "baked lane count of a 64-bit drive lane, not " + lane + " at " + analysis.lanes);
+    }
+    String called =
+        analysis.options.floatingFault() == VarkaEmitOptions.FloatingFault.MATH_OTHER_CLASS
+            ? otherClass(n.fn().owner()) : n.fn().owner();
+    ClassDesc owner = ClassDesc.ofInternalName(called);
+    cb.swap();                                                  // [b, a]
+    for (int k = 0; k < analysis.lanes; k++) {
+      cb.dup2();                                                // [b, acc, b, acc]
+      cb.loadConstant(k);
+      cb.invokevirtual(lane.vector, "lane", DOUBLE_LANE);       // [b, acc, b, x]
+      cb.dup2_x1();                                             // [b, acc, x, b, x]
+      cb.pop2();                                                // [b, acc, x, b]
+      cb.loadConstant(k);
+      cb.invokevirtual(lane.vector, "lane", DOUBLE_LANE);       // [b, acc, x, y]
+      cb.invokestatic(owner, n.fn().method(), DOUBLE_FN2);      // [b, acc, r]
+      cb.loadConstant(k);                                       // [b, acc, r, k]
+      cb.dup_x2();                                              // [b, acc, k, r, k]
+      cb.pop();                                                 // [b, acc, k, r]
+      cb.invokevirtual(lane.vector, "withLane", DOUBLE_WITH_LANE);  // [b, acc']
+    }
+    cb.swap();                                                  // [r, b]
+    cb.pop();                                                   // [r]
+    if (!dense && s.ownWord.contains(n)) {
+      emitAndWord(cb, s, s.wordRef.get(n), s.wordRef.get(n.left()), s.wordRef.get(n.right()));
     }
   }
 

@@ -29,6 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathBinary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathFn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MathUnary;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
@@ -81,10 +82,11 @@ import org.apache.spark.sql.catalyst.expressions.Tanh;
  * division of doubles, never Spark's {@code Divide}, so a zero divisor answers an infinity and is
  * no null, which is the floating division in {@code WRAP} over the call.
  *
- * <p>Row 358's functions but {@code pow} and {@code hypot} fuse the same way: {@code exp},
- * {@code expm1} and {@code cbrt} as a call; {@code ln}, {@code log10}, {@code log1p} and
- * {@code log} with one argument as a call under Spark's domain null ({@link VarkaMathDomain});
- * {@code log2} and {@code log} with a base as Spark writes them,
+ * <p>Row 358's functions but {@code hypot} fuse the same way: {@code pow} as a two-operand call
+ * ({@link MathBinary}) of {@code StrictMath.pow}, the method Spark's code names, fdlibm's weak
+ * branch included; {@code exp}, {@code expm1} and {@code cbrt} as a call; {@code ln},
+ * {@code log10}, {@code log1p} and {@code log} with one argument as a call under Spark's domain
+ * null ({@link VarkaMathDomain}); {@code log2} and {@code log} with a base as Spark writes them,
  * {@code StrictMath.log(c) / StrictMath.log(2)} and {@code StrictMath.log(x) / StrictMath.log(b)},
  * each logarithm under its null and the divide Java's, a constant divisor folded to the double
  * Spark computes a row.
@@ -175,6 +177,7 @@ final class VarkaMathCompiler {
       case Log2 f -> () -> logOf(MathFn.LOG, 0.0, f.child(), inputs, literals, sink)
           .map(v -> quotient(v, VarkaNodeCompiler.doubleSlot(StrictMath.log(2), sink)));
       case Logarithm f -> () -> logarithm(f, inputs, literals, sink);
+      case Pow f -> () -> call2(MathFn.POW, f.left(), f.right(), inputs, literals, sink);
       default -> ownerOf(e).<VarkaFamilyArm>map(owner -> () -> sink.decline(owner.reason(), e))
           .orElse(null);
     };
@@ -188,6 +191,16 @@ final class VarkaMathCompiler {
   private static Optional<VarkaVectorIR> call(MathFn fn, Expression x, VarkaSlotTable inputs,
       VarkaSlotTable literals, DeclineSink sink) {
     return operand(x, inputs, literals, sink).map(v -> new MathUnary(fn, v));
+  }
+
+  /** {@code fn(x, y)}, a per-lane call over the two double operands in Spark's order. */
+  private static Optional<VarkaVectorIR> call2(MathFn fn, Expression x, Expression y,
+      VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+    Optional<VarkaVectorIR> left = operand(x, inputs, literals, sink);
+    if (left.isEmpty()) {
+      return left;
+    }
+    return operand(y, inputs, literals, sink).map(r -> new MathBinary(fn, left.get(), r));
   }
 
   /** The double operand of a math function, compiled; a value on another lane declines. */

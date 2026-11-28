@@ -70,14 +70,14 @@ public final class VarkaMathCompilerSuite {
       VarkaSqlResolve.column("i", DataTypes.IntegerType))).toSeq();
 
   /**
-   * The functions that fuse, as SQL: row 356's one-argument functions, row 358's but {@code pow}
-   * and {@code hypot}, {@code log} with a constant and with a column base, and two int operands,
+   * The functions that fuse, as SQL: row 356's one-argument functions, row 358's but
+   * {@code hypot}, {@code log} with a constant and with a column base, and two int operands,
    * which reach the call through their cast to double, lowered by the floating casts family.
    */
   private static final List<String> FUSED = Stream.concat(Stream.of("sin", "cos", "tan", "asin",
       "acos", "atan", "sec", "csc", "cot", "exp", "expm1", "ln", "log", "log10", "log1p", "log2",
-      "cbrt").map(f -> f + "(x)"), Stream.of("log(2.0D, x)", "log(y, x)", "sin(i)", "exp(i)"))
-      .toList();
+      "cbrt").map(f -> f + "(x)"), Stream.of("log(2.0D, x)", "log(y, x)", "pow(x, y)", "sin(i)",
+      "exp(i)")).toList();
 
   /** Each other function as SQL, with the name its reason gives and the row that fuses it. */
   private static final Map<String, String> FUNCTIONS = functions();
@@ -88,7 +88,6 @@ public final class VarkaMathCompilerSuite {
     for (String f : List.of("sinh", "cosh", "tanh", "asinh", "acosh", "atanh")) {
       m.put(f + "(x)", f + " is row 357's");
     }
-    m.put("pow(x, y)", "pow is row 358's");
     m.put("hypot(x, y)", "hypot is row 358's");
     return Collections.unmodifiableMap(m);
   }

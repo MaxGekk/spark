@@ -295,7 +295,9 @@ public final class VarkaVectorIRSharingSuite {
         List.class, List.of(1, 2));
     for (LaneType lane : LaneType.values()) {
       VarkaVectorIR column = new ColumnRef(0, lane);
-      for (int k = 0; k < 6; k++) { // six: the constants of the IR's largest enum
+      // Every constant of the IR's largest enum, MathFn, whose two-operand members come last and
+      // are the only ones MathBinary takes (VARKA-358).
+      for (int k = 0; k < VarkaVectorIR.MathFn.values().length; k++) {
         Object[] args = new Object[components.length];
         for (int i = 0; i < components.length; i++) {
           Class<?> t = signature[i];

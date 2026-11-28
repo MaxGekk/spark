@@ -72,7 +72,7 @@ negative	UnaryMinus	mathExpressions	in		byte,short,int,bigint,float,double,dec,y
 pi	Pi	mathExpressions	out	a constant per query: folded to a literal before Varka sees it								
 pmod	Pmod	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	semantics	30,346,577	integral is semantics (item 33's sign rule; pmod(-1, Int.MinValue) is Int.MaxValue, SPARK-59934); floating by the one-FMA remainder (346); decimal: a remainder by a variable divisor, row 577	
 positive	UnaryPositive	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt		byte,short,float,double,dec	plumbing	333	rewritten to its child	
-pow	Pow	mathExpressions	in		double	double		double	ulp	367,358	StrictMath; fused behind the guard on fdlibm's weak branch, its exact exponents as exact nodes (358)	
+pow	Pow	mathExpressions	in		double	double	double	double	done	358	exact: a per-lane StrictMath.pow call, fdlibm's weak branch included; the guard and exact nodes are the opt-in form's (VARKA-358)	
 power	Pow	mathExpressions	in		double	double		double	ulp	367,358	alias of pow	
 radians	ToRadians	mathExpressions	in		double	double	double	double	done	342	Math.toRadians is one multiply, bit-exact	
 rint	Rint	mathExpressions	in		double	double	double	double	done	344	round half even to an integer, the 2^52 construction	

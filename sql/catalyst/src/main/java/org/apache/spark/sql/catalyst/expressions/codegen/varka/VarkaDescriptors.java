@@ -123,6 +123,9 @@ final class VarkaDescriptors {
   /** {@code double fn(double)}: a static scalar math method, a per-lane call's target. */
   static final MethodTypeDesc DOUBLE_FN =
       MethodTypeDesc.of(ConstantDescs.CD_double, ConstantDescs.CD_double);
+  /** {@code double fn(double, double)}: a two-operand per-lane call's target. */
+  static final MethodTypeDesc DOUBLE_FN2 = MethodTypeDesc.of(ConstantDescs.CD_double,
+      ConstantDescs.CD_double, ConstantDescs.CD_double);
   /**
    * The whole-batch bitmap pass, one call per node of a served root's word expression:
    * {@code copyColumnValidity(MemorySegment dst, long addr, int nulls, int rows)} for a single

@@ -135,6 +135,9 @@ public final class VarkaReproductionSuite {
         // The single-rounding multiply-add over double columns and a literal (VARKA-342).
         new VarkaVectorIR.Fma(new ColumnRef(0, LaneType.DOUBLE), new ColumnRef(1, LaneType.DOUBLE),
             new LiteralSlot(0, LaneType.DOUBLE)),
+        // A two-operand per-lane math call over two double columns (VARKA-358).
+        new VarkaVectorIR.MathBinary(MathFn.POW, new ColumnRef(0, LaneType.DOUBLE),
+            new ColumnRef(2, LaneType.DOUBLE)),
         // The rint construction's node over a double column (VARKA-344).
         new VarkaVectorIR.RoundToIntegral(VarkaVectorIR.RoundMode.RINT,
             new ColumnRef(0, LaneType.DOUBLE)),

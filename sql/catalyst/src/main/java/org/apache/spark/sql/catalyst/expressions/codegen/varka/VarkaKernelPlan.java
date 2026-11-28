@@ -143,8 +143,9 @@ public final class VarkaKernelPlan {
     }
     // A per-lane math call is unrolled over the baked lane count of the 64-bit drive lane.
     for (VarkaVectorIR node : nodes) {
-      if (node instanceof VarkaVectorIR.MathUnary m && m.fn().laneCall()
-          && (lanes == 0 || lane.bits != Long.SIZE)) {
+      boolean call = (node instanceof VarkaVectorIR.MathUnary m && m.fn().laneCall())
+          || node instanceof VarkaVectorIR.MathBinary;
+      if (call && (lanes == 0 || lane.bits != Long.SIZE)) {
         return refused(new Refusal(Kind.MATH_CALL, NO_BAKED_LANES_FOR_A_CALL));
       }
     }
@@ -856,6 +857,7 @@ public final class VarkaKernelPlan {
           VarkaVectorIR.DateDiff _, IntArith _, VarkaVectorIR.IntNeg _,
           VarkaVectorIR.ConstDivide _, VarkaVectorIR.BoundedDivide _, VarkaVectorIR.BitOp _,
           VarkaVectorIR.BitCount _, VarkaVectorIR.MathUnary _, VarkaVectorIR.Fma _,
+          VarkaVectorIR.MathBinary _,
           VarkaVectorIR.RoundToIntegral _, VarkaVectorIR.CanonicalFloat _,
           VarkaVectorIR.CanonicalBits _, VarkaVectorIR.HashStep _, VarkaVectorIR.IfElse _,
           VarkaVectorIR.CondValue _, VarkaVectorIR.Greatest _, VarkaVectorIR.Least _,
