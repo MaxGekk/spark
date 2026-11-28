@@ -229,24 +229,27 @@ final class VarkaDecimalLowering {
    * a node for its properties, since {@link WideMul#props()} calls this.
    */
   static int laneCalls(WideMul n) {
-    return LANE_CALLS[n.word().ordinal() * 2 + (n.rightOneLimb() ? 1 : 0)];
+    int[] counts = switch (n.word()) {
+      case LOW -> LOW_CALLS;
+      case HIGH -> HIGH_CALLS;
+    };
+    return counts[n.rightOneLimb() ? 1 : 0];
   }
 
-  /** {@link #laneCalls} by word and limb count, the index {@code word * 2 + oneLimb}. */
-  private static final int[] LANE_CALLS = laneCallTable();
+  /** {@link #laneCalls} of each word, two limbs first, then one. */
+  private static final int[] LOW_CALLS = laneCallsOf(Word.LOW);
+  private static final int[] HIGH_CALLS = laneCallsOf(Word.HIGH);
 
-  private static int[] laneCallTable() {
+  private static int[] laneCallsOf(Word word) {
     var x = new VarkaVectorIR.ColumnRef(0, VarkaVectorIR.LaneType.LONG);
     var y = new VarkaVectorIR.ColumnRef(1, VarkaVectorIR.LaneType.LONG);
-    int[] table = new int[Word.values().length * 2];
-    for (Word word : Word.values()) {
-      for (int oneLimb = 0; oneLimb < 2; oneLimb++) {
-        Set<VarkaVectorIR> seen = new HashSet<>(Set.of(x, y));
-        table[word.ordinal() * 2 + oneLimb] = calls(productWord(VarkaEmitOptions.DEFAULTS, x, y,
-            word, oneLimb == 1, true, true, Set.of()), seen);
-      }
+    int[] counts = new int[2];
+    for (int oneLimb = 0; oneLimb < 2; oneLimb++) {
+      Set<VarkaVectorIR> seen = new HashSet<>(Set.of(x, y));
+      counts[oneLimb] = calls(productWord(VarkaEmitOptions.DEFAULTS, x, y,
+          word, oneLimb == 1, true, true, Set.of()), seen);
     }
-    return table;
+    return counts;
   }
 
   private static int calls(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
