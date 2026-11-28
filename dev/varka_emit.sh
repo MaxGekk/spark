@@ -39,9 +39,11 @@
 #   ymy (interval year), ym (interval year to month), dt (interval day to second).
 # The session-zone TIMESTAMP has no spelling yet. An alias with a space needs the list quoted.
 #
-# --bytecode also writes the emitted class to target/varka-emit/VarkaFusedDump-<time>.class and
-# prints its listing, `javap -c -p` of it (javap from $JAVA_HOME/bin, else from PATH), after
-# the report. The class is the dump's own emission of the expressions, under the given options.
+# --bytecode also writes the emitted class to target/varka-emit/VarkaFusedDump-XXXXXX.class, a
+# name mktemp makes unique, and prints its listing, `javap -c -p` of it (javap from
+# $JAVA_HOME/bin, else from PATH), after the report. The class is the dump's own emission of the
+# expressions, under the given options. It takes one projection, so --table, which reports on
+# each expression alone, refuses it.
 #
 # --replay FILE replays a reproduction file a Varka kernel failure wrote (VARKA-315): it
 # rebuilds the kernel from the file's IR and options, walks the failing path - the verification,
@@ -128,15 +130,24 @@ bindings() {
 [ "${#pass[@]}" -gt 0 ] || { usage; }
 classfile=""
 if [ "$bytecode" -eq 1 ]; then
+  for a in "${pass[@]}"; do
+    if [ "$a" = --table ]; then
+      echo "--bytecode lists the one class of a projection; --table reports on each expression" \
+        "alone: drop one of the two" >&2
+      exit 2
+    fi
+  done
   mkdir -p target/varka-emit
-  classfile="$root/target/varka-emit/VarkaFusedDump-$(date +%H%M%S).class"
-  rm -f "$classfile"
+  # mktemp makes the name unique, so two runs never list each other's class; the file it makes
+  # is empty until the dump writes the class into it.
+  classfile="$(mktemp --suffix=.class "$root/target/varka-emit/VarkaFusedDump-XXXXXX")" || exit 2
   pass+=(--class-file "$classfile")
 fi
 # The emitted class's listing, under --bytecode; none when the emitter declined.
 listing() {
   [ "$bytecode" -eq 1 ] || return 0
-  if [ ! -f "$classfile" ]; then
+  if [ ! -s "$classfile" ]; then
+    rm -f "$classfile"
     echo "no class was written: nothing was emitted, so there is no bytecode to list" >&2
     return 1
   fi

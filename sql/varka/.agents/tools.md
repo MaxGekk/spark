@@ -7,8 +7,13 @@ A new tool gets its bullet in the same commit.
 
 A bullet says what the tool is for and gives its usual command line. It is not the usage: for the
 other options run the tool with `--help`, or read its header, the comment block or docstring at
-the top of the file. Every `dev/varka*.py` answers `--help` with its usage and exit 0, also after
-a subcommand (`dev/varka_msg_check.py pr --help`), and the same lint fails when one does not.
+the top of the file. Every tracked `dev/varka*.py` answers `--help` with its usage and exit 0, and
+so does each subcommand its `--help` names (`dev/varka_msg_check.py pr --help`); the same lint
+fails when one does not. It finds the subcommands in two places only: the first brace group of an
+argparse usage line (`{plan,times}`) and the word after the tool's path at the start of an example
+line (`dev/varka_msg_check.py pr ...`). It runs a subcommand's `--help` only when the tool's
+source reads `-h`/`--help` anywhere on the command line or uses argparse, and with no GitHub
+token, so that `--help` can never start a tool's work.
 Run every command from the root of the worktree.
 
 ## The tags
@@ -156,7 +161,8 @@ fanned-out run in CI.
   nothing. `dev/varka_matrix.sh --config cse=false`, or one suite of one module under one
   configuration: `dev/varka_matrix.sh --module sql --config cse=false --suites <SuiteName>`.
   One test of that suite, the tests whose name contains the text (ScalaTest's `-z`, JUnit suites
-  too), its `run.log` under `target/varka-matrix/runs/<configuration>/`:
+  too), its `run.log` under `target/varka-matrix/runs-test/<configuration>/`, apart from the
+  `runs/` that `--split` reads; a text no test name contains fails the run:
   `dev/varka_matrix.sh --module sql --config cse=false --suites <SuiteName> --test "<text>"`
 - `dev/varka_matrix_ci.sh`: what a pull request's Build runs: one module's suites under the one
   configuration `dev/varka_matrix_pick.py` picks, and on the base when that fails. `[sbt]`
@@ -308,7 +314,7 @@ their logs.
   files, sections, row numbers, run heads. The default file is `sql/varka/plans/m8/PLAN.md`.
   `[no JVM]` (uses `gh` unless `--offline`) `dev/varka_plan_lint.py --offline`
 - `dev/varka_tools_lint.py`: check this index against the entries under `dev/`, and that every
-  `dev/varka*.py` answers `--help`, after each subcommand too. `[no JVM]`
+  tracked `dev/varka*.py` answers `--help`, after each subcommand its `--help` names too. `[no JVM]`
   `dev/varka_tools_lint.py` (`--self-test` runs its cases)
 - `dev/varka_census.py`: the census of Spark's scalar expressions over the milestone's types:
   rewrites the census, the cast matrix and the docs' support table; `--check` compares them.

@@ -40,14 +40,20 @@ slash); a name in running text is not a bullet. The findings:
   * a bullet, read to the next bullet, heading or blank line, without exactly one of the tags the
     index defines: `[sbt]`, `[java]`, `[no JVM]`, `[data]`.
 
-And, for every entry that is a Python file (`dev/varka*.py`), run with no input and a
-deadline of HELP_SECONDS each:
+And, for every Python tool git tracks (`dev/varka*.py`; an untracked file is never run), run
+once with `--help`, no input, a deadline of HELP_SECONDS and an environment that cannot reach
+GitHub (no GH_TOKEN or GITHUB_TOKEN, GH_HOST an invalid host, git's ssh disabled):
 
-  * `--help` that does not exit 0 or prints nothing;
-  * `<subcommand> --help` that does not exit 0 or prints nothing, for each subcommand the
-    `--help` text names: a brace group of an argparse usage line (`{plan,times}`, not an
-    option's choices) and a word after the tool's own path in an example line
-    (`dev/varka_msg_check.py pr ...`).
+  * `--help` that does not exit 0, prints nothing or is still running at the deadline;
+  * the subcommands that run's text names, and only these: the first brace group of an
+    argparse usage line (`{plan,times}`, not an option's choices) and each word after the
+    tool's own path at the start of an example line (`dev/varka_msg_check.py pr ...`). A tool
+    the help text names no subcommand of is checked by its `--help` alone;
+  * a tool with such a subcommand whose source does not read `-h`/`--help` anywhere on the
+    command line (`"--help" in argv`, `"--help" in sys.argv[1:]`) and does not use argparse:
+    a tool that checks only its first argument would start the subcommand's work on
+    `<subcommand> --help`, so it is reported and not run;
+  * else `<subcommand> --help` that does not exit 0, prints nothing or is still running.
 
 An agent learns a tool's arguments from its `--help`, so a tool that crashes on it, or reads it
 as an argument and starts its work, fails the one question every reader asks first. A tool
@@ -72,6 +78,13 @@ BULLET_RE = re.compile(r"^- `dev/(" + PREFIX + r"[^`/]*)/?`")
 # A tool's --help is a print: seconds enough for the slowest import, short of a tool's real work.
 HELP_SECONDS = 30
 BRACE_RE = re.compile(r"(\S*)\s\{([A-Za-z][\w,-]*)\}")
+# A tool reads -h/--help anywhere on its command line: the test this row's tools make
+# (`"--help" in argv`), or argparse, whose parser and each subparser answer it in any place.
+HELP_ANYWHERE_RE = re.compile(r"""["']--help["']\s+in\s|\bArgumentParser\(""")
+# The variables a child must not see, and those it gets instead, so that a tool which takes
+# `--help` for work cannot dispatch a run or push: gh has no token and no real host, git no ssh.
+HIDDEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+OFFLINE_ENV = {"GH_HOST": "gh-disabled.invalid", "GIT_SSH_COMMAND": "false"}
 
 
 def tracked_entries(root):
@@ -96,6 +109,25 @@ def tracked_entries(root):
     names = {path.split("/")[1] for path in out.split("\0") if path}
     # A file deleted in the working tree and not yet staged is still in git's index.
     return sorted(n for n in names if os.path.lexists(os.path.join(root, "dev", n)))
+
+
+def tracked_tools(root):
+    """The Python tools directly under dev/ that git tracks: the only ones the lint runs."""
+    out = subprocess.run(
+        ["git", "-C", root, "ls-files", "-z", "--cached", "dev/" + PREFIX + "*.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    names = {path.split("/")[1] for path in out.split("\0") if path.count("/") == 1}
+    return sorted(n for n in names if os.path.isfile(os.path.join(root, "dev", n)))
+
+
+def offline_env():
+    """This process's environment without GitHub's tokens, gh pointed at no host."""
+    env = {k: v for k, v in os.environ.items() if k not in HIDDEN_ENV}
+    env.update(OFFLINE_ENV)
+    return env
 
 
 def bullets(text):
@@ -157,12 +189,13 @@ def subcommands(name, text):
             if not option.startswith("-") or option.endswith("]"):
                 return group.split(",")
         return []
-    example = re.compile(r"dev/" + re.escape(name) + r" ([a-z][a-z0-9_-]*)(?=\s|$)", re.M)
+    example = re.compile(r"^\s*dev/" + re.escape(name) + r" ([a-z][a-z0-9_-]*)(?=\s|$)", re.M)
     return list(dict.fromkeys(example.findall(text)))
 
 
-def answers(path, args):
-    """None when `path args --help` exits 0 and prints, else why not."""
+def answers(path, args, seconds=HELP_SECONDS):
+    """`path args --help`, run once offline: (None, its output) when it exits 0 and prints,
+    else (why not, its output so far). A run past the deadline is a finding, not an error."""
     shown = " ".join([f"dev/{os.path.basename(path)}", *args, "--help"])
     try:
         run = subprocess.run(
@@ -171,38 +204,47 @@ def answers(path, args):
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=HELP_SECONDS,
+            timeout=seconds,
+            env=offline_env(),
         )
     except subprocess.TimeoutExpired:
-        return f"{shown}: still running after {HELP_SECONDS} s: answer --help before any work"
+        return f"{shown}: still running after {seconds} s: answer --help before any work", ""
+    text = run.stdout + "\n" + run.stderr
     if run.returncode != 0:
         last = (run.stderr.strip() or run.stdout.strip()).splitlines()[-1:] or ["no output"]
-        return f"{shown}: exit {run.returncode} ({last[0][:120]}): print the usage and exit 0"
-    if not (run.stdout.strip() or run.stderr.strip()):
-        return f"{shown}: exit 0 and no output: print the usage"
-    return None
+        why = f"{shown}: exit {run.returncode} ({last[0][:120]}): print the usage and exit 0"
+        return why, text
+    if not text.strip():
+        return f"{shown}: exit 0 and no output: print the usage", text
+    return None, text
 
 
-def help_findings(root, entries):
-    """The findings of --help over the Python entries, each then over its subcommands."""
+def help_anywhere(path):
+    """Does the tool's source read -h/--help anywhere on its command line? Read, not run."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return bool(HELP_ANYWHERE_RE.search(f.read()))
+
+
+def help_findings(root, tools, seconds=HELP_SECONDS):
+    """The findings of --help over the given Python tools, each then over its subcommands."""
 
     def one(name):
         path = os.path.join(root, "dev", name)
-        first = answers(path, [])
+        first, text = answers(path, [], seconds)
         if first:
             return [first]
-        text = subprocess.run(
-            [sys.executable, path, "--help"],
-            cwd=root,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=HELP_SECONDS,
-        )
-        words = subcommands(name[:-3] + ".py", text.stdout + "\n" + text.stderr)
-        return [f for f in (answers(path, [w]) for w in words) if f]
+        words = subcommands(name, text)
+        if words and not help_anywhere(path):
+            # Running `<subcommand> --help` would start the subcommand's work in a tool that
+            # checks only its first argument, so the source answers for it instead.
+            return [
+                f"dev/{name}: reads -h/--help only in some places, so `dev/{name} {words[0]} "
+                f'--help` would run {words[0]}; not run: test `"-h" in argv or "--help" in '
+                "argv` before any work"
+            ]
+        return [f for f in (answers(path, [w], seconds)[0] for w in words) if f]
 
-    tools = [n for n in entries if n.endswith(".py")]
+    tools = [n for n in tools if n.endswith(".py")]
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
         return [f for found in pool.map(one, tools) for f in found]
 
@@ -301,36 +343,92 @@ def self_test():
     )
     words("a brace group outside the usage line", "What it does: {a,b}.\n")
 
-    # The check itself, over planted tools: one that answers, one that crashes after a
-    # subcommand (the slip of dev/varka_msg_check.py's `pr --help`), one that reads --help as
-    # input and fails, and one whose help prints nothing.
+    # The check itself, over planted tools in a scratch repository: one that answers and logs
+    # each run, one that checks only its first argument (a subcommand's `--help` would start
+    # its work), one that crashes after a subcommand before its help test (the slip of
+    # dev/varka_msg_check.py's `pr --help`), one that reads --help as input, one whose help
+    # prints nothing, one past the deadline, one that fails when it can reach GitHub, and one
+    # git does not track, which the lint must never run.
     good = (
-        '"""Usage.\n\n  dev/varka_good.py run FILE\n"""\nimport sys\n'
+        '"""Usage.\n\n  dev/varka_good.py run FILE\n"""\nimport os, sys\n'
+        'with open(os.path.join(os.path.dirname(__file__), "good.log"), "a") as f:\n'
+        '    f.write(" ".join(sys.argv[1:]) + "\\n")\n'
         'if "--help" in sys.argv:\n    print(__doc__)\n    sys.exit(0)\n'
+    )
+    work = (
+        "import os, sys\n"
+        "def done(what):\n"
+        '    open(os.path.join(os.path.dirname(__file__), what + ".done"), "w").close()\n'
+    )
+    first = (
+        '"""Usage.\n\n  dev/varka_first.py pr --body-file F\n"""\n'
+        + work
+        + 'if sys.argv[1:2] == ["--help"]:\n    print(__doc__)\n    sys.exit(0)\n'
+        'done("first")\n'
     )
     crash = (
         '"""Usage.\n\n  dev/varka_crash.py pr --body-file F\n"""\nimport sys\n'
-        'if sys.argv[1:2] == ["--help"]:\n    print(__doc__)\n    sys.exit(0)\n'
-        'opts = dict(zip(sys.argv[2::2], sys.argv[3::2]))\nopen(opts["--body-file"])\n'
+        'if sys.argv[1:2] == ["pr"]:\n    open(sys.argv[3])\n'
+        'if "--help" in sys.argv:\n    print(__doc__)\n    sys.exit(0)\n'
     )
     reads = "import sys\nopen(sys.argv[1])\n"
     silent = "import sys\nsys.exit(0)\n"
-    with tempfile.TemporaryDirectory() as tmp:
-        os.mkdir(os.path.join(tmp, "dev"))
-        tools = {"varka_good.py": good, "varka_crash.py": crash, "varka_reads.py": reads}
-        tools["varka_silent.py"] = silent
-        for name, text in tools.items():
-            with open(os.path.join(tmp, "dev", name), "w", encoding="utf-8") as f:
-                f.write(text)
-        got = sorted(help_findings(tmp, sorted(tools) + ["varka_data"]))
-        expected = [
-            "dev/varka_crash.py pr --help: exit 1 (KeyError: '--body-file')",
-            "dev/varka_reads.py --help: exit 1 (FileNotFoundError",
-            "dev/varka_silent.py --help: exit 0 and no output",
-        ]
-        ok = len(got) == len(expected) and all(g.startswith(e) for g, e in zip(got, expected))
-        if not ok:
-            failures.append(f"help_findings: expected {expected}, got {got}")
+    slow = "import time\ntime.sleep(60)\n"
+    online = (
+        "import os, sys\n"
+        f"hidden = [k for k in {HIDDEN_ENV!r} if k in os.environ]\n"
+        f"if hidden or os.environ.get('GH_HOST') != {OFFLINE_ENV['GH_HOST']!r}:\n"
+        "    sys.exit('can reach GitHub')\n"
+        "print('offline')\n"
+    )
+    untracked = work + 'done("untracked")\n'
+    planted = os.environ.get("GH_TOKEN")
+    os.environ["GH_TOKEN"] = "planted-by-the-self-test"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            dev = os.path.join(tmp, "dev")
+            os.mkdir(dev)
+            tools = {
+                "varka_good.py": good,
+                "varka_first.py": first,
+                "varka_crash.py": crash,
+                "varka_reads.py": reads,
+                "varka_silent.py": silent,
+                "varka_slow.py": slow,
+                "varka_online.py": online,
+            }
+            for name, text in {**tools, "varka_untracked.py": untracked}.items():
+                with open(os.path.join(dev, name), "w", encoding="utf-8") as f:
+                    f.write(text)
+            git = ["git", "-C", tmp]
+            subprocess.run(git + ["init", "-q"], check=True)
+            subprocess.run(git + ["add", *(f"dev/{n}" for n in tools)], check=True)
+            listed = tracked_tools(tmp)
+            if listed != sorted(tools):
+                failures.append(f"tracked_tools: expected {sorted(tools)}, got {listed}")
+            got = sorted(help_findings(tmp, listed, seconds=3))
+            expected = [
+                "dev/varka_crash.py pr --help: exit 1 (IndexError",
+                "dev/varka_first.py: reads -h/--help only in some places",
+                "dev/varka_reads.py --help: exit 1 (FileNotFoundError",
+                "dev/varka_silent.py --help: exit 0 and no output",
+                "dev/varka_slow.py --help: still running after 3 s",
+            ]
+            ok = len(got) == len(expected) and all(g.startswith(e) for g, e in zip(got, expected))
+            if not ok:
+                failures.append(f"help_findings: expected {expected}, got {got}")
+            ran = sorted(n for n in os.listdir(dev) if n.endswith(".done"))
+            if ran:
+                failures.append(f"help_findings: a planted tool did its work: {ran}")
+            with open(os.path.join(dev, "good.log"), encoding="utf-8") as f:
+                runs = f.read().splitlines()
+            if runs != ["--help", "run --help"]:
+                failures.append(f"help_findings: one run each expected, varka_good.py ran {runs}")
+    finally:
+        if planted is None:
+            os.environ.pop("GH_TOKEN")
+        else:
+            os.environ["GH_TOKEN"] = planted
 
     # The tree's own lookup: this file is tracked, starts with the prefix and exists.
     here = os.path.basename(__file__)
@@ -358,14 +456,14 @@ def main(argv):
     with open(path, encoding="utf-8") as f:
         text = f.read()
     entries = tracked_entries(ROOT)
-    findings = check(entries, text) + help_findings(ROOT, entries)
+    findings = check(entries, text) + help_findings(ROOT, tracked_tools(ROOT))
     for finding in findings:
         print(finding, file=sys.stderr)
     if not findings:
-        tools = sum(1 for n in entries if n.endswith(".py"))
+        tools = len(tracked_tools(ROOT))
         print(
             f"varka_tools_lint: {len(entries)} entries under dev/, each with one bullet; "
-            f"{tools} Python tools answer --help, and after each subcommand"
+            f"{tools} tracked Python tools answer --help, and after each subcommand it names"
         )
     return min(len(findings), 100)
 
