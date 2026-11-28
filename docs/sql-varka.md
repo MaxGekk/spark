@@ -290,7 +290,7 @@ An entry is a function or operator of the census; a type counts *fused* for it o
 | `IntegerType` (`int`) | INT | 92 | 68 | 2 | plumbing 4, semantics 18 | 0 | 139 |
 | `LongType` (`bigint`) | LONG | 87 | 62 | 2 | plumbing 5, semantics 18 | 0 | 97 |
 | `FloatType` (`float`) | FLOAT | 68 | 38 | 2 | plumbing 5, semantics 23 | 0 | 66 |
-| `DoubleType` (`double`) | DOUBLE | 104 | 65 | 2 | plumbing 4, semantics 24, ulp 9 | 0 | 99 |
+| `DoubleType` (`double`) | DOUBLE | 104 | 66 | 2 | plumbing 4, semantics 24, ulp 8 | 0 | 99 |
 | `DecimalType` (`dec`) | LONG, words per value: 1 to precision 18, 2 to precision 38 | 68 | 4 | 32 | plumbing 3, semantics 29 | 3 | 113: 81 to precision 18, 32 at precision 19 to 38 |
 | `DateType` (`date`) | INT | 63 | 51 | 1 | plumbing 1, semantics 10 | 0 | 109 |
 | `TimestampNTZType` (`ntz`) | LONG | 54 | 51 | 0 | plumbing 1, semantics 2 | 0 | 77 |
@@ -306,7 +306,7 @@ One row per section of Spark's function registry, and per family of the operator
 | :--- | ---: | ---: | ---: | ---: | :--- | :--- |
 | conditional | 11 | 1 | 11 | 10 | float, dec | 329, 331, 338, 341, 348, 359 |
 | predicate | 16 | 6 | 15 | 8 | bool, dec | 27, 329, 331, 336, 338, 341, 347, 348, 359, 497 |
-| math | 61 | 26 | 42 | 8 | bool, byte, short, int, bigint, float, double, dec, time, ym, dt | 30, 95, 103, 104, 329, 330, 333, 341, 342, 344, 346, 348, 349, 351, 356, 357, 358, 359, 360, 361, 362, 363, 367, 577, 621, 663 |
+| math | 61 | 27 | 43 | 8 | bool, byte, short, int, bigint, float, double, dec, time, ym, dt | 30, 95, 103, 104, 329, 330, 333, 341, 342, 344, 346, 348, 349, 351, 356, 357, 358, 359, 360, 361, 362, 363, 367, 577, 621, 663 |
 | bitwise | 13 | 13 | 13 | 0 |  |  |
 | datetime | 41 | 27 | 36 | 0 | byte, short, int, bigint, float, double, dec, ntz, time, ym, dt | 103, 329, 339, 340, 343, 351 |
 | hash | 2 | 0 | 2 | 2 | dec | 337, 359, 368 |
@@ -326,7 +326,7 @@ The math functions that do not fuse yet, by the plan row that fuses them (the on
 | :--- | :--- | :--- | :--- | :--- |
 | `atan2` | 356 | none | Spark's, bit for bit | exact; no contract |
 | `acosh`, `asinh`, `atanh`, `cosh`, `sinh`, `tanh` | 357 | none | Spark's, bit for bit | exact; no contract |
-| `hypot`, `power` | 358 | none | Spark's, bit for bit | exact; no contract |
+| `hypot` | 358 | none | Spark's, bit for bit | exact; no contract |
 
 #### Casts by mode
 

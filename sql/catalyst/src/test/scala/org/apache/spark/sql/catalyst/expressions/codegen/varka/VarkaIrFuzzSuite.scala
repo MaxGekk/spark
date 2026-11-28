@@ -1218,6 +1218,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // test after it asserts its reach.
     // The reinterpretation (VARKA-345) is a floating node too, built by the fdlibm ports alone;
     // `VarkaMathPortSuite` holds it and the port it serves to the reference and to StrictMath.
+    // The two-operand math call (VARKA-358) is drawn by no sequence: the floating arithmetic
+    // sequences draw MathUnary's SQRT and the FMA alone, and the per-lane calls' productions,
+    // which need the open NaN of two NaN operands in the fuzzer's compare, are left for a later
+    // milestone (VARKA-358); `VarkaMathExactSuite` and the coverage rows hold the node meanwhile.
     val missing = permitted -- seen - "NarrowLane" - "WidenLane" - "NullSafeEqual" -
       "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
       "BoolOutput" - "DecimalColumn" - "DecimalWord" - "NullValue" - "WidenDecimal" - "MathUnary" -

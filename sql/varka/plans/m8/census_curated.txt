@@ -94,7 +94,7 @@ negative|NUM,IVL|same|byte,short,int,bigint,ym,dt,float,double,dec^|semantics|33
 pmod|NUM|same||semantics|30,346,577|integral is semantics (item 33's sign rule; pmod(-1, Int.MinValue) is Int.MaxValue, SPARK-59934); floating by the one-FMA remainder (346); decimal: a remainder by a variable divisor, row 577
 positive|NUM,IVL|same||plumbing|333|rewritten to its child
 pow|double|double|double|done|358|exact: a per-lane StrictMath.pow call, fdlibm's weak branch included; the guard and exact nodes are the opt-in form's (VARKA-358)
-power|double|double||ulp|367,358|alias of pow
+power|double|double|double|done|358|exact: a per-lane StrictMath.pow call, fdlibm's weak branch included; the guard and exact nodes are the opt-in form's (VARKA-358)
 radians|double|double|double|done|342|Math.toRadians is one multiply, bit-exact
 rint|double|double|double|done|344|round half even to an integer, the 2^52 construction
 round|NUM|same|byte,short,int,bigint|semantics|344,346,351,363|HALF_UP; integral and decimal are semantics, double by the tie test over the shortest decimal for scales 0 to 22, a band declined (346); bigint fused at a scale of 0 or more only, a negative scale is 344a3

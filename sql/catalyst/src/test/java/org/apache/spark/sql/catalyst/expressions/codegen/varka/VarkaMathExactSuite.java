@@ -90,9 +90,11 @@ public final class VarkaMathExactSuite {
   private static final int BATCH = 1 << 14;
 
   /**
-   * The sampled inputs a function under a planted fault, about 2^20: the other class's method
-   * differs on thousands of inputs in a million where it differs at all, so a sixteenth of the
-   * differential's draws sees it, and the suite stays inside its watchdog with 19 functions.
+   * The sampled inputs of a two-operand function under the planted other class, about 2^20.
+   * {@code Math.pow} is the host's stub on x86 and leaves {@code StrictMath.pow}'s bits on a large
+   * share of the inputs, so a sixteenth of the draws sees it; its two columns and the call make
+   * its draw the suite's dearest. The one-operand functions keep {@link #SAMPLES}, the
+   * differential's own count, since their classes differ on a few inputs in a thousand.
    */
   private static final int PLANT_SAMPLES = SAMPLES >> 4;
 
@@ -305,9 +307,11 @@ public final class VarkaMathExactSuite {
       // The trigonometric functions' hard reductions.
       case TRIG -> (rnd.nextBoolean() ? 1 : -1)
           * Math.pow(10.0, rnd.nextDouble(Math.log10(0x1p20), 300.0));
-      // The inverse functions' edges near +-1; pow's pairs are drawn by powDraw.
-      case UNIT, PLAIN, POW -> Math.copySign(1.0 - Math.scalb(rnd.nextDouble(), -rnd.nextInt(53)),
+      // The inverse functions' edges near +-1.
+      case UNIT, PLAIN -> Math.copySign(1.0 - Math.scalb(rnd.nextDouble(), -rnd.nextInt(53)),
           rnd.nextBoolean() ? 1.0 : -1.0);
+      // pow's own draw is a pair, powDraw's, which sampledMismatches takes in place of this.
+      case POW -> throw new IllegalArgumentException("pow's own draw is a pair: powDraw");
       // From below exp's subnormal edge, -708.05, and its underflow to zero, to past its
       // overflow at 709.78.
       case EXP -> rnd.nextDouble(-750.0, 712.0);
@@ -521,6 +525,84 @@ public final class VarkaMathExactSuite {
     return failures;
   }
 
+  /**
+   * fdlibm's special pairs of {@code pow}, one or more for each of the nineteen cases of the
+   * table in JDK 25's {@code FdLibm.Pow}, and its fast paths at {@code y = 2} and {@code 0.5}:
+   * the cases the reversed second column of the fixed vectors pairs only by chance.
+   */
+  private static final double[][] POW_SPECIAL = {
+      // 1. anything ** 0 is 1; 2. anything ** 1 is itself.
+      {Double.NaN, 0.0}, {Double.POSITIVE_INFINITY, -0.0}, {-0.0, 0.0}, {-5.0, -0.0},
+      {-2.5, 1.0}, {-0.0, 1.0}, {Double.NEGATIVE_INFINITY, 1.0}, {Double.MIN_VALUE, 1.0},
+      // 3. anything ** NaN is NaN, 1 and -1 included (Java's, not C99's 1); 4. NaN ** y.
+      {2.0, Double.NaN}, {1.0, Double.NaN}, {-1.0, Double.NaN}, {0.0, Double.NaN},
+      {Double.NaN, 2.0}, {Double.NaN, -0.5}, {Double.NaN, Double.POSITIVE_INFINITY},
+      // 5 to 8: |x| > 1 and |x| < 1 against the infinities.
+      {1.5, Double.POSITIVE_INFINITY}, {-1.5, Double.POSITIVE_INFINITY},
+      {Double.MAX_VALUE, Double.POSITIVE_INFINITY}, {1.5, Double.NEGATIVE_INFINITY},
+      {-3.0, Double.NEGATIVE_INFINITY}, {0.5, Double.POSITIVE_INFINITY},
+      {-0.5, Double.POSITIVE_INFINITY}, {Double.MIN_VALUE, Double.POSITIVE_INFINITY},
+      {0.5, Double.NEGATIVE_INFINITY}, {-0.25, Double.NEGATIVE_INFINITY},
+      {Math.nextUp(1.0), Double.POSITIVE_INFINITY}, {Math.nextDown(1.0), Double.NEGATIVE_INFINITY},
+      // 9. +-1 ** +-inf is NaN.
+      {1.0, Double.POSITIVE_INFINITY}, {1.0, Double.NEGATIVE_INFINITY},
+      {-1.0, Double.POSITIVE_INFINITY}, {-1.0, Double.NEGATIVE_INFINITY},
+      // 10 to 14: the zeros, against positive, negative, odd and even integers and the
+      // infinities.
+      {0.0, 3.0}, {0.0, 0.5}, {0.0, Double.POSITIVE_INFINITY}, {0.0, Double.MIN_VALUE},
+      {-0.0, 2.0}, {-0.0, 0.5}, {-0.0, Double.POSITIVE_INFINITY}, {-0.0, 2.5},
+      {0.0, -3.0}, {0.0, -0.5}, {0.0, Double.NEGATIVE_INFINITY}, {-0.0, -2.0}, {-0.0, -0.5},
+      {-0.0, Double.NEGATIVE_INFINITY}, {-0.0, 3.0}, {-0.0, -3.0}, {-0.0, -1.0},
+      // 15 to 17: the infinities as the base.
+      {Double.POSITIVE_INFINITY, 2.0}, {Double.POSITIVE_INFINITY, 0.5},
+      {Double.POSITIVE_INFINITY, Double.MIN_VALUE}, {Double.POSITIVE_INFINITY, -2.0},
+      {Double.POSITIVE_INFINITY, -0.5}, {Double.NEGATIVE_INFINITY, 3.0},
+      {Double.NEGATIVE_INFINITY, 2.0}, {Double.NEGATIVE_INFINITY, -3.0},
+      {Double.NEGATIVE_INFINITY, -2.0}, {Double.NEGATIVE_INFINITY, 0.5},
+      {Double.NEGATIVE_INFINITY, -0.5},
+      // 18. a negative base to an integer: odd, even, past 2^53 (even) and overflowing.
+      {-2.0, 3.0}, {-2.0, 4.0}, {-3.0, -3.0}, {-1.5, 0x1p53}, {-2.0, 1075.0}, {-2.0, -1075.0},
+      {-1.0, 0x1p60}, {-1.0, 0x1p52 + 1},
+      // 19. a negative finite base to a non-integer is NaN.
+      {-2.0, 0.5}, {-2.0, 2.5}, {-0.5, 1.5}, {-Double.MIN_VALUE, 0.5},
+      // The fast paths: y = 2 is x * x, y = 0.5 a square root but at -inf and -0.0.
+      {-3.0, 2.0}, {Double.MAX_VALUE, 2.0}, {2.0, 0.5}, {Double.MIN_VALUE, 0.5},
+      // An integral result that must be exact, and the edges of overflow and underflow.
+      {3.0, 20.0}, {2.0, 1023.0}, {2.0, 1024.0}, {2.0, -1074.0}, {2.0, -1075.0}};
+
+  @Test
+  @DisplayName("pow answers StrictMath.pow's bits on fdlibm's special pairs at two and eight "
+      + "lanes")
+  void powSpecialPairs() {
+    assumeTrue(Lane.emitLanes(VarkaMatrixRuns.BASE, Lane.DOUBLE) != 0, "no baked lane count");
+    Fn pow = FUNCTIONS.stream().filter(f -> f.name().equals("pow")).findFirst().orElseThrow();
+    var failures = new ArrayList<String>();
+    int n = POW_SPECIAL.length;
+    for (int lanes : new int[] {2, 8}) {
+      var loaded = VarkaEmitterFixtures.load(VarkaEmitterFixtures.emit(List.of(pow.root()), 2, 0,
+          VarkaMatrixRuns.BASE.withLanesOverride(lanes)));
+      try (Arena arena = Arena.ofConfined()) {
+        Col[] cols = {
+            VarkaEmitterFixtures.makeLongInput(arena, n, i -> false,
+                i -> Double.doubleToRawLongBits(POW_SPECIAL[i][0]), true),
+            VarkaEmitterFixtures.makeLongInput(arena, n, i -> false,
+                i -> Double.doubleToRawLongBits(POW_SPECIAL[i][1]), true)};
+        Output out = VarkaEmitterFixtures.makeLongOutput(arena, n);
+        run(loaded.kernel(), pow, cols, out, n);
+        for (int i = 0; i < n; i++) {
+          String why = mismatch(pow, POW_SPECIAL[i][0], POW_SPECIAL[i][1], validAt(out, i),
+              out.data().get(ValueLayout.JAVA_LONG, i * 8L));
+          if (why != null) {
+            failures.add(lanes + " lanes: " + why);
+          }
+        }
+      } finally {
+        loaded.loader().release();
+      }
+    }
+    assertEquals(List.of(), failures);
+  }
+
   // -------------------------------------------------------------------------------------------
   // The planted faults
   // -------------------------------------------------------------------------------------------
@@ -545,7 +627,8 @@ public final class VarkaMathExactSuite {
     VarkaEmitOptions planted =
         VarkaMatrixRuns.BASE.withFloatingFault(VarkaEmitOptions.FloatingFault.MATH_OTHER_CLASS);
     for (Fn f : FUNCTIONS) {
-      long n = sampledMismatches(f, planted, PLANT_SAMPLES, new ArrayList<>());
+      int samples = f.root() instanceof MathBinary ? PLANT_SAMPLES : SAMPLES;
+      long n = sampledMismatches(f, planted, samples, new ArrayList<>());
       assertTrue(f.classesDiffer() ? n > 0 : n == 0, f.name() + " under the planted call: " + n
           + " mismatches");
     }

@@ -572,12 +572,16 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
       java.util.List.of[VarkaVectorIR](new Fma(fd, fd, new ColumnRef(1, LaneType.DOUBLE))), 2, 0,
       null, null, VarkaMatrix.base)
     assert(VarkaEmitterTestSupport.verify(fmaBytes).isEmpty, "Fma at DOUBLE verifies")
-    // A two-operand call unrolls over a baked lane count, so it is emitted at eight lanes.
+    // A two-operand call unrolls over a baked lane count, so it is emitted at eight lanes; under
+    // an option that bakes none (validityByWidth=false) the plan refuses the call, as
+    // `VarkaMathExactSuite`'s emitting tests assume, and only the emission is passed over.
     val pow = new MathBinary(MathFn.POW, fd, new ColumnRef(1, LaneType.DOUBLE))
-    val powBytes = VarkaLoopEmitter.emit("VarkaReachMathBinaryDOUBLE",
-      java.util.List.of[VarkaVectorIR](pow), 2, 0, null, null,
-      VarkaMatrix.base.withLanesOverride(8))
-    assert(VarkaEmitterTestSupport.verify(powBytes).isEmpty, "MathBinary at DOUBLE verifies")
+    val powOptions = VarkaMatrix.base.withLanesOverride(8)
+    if (Lane.emitLanes(powOptions, Lane.DOUBLE) != 0) {
+      val powBytes = VarkaLoopEmitter.emit("VarkaReachMathBinaryDOUBLE",
+        java.util.List.of[VarkaVectorIR](pow), 2, 0, null, null, powOptions)
+      assert(VarkaEmitterTestSupport.verify(powBytes).isEmpty, "MathBinary at DOUBLE verifies")
+    }
     // The floating records, which the loop cannot build at an integral lane: their validity's
     // and overflow check's shapes at DOUBLE (VARKA-489).
     Seq[VarkaVectorIR](sqrt, new Fma(fd, fd, new ColumnRef(1, LaneType.DOUBLE)), pow,
