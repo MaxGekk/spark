@@ -300,6 +300,44 @@ Row 103a2 adds `dt * 1.5`, `dt / 1.5` and `dt / k`. On a two-lane host they fuse
 decision 8a leaves them, and join this measurement. `VarkaDayTimeIntervalBaselineBenchmark` times
 `dt * 1.5` and `dt / 24`; `dt / 1.5` needs a new section there.
 
+### 9.5 The day-time baseline at 256 bits after 612a (28 November 2026)
+
+612a merged as #1663 on 24 November 2026. The class's 256-bit runner file,
+`VarkaDayTimeIntervalBaselineBenchmark-jdk25-runner-epyc7763-results.txt`, and its provenance are
+replaced from `benchmark.yml` run 46055735411 of vecbricks/varka (no `MaxVectorSize`), on an AMD
+EPYC 7763 by its provenance. It was dispatched with `pr=1791` while master was `a5c8d1f0972`, so
+it measured `refs/pull/1791/head`, `3a7891ad404`: `a5c8d1f0972` plus two plan-only commits. That
+code holds 612a, row 613's decline (#1619) and row 103a2 (#1644). The replaced file is run
+44485236913 at `e5d70012bdc`, before all three.
+
+Prediction 2 of 6.1, that 612a moves no 256-bit number by more than the noise: **held, as far as
+one run against one run can say.** No section changed class at 256 bits: the three checked arms
+fuse whole in both files. By rate (`dev/varka_bench_diff.py --git HEAD`), every row-path arm moved
+by 6% or less. The varka on arms of the three checked sections moved both ways. Without nulls,
+`dt + dt2 - dt` went from 73.8 to 78.0 M rows/s, `abs(dt)` from 93.8 to 94.7 and `dt * 3` from
+117.3 to 101.7. With one row in ten null they went from 120.7 to 129.8, 120.2 to 135.7 and 133.4
+to 141.7. The class has no band, so these moves are read against a pair's flat 10%. Two rows
+cross it, by -13.3% and +12.9%, in opposite directions. One row of a pair has been seen to move
+14% on noise alone (`skills/benchmarking.md`, "Start here", point 5). Against the row path the
+three arms read 4.0X, 4.1X and 3.8X without nulls and 6.8X, 5.8X and 5.4X with nulls. Twelve days
+of master separate the two runs, so this pair of files could not single out 612a even if a move
+were real. Only a pair run could.
+
+`dt * 1.5` and `dt / 24` now fuse at 256 bits (row 103a2), at 6.4X and 3.7X without nulls. At two
+lanes they fuse unmeasured (9.4).
+
+**Owed, the 128-bit half.** Runs 46137362031 and 46137364599 of vecbricks/varka time this class
+and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVectorSize=16`, both dispatched on
+master `fb7d8261711` on 28 November 2026 and still running when this was written. When they land:
+
+* The day-time file scores prediction 1 and step 3's done-when: the three checked arms at 1.0X
+  within 20%. The done-when compares by the minimums of two runs. The committed 128-bit file times
+  the arms fused, before 612a, so it cannot be the second run, and a second 128-bit run is owed.
+* The NTZ fields file holds the first fused 128-bit numbers of two checks that decision 8a leaves
+  fusing: `make_timestamp_ntz(d, tm)` and `CAST(tm AS TIMESTAMP_NTZ)`, the `FAIL` add of the
+  midnight and the time (9.2). If either is slower than the row path, that family joins
+  `twoLaneMeasured` in its own change, as 9.4 says.
+
 ## Decisions taken while the owner was away (20 November 2026)
 
 1. **Question 10.1: the tree check.** Taken as recommended (3.1), because the brief has the plan's
