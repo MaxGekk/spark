@@ -371,6 +371,18 @@ time this class and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVector
 were dispatched on master `fb7d8261711` on 28 November 2026 and were still running when this was
 written. The done-when then waits on question 10.3.
 
+### 9.7 The day-time baseline at 128 bits (28 November 2026)
+
+The class's 128-bit runner file is now run 46141665054 of vecbricks/varka, at master
+`1ad2c5c5bd0`, on an AMD EPYC 7763 at `-XX:MaxVectorSize=16`. It is the redispatch of 46137362031,
+which failed the CPU check; `VARKA-612.md` 9.6 has the details.
+
+The 128-bit prediction of 9.6, the varka on arm within 10% of 94.4 and 93.7 ns a row and so 0.5X
+to 0.6X: **right**. It reads 91.3 and 92.5 ns a row, 3.3% and 1.3% under the committed numbers. By
+best time the blend reads 0.53x without nulls (97 / 183 ms) and 0.55x with one row in ten null
+(102 / 185 ms). So prediction 5 of 6.1 is **wrong at 128 bits too**, for 9.6's reason. Step 4's
+done-when is not met at either width, and the row waits on question 10.3.
+
 ## Decisions taken while the owner was away (20 November 2026)
 
 1. **Where the reason lives.** A declined projection has no Varka node, so no fusion report can
