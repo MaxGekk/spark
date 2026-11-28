@@ -2250,3 +2250,26 @@ requests"). No `TODO`; a comment describes the code as it is.
    `varka-360a-r2` is dead. Its part A5 "needs 481's `NULL` mode": merged, `GuardedRange` has
    the mode on master.
 
+## 15. Found while building 360b1, for the later parts (28 November 2026)
+
+360b1 is built on `varka-360b1-widemul`, pull request #1829, open when this was written. Two
+things its build found that a later part's sheet does not say:
+
+1. **Name a new node by its short class name in two registries.** Rule R1 of
+   `dev/varka_push_check.py` finds a node's entry in `VarkaSmtNodes.java` only as
+   `entry(<Name>.class` or a `case <Name>` arm, and in `VarkaRangeAnalysisSuite.scala` only as an
+   arm `x: <Name>` of `admissible`. A qualified name, `VarkaVectorIR.WideMul`, compiles but is
+   not found, so R1 reports the registry as missing the node. 360b1's first dry run did that for
+   both files, and they now write `WideMul` and `WordConst` unqualified. A later part that adds
+   a node (360e's `WordCarry`, if that part exists, or any node a later row adds) writes the
+   short name in both files the same way.
+2. **Two sites in `VarkaLoopEmitter` still copy the outputs without lowering them.** Step 4 of
+   360b1's sheet replaces `List.copyOf(outputs)` by `lowered(outputs, options)` at 10 of 11
+   sites. On the branch nine are replaced and two keep `List.copyOf`. One is
+   `readsCheckIntOverflowForTest`, as the sheet says. The other is the private `emit`'s own
+   copy, which then lowers through `VarkaDecimalLowering.lowerAll` after its options check, so
+   that a lowering may read the options. `fitsBudgets` lowers without a copy. For a later part:
+   `readsCheckIntOverflowForTest` reads the composite node, not its network. So a test that
+   asks it about a tree holding a `WideMul`, or a later composite with a check inside its
+   lowering, gets the answer for the unlowered tree. Lower the tree first in the test, or
+   change that site in the part's own pull request and name it there.

@@ -387,6 +387,10 @@ Left for the row: the decline at two lanes of `dt / k` (and `dt / 1.5`, whose se
 owes) and of the `make_timestamp_ntz` add, each in its own change; then a second 128-bit run for
 step 3's minimums.
 
+*Filed on 28 November 2026:* the two declines are row 710's, with the section `dt / 1.5` that
+9.4 owes. This row keeps the second 128-bit run, and its done-when waits on row 710.
+
+## Decisions taken while the owner was away (20 November 2026)
 
 1. **Question 10.1: the tree check.** Taken as recommended (3.1), because the brief has the plan's
    recommendation decide and the per-arm form would leave the `TIME`, `TIMESTAMP_NTZ` and decimal

@@ -696,7 +696,7 @@ band column; the measurement.
 | part | what | counted lines | builder | starts from | waits on |
 |---|---|---|---|---|---|
 | 346b1a | the node `RoundToScale`, its `props()`, its lowering, `ROUNDING_BAND` at bit 8 and the runner's bits moved, the registry fixtures, the node's suite built by hand; no compiler arm | about 850 (11.4 has the size stop rule) | Sonnet-class once **the lead's registry run** on it has passed (11.4, 346b1a's sheet) | `0345dd29a53`, re-ported onto `props()` | the lead's registry run |
-| 346b1b | the compiler arm of `round`, `bround`, `truncate` over a `DOUBLE`, the coverage family, the benchmark flags, the session tests | about 180 and the regenerated rows | Sonnet-class, on 346b1a's condition | the compiler and test hunks of `0345dd29a53` | 346b1a |
+| 346b1b | the compiler arm of `round`, `bround`, `truncate` over a `DOUBLE`, the coverage family, the benchmark flags, the session tests | about 160 and the regenerated rows (11.4, its step 7) | Sonnet-class, on 346b1a's condition | the compiler and test hunks of `0345dd29a53` | 346b1a |
 | 346b2 | the probes, the binary16 twin, the binary32 twin, the binary64 sampling | about 600 (350 and 243 on the branch) | Sonnet-class | `e6e639c4056` and `299c082ccbc`, cherry-picked | 346b1b |
 | 346a | the floating remainder and `pmod` over `DOUBLE` and `FLOAT`: the node, `REMAINDER_BAND` | about 930 (968 on the branch); split off the query suite if it passes the cap | Sonnet-class, with 346b1a's merged pull request as its worked example (and 346b1b's, if merged) | `bb377a93cbf`, re-ported | 346b1a |
 | 346c | the cast of `DOUBLE` and `FLOAT` into a decimal of 18 digits or fewer | about 820 (858 on the branch) | Sonnet-class | `9ca2d818541` and `1a7e5cd2ca6`, re-ported | 346b1a, and row 350's part 350a1b |
@@ -1121,9 +1121,9 @@ compiler and test hunks of `0345dd29a53`. This part admits the node 346b1a built
    only: prediction 1 of section 4) and `census.tsv` if its reason text moved.
 6. `python3 dev/varka_census.py --check`: exit 0.
 7. `python3 dev/varka_msg_check.py size --base master --head HEAD`: under the cap, expected
-   near 180 and the regenerated rows (the compiler arm 53, the Catalyst step 5, the compiler
+   near 160 and the regenerated rows (the compiler arm 53, the Catalyst step 5, the compiler
    suite 25, the coverage hunks 24, the benchmark 13, the suite's restored `Case.of` about 20,
-   the comment 7, the record 12).
+   the comment 7, the record 12; first written as 180, which these items do not add up to).
 8. `dev/varka_ops/pre-pr-slot.sh <w>`: `pre-pr: passed on <sha>`.
 
 **Size stop rule.** If step 7 prints 600 or more, something outside this sheet is in the
