@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, DateAdd, EqualTo, GreaterThan, IsNotNull, LessThan, Literal, Pow, Rand}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Atan2, Attribute, AttributeReference, DateAdd, EqualTo, GreaterThan, IsNotNull, LessThan, Literal, Rand}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAdmission, VarkaEmitOptions,
   VarkaFallbackEvent, VarkaJfrTestSupport, VarkaKernelPlan}
@@ -52,14 +52,15 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
    * conjuncts use these: VARKA-122 made a bare int column compare in the kernel, so `i > 5`
    * stopped being an example of something that cannot fuse, and VARKA-329 retired the
    * smallint's `sh > 5S` the same way, and a double comparison fuses beside a date one by
-   * the lane crossing (VARKA-343); `pow` is in no family, so `residual` is the split's example.
+   * the lane crossing (VARKA-343), and `pow` by its two-operand call (VARKA-358); `atan2` has
+   * no kernel, so `residual` is the split's example.
    */
   private val doubleAttr = AttributeReference("f", DoubleType)()
   private val withDouble: Seq[Attribute] = Seq(attrD, intAttr, doubleAttr)
   private val doubleResidual = GreaterThan(doubleAttr, Literal(5.0d))
-  private val residual = GreaterThan(Pow(doubleAttr, Literal(2.0d)), Literal(5.0d))
+  private val residual = GreaterThan(Atan2(doubleAttr, Literal(2.0d)), Literal(0.5d))
   /**
-   * `withDouble` with no column nullable, for the split tests: `pow` is off the order rule's
+   * `withDouble` with no column nullable, for the split tests: `atan2` is off the order rule's
    * error-free list, so `d < ...` ahead of it would be demoted where `d` can be NULL, since Spark
    * goes on past a NULL conjunct to one that can raise (VARKA-386).
    */
@@ -488,7 +489,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     val eligible = FilterExec(dLess10, child)
     val mixed = FilterExec(And(dLess10, residual), child)
     // A double comparison alone fuses on the DOUBLE lane, and so does double arithmetic since
-    // VARKA-342; `pow` is in no family, so a filter over it is left to Spark.
+    // VARKA-342; `atan2` has no kernel, so a filter over it is left to Spark.
     val ineligible = FilterExec(residual, child)
     assert(VarkaExpressionCompiler.compilePredicate(ineligible.condition, withDouble,
       VarkaEmitOptions.DEFAULTS, VarkaAdmission.NO_HOST_REFUSAL).isEmpty)
@@ -497,7 +498,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       assert(VarkaColumnarRule.preColumnarTransitions(eligible) ===
         VarkaFilterExec(dLess10, child))
-      // The mixed predicate splits: the fused conjunct in the Varka node, the pow conjunct
+      // The mixed predicate splits: the fused conjunct in the Varka node, the atan2 conjunct
       // in a row FilterExec above it - which then sees only the surviving rows. The Varka
       // node keeps the whole condition for the batches its kernel cannot serve.
       assert(VarkaColumnarRule.preColumnarTransitions(mixed) ===
