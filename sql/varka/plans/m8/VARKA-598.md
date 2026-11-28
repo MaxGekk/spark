@@ -205,3 +205,19 @@ Left: the day-time baseline's 128-bit companion. Its committed file is from run 
 November 2026 at `a376a8215be`, the head of #1534, which holds this change; section 10 still named
 both companions as owed on 19 November 2026. Whether that file closes the row or a run on master is
 wanted is the owner's decision.
+
+## 12. The day-time baseline at 256 bits again (28 November 2026)
+
+The day-time class's 256-bit runner file is replaced again, from `benchmark.yml` run 46055735411
+of vecbricks/varka, on an AMD EPYC 7763. It measured `refs/pull/1791/head`, `3a7891ad404`, which
+is master `a5c8d1f0972` plus two plan-only commits (`VARKA-612.md` 9.5). Its filter sections still
+tie. `filter extract(HOUR FROM dt) >= 12` reads 67 / 67 ms by best time without nulls (1.00x) and
+67 / 65 ms with one row in ten null (1.03x). By average time it reads 71 / 74 ms (0.96x) and
+68 / 66 ms (1.03x). The fused control `filter dt > dt2` reads 1.6X and 1.7X. No filter section
+runs more than 10% slower than the row path.
+
+Left: the day-time 128-bit companion. A run on master was dispatched on 28 November 2026, at
+`fb7d8261711`: one of runs 46137362031 and 46137364599 of vecbricks/varka, which time this class
+and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVectorSize=16`. Both were still running
+when this was written. Its day-time file replaces the one from run 43582853857. Once its two
+`filter extract(HOUR FROM dt) >= 12` sections are read, the row's last item is scored.
