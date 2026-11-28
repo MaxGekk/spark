@@ -1,0 +1,91 @@
+# The width audit's probe times on GitHub runners, before and after VARKA-695 step 1, for step 2's choice
+#
+# Read on 28 November 2026 from the GitHub Actions logs and artifacts named below, with
+# `gh run view --job <id> --log` and `gh run download`, grepped for the suite's
+# `VARKA-AUDIT-PROBE ... took N s on 4 processors` and `... skipped:` lines (#1774). Every runner
+# has four processors. A probe is one child JVM of VarkaWidthAuditSuite; the suite runs them one
+# after another on a runner (`parallelProbes` is 1 under CI). Single readings, not benchmarks.
+# "regen" is VARKA_AUDIT_REGEN=true, which the "Varka width audit" workflow sets; "check" is a
+# Build's run, which skips the preferred-again probe after step 1.
+
+## 1. After step 1 (#1839, head 9ce244f84b7)
+
+# 1a. Build 46154115377 (MaxGekk/spark), job 141007757944 "Varka suites: catalyst 1 of 3",
+#     CPU "Intel(R) Xeon(R) 6975P-C, 4 cores", check mode.
+#
+#   VarkaWidthAuditSuite in the JUnit report (artifact varka-scoped-junit-catalyst-1of3,
+#   runs/defaults/catalyst-20): 8 tests, suite time 1055.104 s, the test bodies 6.965 s of it.
+#   The per-probe lines are in neither the job's log nor the artifact: the scoped runner writes a
+#   unit's stdout to target/varka-scoped/runs/defaults/<unit>/run.log, which the job does not
+#   print or upload, and the JUnit XML's system-out is empty. So this Build's probe times cannot
+#   be read. On an AVX-512 host step 1 leaves three probes (preferred 512, forced 256, forced 128).
+#   The job started 14:41:07 and its first suite JVM after 14:44:29, about 200 s of setup.
+
+# 1b. "Varka width audit" run 46154115029 on the same head, job 141006875234 "Width audit on
+#     x86_64", CPU "AMD EPYC 9V74 80-Core Processor", MaxVectorSize 64, UseAVX 3, regen mode.
+#
+#   probe                         seconds
+#   preferred (512 bits)          330
+#   forced 16 bytes (128 bits)    479
+#   forced 32 bytes (256 bits)    363
+#   forced 64 bytes (512 bits)    skipped: the host's cap, the preferred probe's census
+#   preferred again               324
+#   sum                           1496      sbt total 1743 s; ScalaTest "Run completed in 25 minutes, 7 seconds"
+#
+#   The same probes in check mode would be 330 + 479 + 363 = 1172 s.
+
+# 1c. The same run, job 141006875267 "Width audit on aarch64", CPU part 0xd49 (Neoverse N2),
+#     MaxVectorSize 16, regen mode. The step pipes sbt through `tail -60`, and the probe lines were
+#     above those 60 lines, so they are lost. Every request caps to 16 bytes there, so two probes
+#     ran (preferred, preferred again), both at 128 bits: "Run completed in 14 minutes, 17
+#     seconds", 857 s, about 428 s a probe. sbt total 1128 s. One test failed, as on every aarch64
+#     run since #1672 below; the workflow continues past the suite by design.
+
+## 2. Before step 1: five probes, regen mode unless said
+
+#   run (repo)                     job           CPU (MaxVectorSize, UseAVX)        pref  again  16 B  32 B  64 B
+#   45988077035 (MaxGekk), Build   140536104975  AMD EPYC 9V45 (64, 3), check       247   240    350   257   237
+#   45984299580 (MaxGekk)          140455847380  AMD EPYC 9V45 (64, 3)              238   245    344   254   224
+#   46024593085 (vecbricks master) 140592594826  AMD EPYC 9V45 (64, 3)              246   248    356   266   242
+#   45988076736 (MaxGekk)          140468670516  AMD EPYC 7763 (32, 2)              450   456    631   448   460
+#
+#   Master's Build 46146333651 (vecbricks), job 140984595679 "Varka suites: catalyst 1 of 3", CPU
+#   "AMD EPYC 9V74 80-Core Processor, 4 cores", check mode: VarkaWidthAuditSuite 1828.393 s in
+#   the JUnit report (artifact varka-scoped-junit-catalyst-1of3, runs/defaults/catalyst-20), all five
+#   probes (before step 1 none was skipped), its probe lines absent from the job's log as in 1a.
+#
+#   45988077035 is #1774's Build, the run row 695's admission check quotes. Its runner was an
+#   EPYC 9V45, whose preferred width is 512 bits, not 256: the probes that repeated the preferred
+#   one there were the preferred-again and the 64-byte one. The only AVX2 reading is 45988076736,
+#   where the 32- and 64-byte probes repeat the preferred one; there step 1 leaves the preferred
+#   probe (450) and the 128-bit one (631). Probe by probe it took 1.7 to 1.9 times as long as
+#   the EPYC 9V45 of 46024593085 (450/246, 456/248, 631/356, 448/266, 460/242).
+
+## 3. What the epilogue phase costs, read from the aarch64 runner across #1672
+
+# #1672 (b3ebb667459, 26 November 2026) added the second phase (VARKA-550). The aarch64 job runs
+# all five probes at 128 bits, so its "Run completed" time over five probes and the census's shape
+# count give a time per shape and probe. Shape counts are the widths' entries in
+# sql/varka/width_audit.json at each head.
+#
+#   run (vecbricks master)  head          phases  shapes  run completed        s per shape and probe
+#   45678631172             ac64e684105   one     843     21 min 42 s, 1302 s  0.3089
+#   45702606203             176db41f369   one     850     22 min 27 s, 1347 s  0.3169
+#   45876461627             b3ebb667459   two     886     34 min 13 s, 2053 s  0.4634
+#   46024593085             4bcbc50cd58   two     886     34 min 13 s, 2053 s  0.4634
+#
+# The second phase makes a 128-bit probe 1.46 to 1.50 times as long per shape, so it is about a
+# third of such a probe (0.32 to 0.33). Derived, not measured: the 36 shapes added between the
+# heads may not cost the average, and no x86 runner has a like-for-like pair.
+
+## 4. What the epilogue phase added to the census (laptop, #1672)
+
+# sql/varka/width_audit.json at b3ebb667459 against its parent, per width: verdict lines added by
+# the second phase, none removed.
+#
+#   width  shapes  shapes moved  lines added  shapes with no refusal before and one after
+#   128    886     295           1732         65
+#   256    886     0             0            0
+#   512    886     0             0            0
+#
+# On origin/master fcd56d9fbee the 128-bit column has 295 shapes with a refusal and 214 declines.
