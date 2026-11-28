@@ -76,8 +76,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
    * `-Dvarka.widthAudit.childTimeoutSeconds`. The slowest probe the runners' JUnit reports show
    * took 252 s (`plans/m8/results/VARKA-581-probe-times.txt`) in a job of its own. Inside Spark's
    * `catalyst/test`, with many test JVMs on one runner, a probe at 128 bits passed 600 s and was
-   * destroyed (vecbricks/varka#1773), so the budget is twice that. `beforeAll` runs five probes
-   * one after another, so it takes at most five budgets.
+   * destroyed (vecbricks/varka#1773), so the budget is twice that. `beforeAll` runs at most five
+   * probes one after another, so it takes at most five budgets.
    */
   private val childTimeoutSeconds: Long = {
     val key = "varka.widthAudit.childTimeoutSeconds"
@@ -210,7 +210,10 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   private val preferredProbe = Probe("the audit probe at the host's preferred width", None)
 
-  /** A second probe at the host's preferred width, for the test that two runs agree. */
+  /**
+   * A second probe at the host's preferred width, for the test that two runs agree. That test
+   * guards the census a regeneration writes, so the probe runs only in one (VARKA-695).
+   */
   private val preferredAgainProbe =
     Probe("the second audit probe at the host's preferred width", None)
 
@@ -219,6 +222,79 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
     bytes -> Probe(s"the audit probe asked for -XX:MaxVectorSize=$bytes (${bytes * 8} bits)",
       Some(bytes))
   }.toMap
+
+  /** Whether this run writes the census rather than checks it: `VARKA_AUDIT_REGEN=true`. */
+  private val regenerating: Boolean = sys.env.get("VARKA_AUDIT_REGEN").contains("true")
+
+  /**
+   * The `-XX:MaxVectorSize` a JVM asked for `probe`'s width ends up with, in bytes, read from a
+   * `-XX:+PrintFlagsFinal -version` run of this suite's own `java`, which takes well under a
+   * second. A host caps a request it cannot run - an AVX2 host asked for 64 bytes runs 32 - and
+   * the JVM with no request runs the most the host can. So on a 256-bit runner the preferred
+   * probe and the ones asked for 32 and 64 bytes would be one JVM run three times, about 250 s
+   * each on four cores (VARKA-695). The width flag is the only one a forced probe sets, and on
+   * the laptop the whole flag dump of a JVM asked for 64 bytes matched the default JVM's but for
+   * the randomised `SharedBaseAddress`, so equal answers mean the same probe. `None`, and the
+   * probe runs, when the answer cannot be read.
+   */
+  private def finalMaxVectorSize(probe: Probe): Option[Int] = {
+    val command = new java.util.ArrayList[String]()
+    command.add(new File(new File(System.getProperty("java.home"), "bin"), "java").getPath)
+    probe.maxVectorSizeBytes.foreach(b => command.add(s"-XX:MaxVectorSize=$b"))
+    command.add("-XX:+PrintFlagsFinal")
+    command.add("-version")
+    var bytes: Option[Int] = None
+    val read = Try(VarkaChildProcess.run(s"the flag query for ${probe.name}",
+      new ProcessBuilder(command), 60, { line =>
+        val words = line.trim.split("\\s+")
+        // `intx MaxVectorSize = 32 {C2 product} {default}`
+        if (words.length >= 4 && words(1) == "MaxVectorSize" && words(2) == "=") {
+          bytes = words(3).toIntOption
+        }
+      }).requireSuccess(true))
+    read.failed.foreach(e => logWarning(s"the flag query for ${probe.name} failed, so it runs", e))
+    bytes.filter(_ => read.isSuccess)
+  }
+
+  /** A line in the suite's log and on stdout, which a CI unit's run.log keeps. */
+  private def report(line: String): Unit = {
+    logInfo(line)
+    // scalastyle:off println
+    println(s"VARKA-AUDIT-PROBE $line")
+    // scalastyle:on println
+  }
+
+  /**
+   * Which probes run, and for each probe that does not, the probe whose census stands for it.
+   * The preferred probe comes first, then the forced ones from the narrowest; one whose JVM would
+   * end at a `MaxVectorSize` an earlier probe runs is that probe's census again and is skipped,
+   * so the census still has every width's refusals and the tests reading a forced probe read the
+   * same answers. The preferred-again probe runs only when the census is regenerated.
+   */
+  private def probePlan(): (Seq[Probe], Map[Probe, Probe]) = {
+    val firstAt = mutable.LinkedHashMap.empty[Int, Probe]
+    val toRun = Seq.newBuilder[Probe]
+    val standIns = Map.newBuilder[Probe, Probe]
+    (preferredProbe +: widthsBytes.map(forcedProbes)).foreach { probe =>
+      finalMaxVectorSize(probe) match {
+        case Some(bytes) if firstAt.contains(bytes) =>
+          val ranAs = firstAt(bytes)
+          standIns += probe -> ranAs
+          report(s"${probe.name} skipped: its JVM would run at -XX:MaxVectorSize=$bytes, " +
+            s"the host's cap, as ${ranAs.name} does, so that probe's census stands for it")
+        case found =>
+          found.foreach(firstAt(_) = probe)
+          toRun += probe
+      }
+    }
+    if (regenerating) {
+      toRun += preferredAgainProbe
+    } else {
+      report(s"${preferredAgainProbe.name} skipped: it serves only the test that two censuses " +
+        "of one width agree, which runs when the census is regenerated (VARKA_AUDIT_REGEN=true)")
+    }
+    (toRun.result(), standIns.result())
+  }
 
   /** Each probe's census or its failure; filled by `beforeAll`. */
   @volatile private var results: Map[Probe, Try[Census]] = Map.empty
@@ -245,15 +321,15 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   /**
-   * Runs the five probes, `parallelProbes` at a time, before any test, so no test body waits on
-   * a child JVM: `beforeAll` is under neither `VarkaTestWatchdog`'s cap nor `spark.test.timeout`,
-   * which both wrap a test body, and `childTimeoutSeconds` bounds each probe. A probe that fails
-   * is kept as its failure, so each test that reads it fails naming it, and the tests that read
-   * none still run.
+   * Runs the probes `probePlan` keeps, `parallelProbes` at a time, before any test, so no test
+   * body waits on a child JVM: `beforeAll` is under neither `VarkaTestWatchdog`'s cap nor
+   * `spark.test.timeout`, which both wrap a test body, and `childTimeoutSeconds` bounds each
+   * probe. A probe that fails is kept as its failure, so each test that reads it fails naming it,
+   * and the tests that read none still run. A skipped probe is given its stand-in's result.
    */
   override def beforeAll(): Unit = {
     super.beforeAll()
-    val probes = Seq(preferredProbe, preferredAgainProbe) ++ widthsBytes.map(forcedProbes)
+    val (probes, standIns) = probePlan()
     val pool = java.util.concurrent.Executors.newFixedThreadPool(parallelProbes)
     try {
       val running = probes.map { probe =>
@@ -262,25 +338,23 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
             val begun = System.nanoTime()
             val result = Try(audit(probe))
             val seconds = (System.nanoTime() - begun) / 1000000000L
-            logInfo(s"${probe.name} took $seconds s")
-            // Also on stdout, which a unit's run.log keeps and the unit tests' log does not, so
+            // On stdout too, which a unit's run.log keeps and the unit tests' log does not, so
             // that the next probe to pass its budget can be read against the others.
-            // scalastyle:off println
-            println(s"VARKA-AUDIT-PROBE ${probe.name} took $seconds s on " +
+            report(s"${probe.name} took $seconds s on " +
               s"${Runtime.getRuntime.availableProcessors()} processors")
-            // scalastyle:on println
             probe -> result
           }
         })
       }
       // Every probe is waited for, and a probe whose task died of a fatal error is kept as its
       // failure like any other, so that no sibling's child JVM is left running behind a throw.
-      results = running.map { case (probe, task) =>
+      val ran = running.map { case (probe, task) =>
         try task.get()
         catch {
           case e: java.util.concurrent.ExecutionException => probe -> Failure(e.getCause)
         }
       }.toMap
+      results = ran ++ standIns.map { case (skipped, ranAs) => skipped -> ran(ranAs) }
     } finally {
       pool.shutdownNow()
       pool.awaitTermination(1, java.util.concurrent.TimeUnit.MINUTES)
@@ -591,6 +665,10 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
     // every run, where the other two kinds are timing and may not. A second probe at the
     // preferred width has to give the same verdict lines per shape as the first; the raw
     // line sets are allowed to differ, which is exactly why the file does not carry them.
+    if (!regenerating) {
+      cancel("the second probe at the preferred width runs only when the census is " +
+        "regenerated (VARKA_AUDIT_REGEN=true), since only a regeneration writes what this guards")
+    }
     val again = census(preferredAgainProbe)
     assert(again.preferredBits === atPreferred.preferredBits)
     assert(verdicts(again) === verdicts(atPreferred),
@@ -600,7 +678,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   test("sql/varka/width_audit.json is this host's census, per width") {
     val path = getWorkspaceFilePath("sql", "varka", "width_audit.json")
-    if (sys.env.get("VARKA_AUDIT_REGEN").contains("true")) {
+    if (regenerating) {
       Files.write(path, render().getBytes(StandardCharsets.UTF_8))
       logInfo(s"regenerated $path")
     } else {
