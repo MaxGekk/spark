@@ -1,0 +1,32 @@
+Row 695: the Varka suites' CI weights refreshed, 28 November 2026.
+
+Command: dev/varka_suite_shards.py --update-weights sql/varka/ci/suite-times.tsv with the JUnit
+reports (artifacts varka-scoped-junit-*) of master's runs 46146333651 (8bc2e89811b),
+46137824097 (1ad2c5c5bd0) and 46132523633 (dbaa94ff4); each suite takes the mean of the runs
+it is in. The weights replaced are those of 29 October 2026 (#1119).
+
+Split of each module's suites over its three jobs, as dev/varka_suite_shards.py --job places
+them, over the suites of run 46146333651; each job's load is the sum of its suites' new
+weights in minutes (a job runs two JVMs at once, so its wall time is lower).
+
+module    weights   suites  job 1          job 2          job 3
+catalyst  old          145   45  36.2 min   55  25.9 min   45  27.3 min
+catalyst  new          145   29  29.8 min   64  29.8 min   52  29.8 min
+sql       old           89   28  17.0 min   31  24.8 min   30  13.6 min
+sql       new           89   26  18.5 min   32  18.5 min   31  18.5 min
+
+The ten largest changes of weight, in seconds:
+
+suite                                         old      new
+VarkaWidthAuditSuite                        473.9   1689.0
+VarkaCoverageHarnessSuite                   249.6    821.1
+VarkaMathExactSuite                             -    325.3
+VarkaSparkFuzzSuite                         250.0    505.4
+VarkaHarnessParitySuite                       5.3    202.1
+VarkaEmittedBytesSuite                      444.8    639.0
+VarkaWarmupReachSuite                        43.9    211.2
+VarkaIrFuzzSuite                            298.4    433.7
+VarkaCoverageDifferentialSuite               43.5    147.1
+VarkaEmitterNarrowArithSuite                 52.4    152.1
+
+Suites in the file: 155 before, 234 after; none removed.
