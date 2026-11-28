@@ -8246,6 +8246,19 @@
     "verified" : "differential",
     "math_form" : "exact: per-lane StrictMath call"
   }, {
+    "sql" : "IF(x2 IS NULL, 0.0D, pow(x, x2))",
+    "executable" : "IF(x2 IS NULL, 0.0D, pow(x, x2))",
+    "family" : "Math functions",
+    "form" : "projection",
+    "catalyst" : [ "If", "IsNull", "Pow" ],
+    "casts" : [ ],
+    "operands" : [ "If:double", "IsNull:double", "Pow:double" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled", "spark.sql.codegen.varka.family.math.enabled" ],
+    "domain" : "",
+    "note" : "a choice over the call, which reads the call's validity, both operands' AND, inside the kernel",
+    "verified" : "differential",
+    "math_form" : "exact: per-lane StrictMath call"
+  }, {
     "sql" : "sin(x) < 0.5D",
     "executable" : "sin(x) < 0.5D",
     "family" : "Math functions as conditions",

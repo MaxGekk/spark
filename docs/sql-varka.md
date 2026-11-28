@@ -290,7 +290,7 @@ An entry is a function or operator of the census; a type counts *fused* for it o
 | `IntegerType` (`int`) | INT | 92 | 68 | 2 | plumbing 4, semantics 18 | 0 | 139 |
 | `LongType` (`bigint`) | LONG | 87 | 62 | 2 | plumbing 5, semantics 18 | 0 | 97 |
 | `FloatType` (`float`) | FLOAT | 68 | 38 | 2 | plumbing 5, semantics 23 | 0 | 66 |
-| `DoubleType` (`double`) | DOUBLE | 104 | 65 | 2 | plumbing 4, semantics 24, ulp 9 | 0 | 98 |
+| `DoubleType` (`double`) | DOUBLE | 104 | 65 | 2 | plumbing 4, semantics 24, ulp 9 | 0 | 99 |
 | `DecimalType` (`dec`) | LONG, words per value: 1 to precision 18, 2 to precision 38 | 68 | 4 | 32 | plumbing 3, semantics 29 | 3 | 113: 81 to precision 18, 32 at precision 19 to 38 |
 | `DateType` (`date`) | INT | 63 | 51 | 1 | plumbing 1, semantics 10 | 0 | 109 |
 | `TimestampNTZType` (`ntz`) | LONG | 54 | 51 | 0 | plumbing 1, semantics 2 | 0 | 77 |
@@ -1400,6 +1400,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `log(x2, x)` | `math` |  | StrictMath.log(x) / StrictMath.log(x2), null where either is at or below 0.0 | exact: per-lane StrictMath call | per-lane: compare to mask, mask cast, blend, mask broadcast, other, mask logic, load or store, mask test |
 | `exp(x) * 2.0D + 1.0D` | `floatingArithmetic`, `math` |  | the arithmetic around the call in the kernel | exact: per-lane StrictMath call | per-lane: mask broadcast, other, mask logic, load or store, compare to mask, mask test |
 | `pow(x, x2)` | `math` |  | exact: a per-lane StrictMath.pow call, as Spark's code makes, fdlibm's weak branch included | exact: per-lane StrictMath call | per-lane: mask broadcast, other, mask logic, load or store, compare to mask, mask test |
+| `IF(x2 IS NULL, 0.0D, pow(x, x2))` | `predicate`, `condition`, `math` |  | a choice over the call, which reads the call's validity, both operands' AND, inside the kernel | exact: per-lane StrictMath call | per-lane: mask broadcast, mask logic, blend, other, load or store, compare to mask, mask test |
 
 #### Math functions as conditions
 
@@ -1686,7 +1687,7 @@ operands (a row counts once for each type it reads):
 | `byte` | 60 | 0 | 0 | 0 | 0 | 8 | 52 |
 | `date` | 130 | 17 | 0 | 0 | 1 | 0 | 112 |
 | `dec` | 115 | 1 | 50 | 16 | 0 | 0 | 48 |
-| `double` | 113 | 0 | 0 | 1 | 0 | 0 | 112 |
+| `double` | 114 | 0 | 0 | 1 | 0 | 0 | 113 |
 | `dt` | 41 | 2 | 0 | 7 | 0 | 0 | 32 |
 | `float` | 67 | 0 | 0 | 0 | 0 | 0 | 67 |
 | `int` | 197 | 14 | 0 | 5 | 1 | 1 | 176 |
