@@ -77,7 +77,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
    * took 252 s (`plans/m8/results/VARKA-581-probe-times.txt`) in a job of its own. Inside Spark's
    * `catalyst/test`, with many test JVMs on one runner, a probe at 128 bits passed 600 s and was
    * destroyed (vecbricks/varka#1773), so the budget is twice that. `beforeAll` runs at most five
-   * probes one after another, so it takes at most five budgets.
+   * probes one after another, after at most four flag queries of 60 s each (`probePlan`), so it
+   * takes at most five budgets and four minutes.
    */
   private val childTimeoutSeconds: Long = {
     val key = "varka.widthAudit.childTimeoutSeconds"
@@ -301,7 +302,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   /**
    * How many probes run at once: `-Dvarka.widthAudit.parallelProbes`, or one for every four cores
-   * up to the five probes, which is one on a four-core runner and five on the laptop's 24 cores.
+   * up to five, which is one on a four-core runner and five on the laptop's 24 cores; `probePlan`
+   * keeps two to five probes, so a pool larger than that is idle.
    * On those 24 cores four at once took 326 s and five at once 262 s where one after another took
    * 762 s (`plans/m8/results/VARKA-626-regen-speedup.txt`), the slowest probe alone 252 s
    * (`VARKA-581-probe-times.txt`), so `childTimeoutSeconds` still holds for each.
@@ -354,7 +356,14 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
           case e: java.util.concurrent.ExecutionException => probe -> Failure(e.getCause)
         }
       }.toMap
-      results = ran ++ standIns.map { case (skipped, ranAs) => skipped -> ran(ranAs) }
+      // A stand-in's failure is reported under the stand-in's name, so that no one looks for a
+      // child JVM of the skipped probe, which never started.
+      results = ran ++ standIns.map { case (skipped, ranAs) =>
+        skipped -> ran(ranAs).recoverWith { case e =>
+          Failure(new RuntimeException(
+            s"${skipped.name} was not run; ${ranAs.name}, whose census stands for it, failed", e))
+        }
+      }
     } finally {
       pool.shutdownNow()
       pool.awaitTermination(1, java.util.concurrent.TimeUnit.MINUTES)

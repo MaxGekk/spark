@@ -74,8 +74,9 @@ VARKA_SUITE_MARKER = re.compile(r"^@VarkaSuite\b", re.M)
 # (dev/varka_scoped_suites.sh); their new tests are listed but not rerun here.
 TIMING_SUITES = ("VarkaAssemblySuite", "VarkaTierWitnessSuite", "VarkaWarmupEndToEndSuite")
 # Suites whose fixture costs far more than any test of theirs: VarkaWidthAuditSuite's beforeAll
-# forks five probe JVMs, up to 252 s each on a runner, for whichever test is asked for. Five
-# rounds of one new test there ran past the job's limit, so its new tests are not rerun either.
+# forks up to five probe JVMs (one per distinct width, two on a 256-bit runner), 250 to 350 s
+# each on a runner, for whichever test is asked for. Five rounds of one new test there ran past
+# the job's limit, so its new tests are not rerun either.
 COSTLY_FIXTURE_SUITES = ("VarkaWidthAuditSuite",)
 RUNNER = "org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteRunner"
 BASE_REPO = "vecbricks/varka"

@@ -2,10 +2,12 @@
 #
 # Date: 28 November 2026, the laptop: AMD Ryzen AI 9 HX PRO 370, 24 threads, JDK 25.0.5.1,
 # UseAVX 3, so its preferred width is 512 bits and it is the host of sql/varka/width_audit.json.
-# build/sbt 'catalyst/testOnly *VarkaWidthAuditSuite' in worktree varka-695-probes-w on head
-# af133535cff, one run each, the probes five at once by the suite's default for 24 cores
-# (`parallelProbes`). Probe seconds are the suite's `VARKA-AUDIT-PROBE ... took` lines; sbt is
-# the "Total time" line. Single readings, not benchmarks; load average 1.7 to 7.2 across them.
+# build/sbt 'catalyst/testOnly *VarkaWidthAuditSuite' in worktree varka-695-probes-w: the before
+# row on origin/master af133535cff, the after rows on it plus this change's suite (the code of
+# commit 36939e95033 on branch varka-695-width-probes), one run each, the probes five at once
+# by the suite's default for 24 cores (`parallelProbes`). Probe seconds are the suite's
+# `VARKA-AUDIT-PROBE ... took` lines; sbt is the "Total time" line. Single readings, not
+# benchmarks; load average 1.7 to 7.2 across them.
 #
 # "probe-seconds" is the probes' sum: what a CI shard pays, since there they run one at a time.
 #
@@ -35,4 +37,7 @@
 # Expected on a 256-bit GitHub runner (EPYC 7763, AVX2, MaxVectorSize 32), not measured here:
 # the probes asked for 32 and 64 bytes both end at 32 and are skipped, and the preferred-again
 # probe is skipped, leaving the preferred probe and the 128-bit one: two probes of five. By the
-# times of run 45988077035 (247, 240, 350, 257 and 237 s) that is about 600 of 1,331 s.
+# times of run 45988077035 (247, 240, 350, 257 and 237 s) that is about 600 of 1,331 s. That a
+# JVM asked for a width ending at the same MaxVectorSize is the same JVM was checked here only,
+# from its whole flag dump; the runners' first Build and the arm job of the width-audit
+# workflow are the first readings elsewhere.
