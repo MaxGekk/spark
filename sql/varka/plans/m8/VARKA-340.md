@@ -472,6 +472,52 @@ the kernel can null the null row, a declining field skip only its own comparison
 field lists checked against the edge tests' lists. The suite after those fixes took 58.7 s with the property at load 28 to 33,
 about 32 s of sweeps, so the 91.6 s run was mostly the machine.
 
+### 10.4 Part 4: step 6, the measurement at 256 bits (28 November 2026)
+
+`VarkaTimestampNtzFieldsBaselineBenchmark-jdk25-runner-epyc7763-results.txt` and its provenance
+are replaced from `benchmark.yml` run 46055743205 of vecbricks/varka (no `MaxVectorSize`). It ran
+on an AMD EPYC 7763 by its provenance. It was dispatched with `pr=1791` while master was
+`a5c8d1f0972`, so it measured `refs/pull/1791/head`, `3a7891ad404`: `a5c8d1f0972` plus two
+plan-only commits. That code holds steps 2 to 5 (#1397, #1434) and part 3 (#1612). The replaced
+file is step 1's baseline, run 41353672159 of 1 November 2026 at `32b32067fef`, where both arms
+timed the row path. All fourteen sections now fuse whole on the varka on arm, and the run's kernel
+check found each one running every batch as a kernel.
+
+Best time, row path over varka on, from one run:
+
+| section | no nulls | one row in ten null |
+|---|---|---|
+| `year(ntz)` | 4.7X (157 / 34 ms) | 6.3X (148 / 23 ms) |
+| `weekofyear(ntz)` | 7.7X (274 / 36 ms) | 8.9X (247 / 28 ms) |
+| `hour(ntz)` | 4.7X (124 / 26 ms) | 5.9X (123 / 21 ms) |
+| `CAST(ntz AS TIME)` | 4.4X (87 / 20 ms) | 5.7X (90 / 16 ms) |
+| `CAST(ntz AS TIME(3))` | 3.7X (85 / 23 ms) | 4.6X (90 / 20 ms) |
+| `CAST(tm AS TIMESTAMP_NTZ)` | 7.9X (120 / 15 ms) | 9.6X (130 / 14 ms) |
+| `make_timestamp_ntz(d, tm)` | 11.0X (182 / 17 ms) | 11.3X (172 / 15 ms) |
+
+The row-path arms are 0.2% to 16.9% faster by rate than the same arms in the 1 November file
+(`dev/varka_bench_diff.py --git HEAD`). The JDK build changed in between (Zulu 25.38+109 then,
+25.38+201 now), and so did the runner's kernel. So each ratio above is read within this one run,
+not against the old file.
+
+Prediction 2 of 4, scored at 256 bits:
+
+* `year(ntz)` at least five times faster than the row path: **wrong without nulls, narrowly**:
+  4.7X, or 78.5 against 16.9 ns a row. **Right with one row in ten null**: 6.3X, or 73.9 against
+  11.7.
+* `hour(ntz)` faster than the row path: **right**, 4.7X and 5.9X.
+* `CAST(tm AS TIMESTAMP_NTZ)` faster than the row path: **right**, 7.9X and 9.6X.
+
+Predictions 1 and 3 are scored in 10.1 and 10.3.
+
+**Owed, the 128-bit half.** Runs 46137362031 and 46137364599 of vecbricks/varka time this class
+and `VarkaDayTimeIntervalBaselineBenchmark` at `-XX:MaxVectorSize=16`. Both were dispatched on
+master `fb7d8261711` on 28 November 2026 and were still running when this was written. Their NTZ
+file replaces `...-runner-epyc7763-128bit-results.txt`, which is also step 1's row-path baseline
+of 1 November 2026. It scores the 128-bit halves of prediction 2: `hour(ntz)` and
+`CAST(tm AS TIMESTAMP_NTZ)` faster than the row path, and `year(ntz)`'s ratio recorded. With it,
+9's "the measurement is committed with its predictions scored" is complete.
+
 ### Decisions taken while the owner was away (20 November 2026)
 
 1. **What "the next unbuilt step" is.** Steps 1 to 5 are merged and step 6's measurement is the
