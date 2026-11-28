@@ -342,10 +342,15 @@ public final class VarkaConjunctOrder {
           if (dropsNullsOf(sides.get(1), tested, conjuncts)) {
             continue;
           }
+          // A null test Spark runs before r is pulled there by the conjunct it is placed just
+          // before: one that reads its column, or, after a NULL conjunct, one that may raise and
+          // so takes the null tests written before it along (precedingNotNullChecks). The second
+          // puller need not read the column at all.
+          int placedBefore = sides.get(0) == onSpark ? placedBefore(full, step, conjuncts) : -1;
           boolean demoted = false;
           for (int f = 0; f < conjuncts.size(); f++) {
             if (isFused[f] && nullTested(conjuncts.get(f)) == null
-                && pulls(conjuncts.get(f), tested)) {
+                && (f == placedBefore || pulls(conjuncts.get(f), tested))) {
               isFused[f] = false;
               late.putIfAbsent(f, "it decides whether Spark tests " + tested.sql()
                   + " for null before " + conjuncts.get(r).sql() + ", which can raise an error; "
@@ -385,6 +390,22 @@ public final class VarkaConjunctOrder {
       steps.add(step);
     }
     return steps;
+  }
+
+  /**
+   * The conjunct that {@code order}, a codegen order, places {@code step} for: the first conjunct
+   * after it that is not a null test codegen moves, or -1 when none follows. Codegen places each
+   * null test and null check in a run of them just before the conjunct that pulled them, and the
+   * ones nothing pulled after the last conjunct.
+   */
+  private static int placedBefore(List<Step> order, Step step, List<Expression> conjuncts) {
+    int at = order.indexOf(step);
+    for (int k = at + 1; at >= 0 && k < order.size(); k++) {
+      if (order.get(k) instanceof Conjunct(int index) && nullTested(conjuncts.get(index)) == null) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   /** Whether {@code steps} holds {@code step}: the same conjunct, or a check of the same column. */

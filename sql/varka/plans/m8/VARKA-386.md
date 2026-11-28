@@ -394,3 +394,21 @@ step by step against the merged `generatePredicateCode` and found it to match.
 6. **The m7 row 380 pointer (9 item 2) waits for the merge**, since the switch leaves the
    nightly only when this branch lands.
 
+
+## 12. A puller the rule did not know (28 November 2026)
+
+The nightly composition fuzzer's seed 20261128, iteration 99, on fork run 46142034135 (code of
+master `1ad2c5c5bd0`), declined every fused conjunct of a 49-conjunct filter for the fallback
+reason of `demoteNullCheckMovers`, "the residual filter would order its conjuncts unlike Spark's
+codegen, which VarkaConjunctOrder.codegenOrder no longer follows". `codegenOrder` had followed
+Spark: after a conjunct that can be NULL, a fused `equal_null(f, f2)`, which `mayRaise`, took the
+null test `isnotnull(l)` written before it along (`precedingNotNullChecks`, 2.2), ahead of the
+residual `year(CAST(ntz AS DATE)) = 2021`, which Varka counts able to raise and Spark does not.
+The rule's puller search (`pulls`) knew only the placements of row 380, a conjunct that reads the
+column or contains the tested expression, and `equal_null(f, f2)` reads no `l`, so no puller was
+found. 2.3 missed this third placement. The rule now also counts as a puller the conjunct a null
+test is placed just before in Spark's codegen order (`placedBefore`). The decline cost fusion and
+no answer. At master `d05429d34a8` the same iteration passes because row 697's chain cap leaves
+nothing residual that raises there. The record and the reproduction are
+`results/VARKA-fuzz-20261128.txt`; the shrunk shape is `VarkaConjunctOrderSuite`'s
+`precedingNullTestPuller`.

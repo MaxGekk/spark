@@ -1,0 +1,70 @@
+# The composition fuzzer's seed 20261128 iteration 99: a null test codegen moves by its order
+28 November 2026, laptop (AMD, AVX-512, UseAVX=3, JDK 25), worktree branch varka-fuzz-20261128
+off origin/master d05429d34a8. Owner of the rule: row 386 (VARKA-386.md 2.3, 12).
+
+The finding
+  Nightly fuzz, fork run 46142034135 (MaxGekk/spark, branch varka-m8-last-gate-plans, head
+  817029fe0e6, whose code is master 1ad2c5c5bd0's; runner AMD EPYC 9V74, MaxVectorSize=64,
+  UseAVX=3), step "Run the coverage composition fuzzer" with -Dvarka.fuzz.compositions=400:
+  VarkaCoverageCompositionFuzzSuite, "random conjunctions of coverage predicates are fused or
+  declined in bytes, never thrown", seed 20261128 iteration 99, 49 conjuncts, failed with
+    conjunct 0, which fuses alone, declined for 'the residual filter would order its conjuncts
+    unlike Spark's codegen, which VarkaConjunctOrder.codegenOrder no longer follows'
+  That reason is the fallback of VarkaConjunctOrder.demoteNullCheckMovers: every fused conjunct
+  is demoted when a null test Spark runs before a raising residual conjunct has no fused
+  conjunct the rule can name as having pulled it there. isCompositionDecline leaves the reason
+  out on purpose, so the fuzzer is right to fail on it.
+
+Reproduction
+  At master d05429d34a8 the same seed and iteration pass:
+    build/sbt 'set Test/javaOptions ++= Seq("-Dvarka.fuzz.seed=20261128",
+      "-Dvarka.fuzz.compositions=400", "-Dvarka.fuzz.only=99")'
+      'catalyst/testOnly *VarkaCoverageCompositionFuzzSuite -- -z "random conjunctions"'
+    -> Tests: succeeded 20, failed 0
+  #1798 (row 697) raised the auto chain cap of a long-lane tree to 64 at 256 bits and wider, so
+  at master the size budget demotes none of the 49 conjuncts, nothing residual raises, and the
+  rule never runs. At 1ad2c5c5bd0 (the run's code) a throwaway suite compiling the 49 conjuncts
+  through explainPredicate at VarkaMatrix.base reproduced the decline on this laptop, so the
+  vector width is not a factor (the runner was AVX-512 too). Removing any one conjunct makes it
+  pass: the residual set comes from the size budget's demotions, so the shrinker stops at 33
+  conjuncts and one-at-a-time removal at 47.
+
+The state the fallback saw (1ad2c5c5bd0, non-legacy codegen order, a dump added and reverted)
+  c0  isnotnull(l)                         residual
+  c1  NOT (x = x2)                         residual, can be NULL
+  c2, c3, c5, c7, c9                       fused (x <=> x2, isnotnull(f), t <=> t2, ...)
+  c6  equal_null(f, f2)                    fused, Spark's mayRaise true
+  c10 year(CAST(ntz AS DATE)) = 2021       residual; Varka's canRaise true, Spark's mayRaise false
+  Spark's codegen order begins 1, 2, 4, 5, 0, 3, 6, ...: after the NULL-able c1 the flag is on
+  (SPARK-60315), and c6 may raise, so precedingNotNullChecks places the null tests written
+  before it, c0 and c3, just ahead of it. A row whose l is null is dropped before c10.
+  The residual filter's own order lacks c6; no residual conjunct between c1 and c10 may raise,
+  so isnotnull(l) keeps the lazy placement, before c42 (l <=> CAST(i AS BIGINT)), after c10.
+  The rule saw isnotnull(l) before c10 on Spark and not on Varka, no fused conjunct dropping
+  null l rows, and looked for a fused puller with pulls(), which asks whether the conjunct reads
+  l or contains the tested expression. c6 reads neither, so no puller was found.
+
+Which side was wrong
+  Spark's order is ported right: codegenOrder gives Spark's placement, and the fused c6 does take
+  isnotnull(l) ahead of c10. The fuzzer is right too: the reason it rejects is a fallback whose
+  comment calls it unreachable while the port follows Spark. The defect is the puller search,
+  which knew the two placements VARKA-380 had (a conjunct reading the column, a conjunct
+  containing the tested expression) and not the third VARKA-386 ported (after a NULL conjunct, a
+  conjunct that may raise takes the pending null tests written before it). The decline gave no
+  wrong answer, only fewer fused conjuncts; no Spark-visible behaviour changes.
+
+The fix
+  demoteNullCheckMovers also counts as a puller the conjunct a null test is placed just before in
+  Spark's codegen order (placedBefore: the first following conjunct that is not a moved null
+  test). Demoted, that conjunct runs in the residual filter, which then places the null test
+  ahead of it as Spark does; the rounds of behindRaising settle from there.
+
+Tests
+  VarkaConjunctOrderSuite, new test "a fused conjunct that may raise after a NULL conjunct is
+  demoted for the null test it takes ahead of a raising residual conjunct, though it reads no
+  column of it": isnotnull(l), NOT (year(d) = 2021 AND i > 0), coalesce(l2 + 1, 0) >= 0 fused,
+  year(CAST(ntz AS DATE)) = 2021; codegen order 1, 0, 2, 3; only the coalesce is demoted.
+    without the fix: RESULT_BASE
+    with the fix:    VarkaConjunctOrderSuite 23 of 23 passed
+  The 49-conjunct shape at 1ad2c5c5bd0 with the fix: RESULT_OLD
+  Further suites: RESULT_MORE
