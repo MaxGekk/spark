@@ -221,3 +221,25 @@ Left: the day-time 128-bit companion. A run on master was dispatched on 28 Novem
 and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVectorSize=16`. Both were still running
 when this was written. Its day-time file replaces the one from run 43582853857. Once its two
 `filter extract(HOUR FROM dt) >= 12` sections are read, the row's last item is scored.
+
+## 13. The day-time 128-bit companion, and the row closed (28 November 2026)
+
+The day-time class's 128-bit runner file is now run 46141665054 of vecbricks/varka, at master
+`1ad2c5c5bd0`, on an AMD EPYC 7763 at `-XX:MaxVectorSize=16` (the redispatch of 46137362031, which
+failed the CPU check; `VARKA-612.md` 9.6). It replaces run 43582853857. Its filter sections tie:
+
+| section | best time, row path / varka on | average time |
+|---|---|---|
+| `filter extract(HOUR FROM dt) >= 12`, no nulls | 70 / 70 ms, 1.00x | 76 / 75 ms, 1.01x |
+| the same, one row in ten null | 65 / 65 ms, 1.00x | 68 / 70 ms, 0.97x |
+| `filter dt > dt2`, no nulls | 100 / 101 ms, 0.99x | 105 / 105 ms, 1.00x |
+| the same, one row in ten null | 98 / 99 ms, 0.99x | 102 / 102 ms, 1.00x |
+
+At two lanes `filter dt > dt2` is `NONE` (row 503's refusal), so it ties as well. No filter
+section runs more than 10% slower than the row path. The row's last item is met.
+
+The decimal and day-time baselines have now been measured on the EPYC 7763 after #1486 at both
+widths: sections 10, 11, 12 and this one. The section the row was opened for ties the row path at
+both widths, and so does every filter section of the two files. The other conditions of the
+done-when were met when #1486 merged (sections 6 and 9, and its description's dry runs). The row
+is **Done**.
