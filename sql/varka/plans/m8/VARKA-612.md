@@ -300,7 +300,93 @@ Row 103a2 adds `dt * 1.5`, `dt / 1.5` and `dt / k`. On a two-lane host they fuse
 decision 8a leaves them, and join this measurement. `VarkaDayTimeIntervalBaselineBenchmark` times
 `dt * 1.5` and `dt / 24`; `dt / 1.5` needs a new section there.
 
-## Decisions taken while the owner was away (20 November 2026)
+### 9.5 The day-time baseline at 256 bits after 612a (28 November 2026)
+
+612a merged as #1663 on 24 November 2026. The class's 256-bit runner file,
+`VarkaDayTimeIntervalBaselineBenchmark-jdk25-runner-epyc7763-results.txt`, and its provenance are
+replaced from `benchmark.yml` run 46055735411 of vecbricks/varka (no `MaxVectorSize`), on an AMD
+EPYC 7763 by its provenance. It was dispatched with `pr=1791` while master was `a5c8d1f0972`, so
+it measured `refs/pull/1791/head`, `3a7891ad404`: `a5c8d1f0972` plus two plan-only commits. That
+code holds 612a, row 613's decline (#1619) and row 103a2 (#1644). The replaced file is run
+44485236913 at `e5d70012bdc`, before all three.
+
+Prediction 2 of 6.1, that 612a moves no 256-bit number by more than the noise: **held, as far as
+one run against one run can say.** No section changed class at 256 bits: the three checked arms
+fuse whole in both files. By rate (`dev/varka_bench_diff.py --git HEAD`), every row-path arm moved
+by 6% or less. The varka on arms of the three checked sections moved both ways. Without nulls,
+`dt + dt2 - dt` went from 73.8 to 78.0 M rows/s, `abs(dt)` from 93.8 to 94.7 and `dt * 3` from
+117.3 to 101.7. With one row in ten null they went from 120.7 to 129.8, 120.2 to 135.7 and 133.4
+to 141.7. The class has no band, so these moves are read against a pair's flat 10%. Two rows
+cross it, by -13.3% and +12.9%, in opposite directions. One row of a pair has been seen to move
+14% on noise alone (`skills/benchmarking.md`, "Start here", point 5). Against the row path the
+three arms read 4.0X, 4.1X and 3.8X without nulls and 6.8X, 5.8X and 5.4X with nulls. Twelve days
+of master separate the two runs, so this pair of files could not single out 612a even if a move
+were real. Only a pair run could.
+
+`dt * 1.5` and `dt / 24` now fuse at 256 bits (row 103a2), at 6.4X and 3.7X without nulls. At two
+lanes they fuse unmeasured (9.4).
+
+**Owed, the 128-bit half.** Runs 46137362031 and 46137364599 of vecbricks/varka time this class
+and `VarkaTimestampNtzFieldsBaselineBenchmark` at `-XX:MaxVectorSize=16`, both dispatched on
+master `fb7d8261711` on 28 November 2026 and still running when this was written. When they land:
+
+* The day-time file scores prediction 1 and step 3's done-when: the three checked arms at 1.0X
+  within 20%. The done-when compares by the minimums of two runs. The committed 128-bit file times
+  the arms fused, before 612a, so it cannot be the second run, and a second 128-bit run is owed.
+* The NTZ fields file holds the first fused 128-bit numbers of two checks that decision 8a leaves
+  fusing: `make_timestamp_ntz(d, tm)` and `CAST(tm AS TIMESTAMP_NTZ)`, the `FAIL` add of the
+  midnight and the time (9.2). If either is slower than the row path, that family joins
+  `twoLaneMeasured` in its own change, as 9.4 says.
+
+### 9.6 The 128-bit half (28 November 2026)
+
+Correction to 9.5: run 46137362031 failed the runner's CPU check. The day-time file comes from its
+redispatch, run 46141665054.
+
+The two 128-bit runner files and their provenance are replaced, and both runs were on an AMD EPYC
+7763 at `-XX:MaxVectorSize=16`:
+
+* `VarkaDayTimeIntervalBaselineBenchmark-jdk25-runner-epyc7763-128bit-results.txt` comes from run
+  46141665054 at master `1ad2c5c5bd0`.
+* `VarkaTimestampNtzFieldsBaselineBenchmark-jdk25-runner-epyc7763-128bit-results.txt` comes from
+  run 46137364599 at master `fb7d8261711`.
+
+`fb7d8261711` and `1ad2c5c5bd0` differ in plans only. Neither class's code changed after
+`a5c8d1f0972`, the code of the 256-bit runs. The day-time file replaces run 43582853857 of 14
+November 2026, which timed the three checked arms fused, before 612a. In the new file's header the
+three arms are not listed as fusing, so the run's class check found them `NONE` at two lanes.
+
+Prediction 1 of 6.1, the three arms at 1.0X within 20%: **right**, from one run. By best time, row
+path over varka on:
+
+| section | no nulls | one row in ten null |
+|---|---|---|
+| `dt + dt2 - dt` | 1.05x (102 / 97 ms) | 1.01x (106 / 105 ms) |
+| `abs(dt)` | 1.01x (87 / 86 ms) | 1.00x (88 / 88 ms) |
+| `dt * 3` | 0.95x (74 / 78 ms) | 1.00x (78 / 78 ms) |
+
+**Step 3's done-when: not met.** It asks that, by the minimums of two runs, no day-time arm but
+the blend reads under 1.0X by more than 20%. Only one 128-bit run exists, and in it one arm fails:
+`dt / 24`, row 103a2's quotient, which fuses unmeasured at two lanes (9.4). It reads 0.70x without
+nulls (92 / 131 ms, 46.1 against 65.6 ns a row) and 0.73x with nulls (93 / 127 ms). `dt * 1.5`,
+also fused, reads 0.93x and 0.89x, inside the 20%. The filter control `filter dt > dt2` is `NONE`
+at two lanes (row 503) and reads 0.99x. The `CASE WHEN` control fuses and reads 1.8X and 1.2X.
+
+9.4's NTZ checks, from the first fused 128-bit numbers (row path over varka on, by best time):
+
+* `make_timestamp_ntz(d, tm)`: 1.10x without nulls (191 / 174 ms), and 0.68x with one row in ten
+  null (172 / 254 ms, 85.9 against 126.8 ns a row).
+* `CAST(tm AS TIMESTAMP_NTZ)`: 1.17x without nulls (126 / 108 ms) and 0.93x with nulls
+  (133 / 143 ms).
+
+By 9.4's rule, `make_timestamp_ntz` with nulls is a family slower than the row path at 128 bits,
+so it joins `twoLaneMeasured` in its own change, and so does `dt / 24`'s quotient. The cast with
+nulls is 7% slower from one run, under the 1.3x a claim needs, so it is a direction only.
+
+Left for the row: the decline at two lanes of `dt / k` (and `dt / 1.5`, whose section 9.4 still
+owes) and of the `make_timestamp_ntz` add, each in its own change; then a second 128-bit run for
+step 3's minimums.
+
 
 1. **Question 10.1: the tree check.** Taken as recommended (3.1), because the brief has the plan's
    recommendation decide and the per-arm form would leave the `TIME`, `TIMESTAMP_NTZ` and decimal
