@@ -28,6 +28,8 @@
 #   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
 #   dev/varka_matrix.sh --all --shard 3/18 -j 2        # shard 3 of 18, split by measured time
 #   dev/varka_matrix.sh --module sql --config cse=false --sbt-arg -Phive   # as the PR job runs
+#   dev/varka_matrix.sh --module catalyst --config methodByteBudget=0 \
+#     --suites VarkaEmitterLongLaneSuite --test "TEXT"   # one test of one unit
 #   dev/varka_matrix.sh --defaults --split 4 -j 8 --jvm-arg -XX:MaxVectorSize=16   # as the gate
 #
 # The gate's options (VARKA-286): --defaults runs no configuration, only the defaults, over
@@ -51,6 +53,12 @@
 # one job report on them all; --leaf-suffix S names this run's JVM directories <module>-S, so the
 # shares of one configuration land side by side when their runs/ directories are merged; and
 # --report-only DIR reports on the merged DIR/runs and runs nothing.
+#
+# One test (VARKA-707): --test TEXT runs, in every suite the run takes, only the tests whose name
+# contains TEXT, as ScalaTest's -z does; VarkaSuiteRunner applies it to the JUnit suites too.
+# The defaults run beside the configuration under the same filter. With --suites naming the one
+# suite, a CI unit "configuration|module|suite" shrinks to its failing test. The test's output is
+# in target/varka-matrix/runs/<configuration>/<module>[-<k>]/run.log, its JUnit XML in junit/ there.
 #
 # A platform run (VARKA-505): --platform NAME, with --defaults and --jvm-arg flags, runs the
 # defaults under a fixed instruction set and files the runs under runs/NAME, so that the report lists it
@@ -96,6 +104,7 @@ jvm_args=()
 sanitize=1
 build_dir=""
 only_suites=""
+test_filter=""
 skip_suites=""
 extra_suites=()
 defaults_from=""
@@ -149,6 +158,7 @@ while [ $# -gt 0 ]; do
     --out) OUT=$(realpath -m "$2"); shift 2 ;;
     --build-dir) build_dir=$(realpath -m "$2"); shift 2 ;;
     --suites) only_suites="$2"; shift 2 ;;
+    --test) test_filter="$2"; shift 2 ;;
     --skip-suites) skip_suites="$2"; shift 2 ;;
     --extra-suite) extra_suites+=("$2"); shift 2 ;;
     --defaults-from) defaults_from=$(realpath -m "$2"); shift 2 ;;
@@ -416,7 +426,11 @@ run_one() {
     mapfile -t own < <(own_jvm_flags "$module" "$line")
     own+=(-Dvarka.ownJvm=true)
   fi
-  for suite in $line; do suites+=(-s "$suite"); done
+  for suite in $line; do
+    suites+=(-s "$suite")
+    # The runner's -z applies to the -s it follows, so each suite gets its own.
+    [ -n "$test_filter" ] && suites+=(-z "$test_filter")
+  done
   rm -rf "$dir"; mkdir -p "$dir/tmp"
   local start; start=$(date +%s)
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 java "${OPTS[@]}" "${own[@]}" \

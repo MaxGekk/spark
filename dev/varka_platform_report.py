@@ -277,6 +277,9 @@ def self_test():
 
 
 def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(__doc__.strip())
+        return 0
     if argv == ["--self-test"]:
         return self_test()
     if len(argv) != 1 or argv[0].startswith("-"):

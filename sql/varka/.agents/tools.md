@@ -6,7 +6,9 @@ an entry is missing here, when a bullet names an entry that is gone, or when a b
 A new tool gets its bullet in the same commit.
 
 A bullet says what the tool is for and gives its usual command line. It is not the usage: for the
-other options read the tool's header, the comment block or docstring at the top of the file.
+other options run the tool with `--help`, or read its header, the comment block or docstring at
+the top of the file. Every `dev/varka*.py` answers `--help` with its usage and exit 0, also after
+a subcommand (`dev/varka_msg_check.py pr --help`), and the same lint fails when one does not.
 Run every command from the root of the worktree.
 
 ## The tags
@@ -62,8 +64,11 @@ for the matrix: `flock ~/proj/.varka-locks/heavy.lock dev/varka_matrix.sh --conf
 
 - `dev/varka_emit.sh`: what the emitter makes of a projection: the IR, the shape hash and each
   emitted method's size and op counts; `--asm` adds C2's assembly of the dense loop; `--replay`
-  replays a reproduction file of a kernel failure. `[sbt]`
-  `dev/varka_emit.sh "date_add(d, 7)" --columns d:date`
+  replays a reproduction file of a kernel failure. `--columns` takes `name:type`, every type's
+  spelling listed in `dev/varka_emit.sh --help`. `[sbt]`
+  `dev/varka_emit.sh "date_add(d, 7)" --columns d:date`. The emitted bytecode itself, a
+  `javap -c -p` listing printed after the report, the class kept under `target/varka-emit/`:
+  `dev/varka_emit.sh "date_add(d, 7)" --columns d:date --bytecode`
 - `dev/varka_hsdis_build.sh`: build hsdis, the disassembler plugin that `--asm` and the assembly
   suite need, without a JDK build. Needs gcc and libcapstone-dev; clones the JDK's hsdis source
   when no `--src` is given. `[java]` (one `java -version` to check the plugin loads)
@@ -149,7 +154,10 @@ fanned-out run in CI.
   runner JVM under `target/varka-matrix/`; the defaults always run beside them. `[sbt]`,
   `--list` included; `--skip-build` reuses the last build; `--defaults --list-suites` builds
   nothing. `dev/varka_matrix.sh --config cse=false`, or one suite of one module under one
-  configuration: `dev/varka_matrix.sh --module sql --config cse=false --suites <SuiteName>`
+  configuration: `dev/varka_matrix.sh --module sql --config cse=false --suites <SuiteName>`.
+  One test of that suite, the tests whose name contains the text (ScalaTest's `-z`, JUnit suites
+  too), its `run.log` under `target/varka-matrix/runs/<configuration>/`:
+  `dev/varka_matrix.sh --module sql --config cse=false --suites <SuiteName> --test "<text>"`
 - `dev/varka_matrix_ci.sh`: what a pull request's Build runs: one module's suites under the one
   configuration `dev/varka_matrix_pick.py` picks, and on the base when that fails. `[sbt]`
   `dev/varka_matrix_ci.sh catalyst`
@@ -299,7 +307,8 @@ their logs.
 - `dev/varka_plan_lint.py`: do a milestone plan's rows hold against the tree: provenance, cited
   files, sections, row numbers, run heads. The default file is `sql/varka/plans/m8/PLAN.md`.
   `[no JVM]` (uses `gh` unless `--offline`) `dev/varka_plan_lint.py --offline`
-- `dev/varka_tools_lint.py`: check this index against the entries under `dev/`. `[no JVM]`
+- `dev/varka_tools_lint.py`: check this index against the entries under `dev/`, and that every
+  `dev/varka*.py` answers `--help`, after each subcommand too. `[no JVM]`
   `dev/varka_tools_lint.py` (`--self-test` runs its cases)
 - `dev/varka_census.py`: the census of Spark's scalar expressions over the milestone's types:
   rewrites the census, the cast matrix and the docs' support table; `--check` compares them.

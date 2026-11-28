@@ -27,6 +27,20 @@ import collections
 import re
 import sys
 
+
+def _usage():
+    """Print this file's header comment, the way the shell tools answer --help."""
+    for line in open(__file__, encoding="utf-8").read().splitlines()[17:]:
+        if not line.startswith("#"):
+            break
+        print(line[2:])
+
+
+if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+    _usage()
+    sys.exit(0)
+
+
 events = sys.stdin.read().split("jdk.ExecutionSample")[1:]
 total = len(events)
 in_hash = in_equals = 0

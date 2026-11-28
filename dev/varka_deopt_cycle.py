@@ -41,6 +41,19 @@ import re
 import sys
 from collections import defaultdict
 
+
+def _usage():
+    """Print this file's header comment, the way the shell tools answer --help."""
+    for line in open(__file__, encoding="utf-8").read().splitlines()[17:]:
+        if not line.startswith("#"):
+            break
+        print(line[2:])
+
+
+if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+    _usage()
+    sys.exit(0)
+
 CLASS = re.compile(r"(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z0-9]+)?)")
 # PrintCompilation: <ms> <cid> <flags> <tier> Class::method (bytes) [note]
 COMPILE = re.compile(

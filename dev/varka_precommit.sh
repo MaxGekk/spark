@@ -70,8 +70,8 @@
 #   * every lane is wired at the sites no compiler checks (dev/varka_new_lane.py --check), when
 #     the lane's members, its admission, the script or a site it walks changed;
 #   * every entry under dev/ whose name starts with varka has its bullet in the tool index,
-#     sql/varka/.agents/tools.md (dev/varka_tools_lint.py), when such an entry or the index
-#     changed;
+#     sql/varka/.agents/tools.md (dev/varka_tools_lint.py), and every dev/varka*.py answers
+#     --help, after each subcommand too, when such an entry or the index changed;
 #   * a milestone plan's rows hold against the tree (dev/varka_plan_lint.py), when a plan
 #     file changed: a filled provenance cell, no row number twice, and every results file,
 #     plan section and row number a row cites exists; the run-head check needs `gh`, so the
@@ -617,10 +617,11 @@ if printf '%s\n' "${files[@]}" | grep -qE "$sweep_inputs" && [ -x dev/varka_swee
   }
 fi
 
-# The tool index lists every entry under dev/ whose name starts with varka (VARKA-702): a commit
-# that adds or changes one, or edits the index, re-runs the check, so a tool cannot land without
-# its bullet. A commit that only deletes a tool is not in this hook's file list; the docs job,
-# which runs the same check, catches the bullet it leaves behind.
+# The tool index lists every entry under dev/ whose name starts with varka (VARKA-702), and
+# every such Python tool answers --help (VARKA-707): a commit that adds or changes one, or edits
+# the index, re-runs the check, so a tool cannot land without its bullet or its usage. A commit
+# that only deletes a tool is not in this hook's file list; the docs job, which runs the same
+# check, catches the bullet it leaves behind.
 tool_inputs='^(dev/varka[^/]*(/.*)?|sql/varka/\.agents/tools\.md)$'
 if printf '%s\n' "${files[@]}" | grep -qE "$tool_inputs" && [ -x dev/varka_tools_lint.py ]; then
   out="$(dev/varka_tools_lint.py 2>&1)" || {

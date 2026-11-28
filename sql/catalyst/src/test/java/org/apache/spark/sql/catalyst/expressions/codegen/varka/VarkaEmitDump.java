@@ -93,6 +93,10 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  *
  * <p>{@code --replay <file>} replays a reproduction file a kernel failure wrote (VARKA-315,
  * {@link VarkaReplay}) and exits 0 when it fails with the recorded signature.
+ *
+ * <p>{@code --class-file <file>} also writes the emitted class's bytes to the file, for {@code
+ * javap -c -p} to list: the bytecode itself, where the table gives only its sizes and counts.
+ * {@code dev/varka_emit.sh --bytecode} passes it and runs {@code javap}.
  */
 public final class VarkaEmitDump {
 
@@ -109,7 +113,8 @@ public final class VarkaEmitDump {
 
   /** The command line, parsed. */
   private record Args(List<String> exprs, String columns, String options, int rounds, int repeat,
-      int rows, int nulls, boolean table, List<String> variants, String replay) {
+      int rows, int nulls, boolean table, List<String> variants, String replay,
+      String classFile) {
 
     static Args parse(String[] args) {
       var exprs = new ArrayList<String>();
@@ -122,6 +127,7 @@ public final class VarkaEmitDump {
       int nulls = 0;
       boolean table = false;
       String replay = null;
+      String classFile = null;
       for (int i = 0; i < args.length; i++) {
         switch (args[i]) {
           case "--columns" -> columns = args[++i];
@@ -133,11 +139,12 @@ public final class VarkaEmitDump {
           case "--table" -> table = true;
           case "--variant" -> variants.add(args[++i]);
           case "--replay" -> replay = args[++i];
+          case "--class-file" -> classFile = args[++i];
           default -> exprs.add(args[i]);
         }
       }
       return new Args(exprs, columns, options, rounds, repeat, rows, nulls, table, variants,
-          replay);
+          replay, classFile);
     }
   }
 
@@ -150,7 +157,7 @@ public final class VarkaEmitDump {
     if (args.exprs().isEmpty()) {
       System.err.println("usage: VarkaEmitDump <sql expression>... "
           + "[--columns d:date,i:int] [--options cse=false,...] [--rounds N] [--rows N] "
-          + "[--nulls N] [--repeat N] | --replay <reproduction file>");
+          + "[--nulls N] [--repeat N] [--class-file F] | --replay <reproduction file>");
       System.exit(2);
     }
     List<Attribute> childOutput = parseColumns(args.columns());
@@ -188,7 +195,7 @@ public final class VarkaEmitDump {
 
   /** The entries, the kernel's tables and IR, the shape hash, and the per-method table. */
   private static void dump(Args args, PartialVarkaProjection partial, List<Attribute> childOutput,
-      VarkaEmitOptions options) {
+      VarkaEmitOptions options) throws IOException {
     for (int position = 0; position < args.exprs().size(); position++) {
       VarkaDecline decline = partial.declines().get(position);
       report(String.format("entry %2d  %-40s  %s%s", position, args.exprs().get(position),
@@ -213,6 +220,10 @@ public final class VarkaEmitDump {
     } catch (VarkaEmitDeclined d) {
       report("declined by the emitter: " + d.getMessage());
       return;
+    }
+    if (args.classFile() != null) {
+      Files.write(Path.of(args.classFile()), bytes);
+      report("class file: " + args.classFile());
     }
     if (args.repeat() > 0) {
       reportRepeat(fused, options, args.repeat());
@@ -457,6 +468,8 @@ public final class VarkaEmitDump {
       case "double" -> DataTypes.DoubleType;
       case "float", "real" -> DataTypes.FloatType;
       case "time" -> new TimeType(TimeType.MICROS_PRECISION());
+      // The zone-free timestamp, on the long lane; the session-zone TIMESTAMP has no spelling.
+      case "timestamp_ntz" -> DataTypes.TimestampNTZType;
       case "dt", "interval day to second" -> DataTypes.createDayTimeIntervalType();
       default -> {
         if (t.startsWith("time(") && t.endsWith(")")) {

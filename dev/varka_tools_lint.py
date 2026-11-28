@@ -17,7 +17,8 @@
 # limitations under the License.
 #
 
-"""Is every Varka tool under dev/ in the tool index, and does the index name only what exists?
+"""Is every Varka tool under dev/ in the tool index, does the index name only what exists, and
+does every Varka Python tool answer --help?
 
   dev/varka_tools_lint.py              # check the index against the tree
   dev/varka_tools_lint.py --self-test  # the check's cases, over fixture names and texts
@@ -39,20 +40,38 @@ slash); a name in running text is not a bullet. The findings:
   * a bullet, read to the next bullet, heading or blank line, without exactly one of the tags the
     index defines: `[sbt]`, `[java]`, `[no JVM]`, `[data]`.
 
+And, for every entry that is a Python file (`dev/varka*.py`), run with no input and a
+deadline of HELP_SECONDS each:
+
+  * `--help` that does not exit 0 or prints nothing;
+  * `<subcommand> --help` that does not exit 0 or prints nothing, for each subcommand the
+    `--help` text names: a brace group of an argparse usage line (`{plan,times}`, not an
+    option's choices) and a word after the tool's own path in an example line
+    (`dev/varka_msg_check.py pr ...`).
+
+An agent learns a tool's arguments from its `--help`, so a tool that crashes on it, or reads it
+as an argument and starts its work, fails the one question every reader asks first. A tool
+answers `-h` or `--help` anywhere on its command line before it does anything else.
+
 The exit status is the number of findings, 100 at most.
 """
 
 import argparse
+import concurrent.futures
 import os
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INDEX = "sql/varka/.agents/tools.md"
 PREFIX = "varka"
 TAGS = ("[sbt]", "[java]", "[no JVM]", "[data]")
 BULLET_RE = re.compile(r"^- `dev/(" + PREFIX + r"[^`/]*)/?`")
+# A tool's --help is a print: seconds enough for the slowest import, short of a tool's real work.
+HELP_SECONDS = 30
+BRACE_RE = re.compile(r"(\S*)\s\{([A-Za-z][\w,-]*)\}")
 
 
 def tracked_entries(root):
@@ -128,6 +147,66 @@ def check(entries, text, index=INDEX):
     return findings
 
 
+def subcommands(name, text):
+    """The subcommands a tool's --help text names, in the order it names them."""
+    if text.lstrip().startswith("usage:"):
+        # argparse's usage: the first brace group that is not an option's choices (`--mode
+        # {a,b}`) is the subcommand; a later one is an argument of the subcommand.
+        for before, group in BRACE_RE.findall(text.lstrip().split("\n\n")[0]):
+            option = before.lstrip("[")
+            if not option.startswith("-") or option.endswith("]"):
+                return group.split(",")
+        return []
+    example = re.compile(r"dev/" + re.escape(name) + r" ([a-z][a-z0-9_-]*)(?=\s|$)", re.M)
+    return list(dict.fromkeys(example.findall(text)))
+
+
+def answers(path, args):
+    """None when `path args --help` exits 0 and prints, else why not."""
+    shown = " ".join([f"dev/{os.path.basename(path)}", *args, "--help"])
+    try:
+        run = subprocess.run(
+            [sys.executable, path, *args, "--help"],
+            cwd=os.path.dirname(os.path.dirname(path)),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=HELP_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{shown}: still running after {HELP_SECONDS} s: answer --help before any work"
+    if run.returncode != 0:
+        last = (run.stderr.strip() or run.stdout.strip()).splitlines()[-1:] or ["no output"]
+        return f"{shown}: exit {run.returncode} ({last[0][:120]}): print the usage and exit 0"
+    if not (run.stdout.strip() or run.stderr.strip()):
+        return f"{shown}: exit 0 and no output: print the usage"
+    return None
+
+
+def help_findings(root, entries):
+    """The findings of --help over the Python entries, each then over its subcommands."""
+
+    def one(name):
+        path = os.path.join(root, "dev", name)
+        first = answers(path, [])
+        if first:
+            return [first]
+        text = subprocess.run(
+            [sys.executable, path, "--help"],
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=HELP_SECONDS,
+        )
+        words = subcommands(name[:-3] + ".py", text.stdout + "\n" + text.stderr)
+        return [f for f in (answers(path, [w]) for w in words) if f]
+
+    tools = [n for n in entries if n.endswith(".py")]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        return [f for found in pool.map(one, tools) for f in found]
+
+
 def self_test():
     failures = []
 
@@ -192,6 +271,67 @@ def self_test():
         "dev/varka_d is not in",
     )
 
+    def words(name, text, *expected):
+        got = subcommands("varka_t.py", text)
+        if got != list(expected):
+            failures.append(f"{name}: expected subcommands {list(expected)}, got {got}")
+
+    words(
+        "an argparse subcommand group",
+        "usage: varka_t.py [-h] {plan,times} ...\n\nWhat it does.\n",
+        "plan",
+        "times",
+    )
+    words(
+        "a second brace group is the subcommand's argument",
+        "usage: varka_t.py [-h] [--base BASE]\n    {list,rerun} {catalyst,sql}\n\nIt.\n",
+        "list",
+        "rerun",
+    )
+    words(
+        "an option's choices are not subcommands",
+        "usage: varka_t.py [-h] [--mode {fast,slow}] FILE\n\nWhat it does.\n",
+    )
+    words(
+        "the example lines of a hand-written usage",
+        "What it does.\n\n  dev/varka_t.py commit FILE\n  dev/varka_t.py pr --title T\n"
+        "  dev/varka_t.py --selftest\n  dev/varka_t.py in.txt\n  dev/varka_t.py commit X\n",
+        "commit",
+        "pr",
+    )
+    words("a brace group outside the usage line", "What it does: {a,b}.\n")
+
+    # The check itself, over planted tools: one that answers, one that crashes after a
+    # subcommand (the slip of dev/varka_msg_check.py's `pr --help`), one that reads --help as
+    # input and fails, and one whose help prints nothing.
+    good = (
+        '"""Usage.\n\n  dev/varka_good.py run FILE\n"""\nimport sys\n'
+        'if "--help" in sys.argv:\n    print(__doc__)\n    sys.exit(0)\n'
+    )
+    crash = (
+        '"""Usage.\n\n  dev/varka_crash.py pr --body-file F\n"""\nimport sys\n'
+        'if sys.argv[1:2] == ["--help"]:\n    print(__doc__)\n    sys.exit(0)\n'
+        'opts = dict(zip(sys.argv[2::2], sys.argv[3::2]))\nopen(opts["--body-file"])\n'
+    )
+    reads = "import sys\nopen(sys.argv[1])\n"
+    silent = "import sys\nsys.exit(0)\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        os.mkdir(os.path.join(tmp, "dev"))
+        tools = {"varka_good.py": good, "varka_crash.py": crash, "varka_reads.py": reads}
+        tools["varka_silent.py"] = silent
+        for name, text in tools.items():
+            with open(os.path.join(tmp, "dev", name), "w", encoding="utf-8") as f:
+                f.write(text)
+        got = sorted(help_findings(tmp, sorted(tools) + ["varka_data"]))
+        expected = [
+            "dev/varka_crash.py pr --help: exit 1 (KeyError: '--body-file')",
+            "dev/varka_reads.py --help: exit 1 (FileNotFoundError",
+            "dev/varka_silent.py --help: exit 0 and no output",
+        ]
+        ok = len(got) == len(expected) and all(g.startswith(e) for g, e in zip(got, expected))
+        if not ok:
+            failures.append(f"help_findings: expected {expected}, got {got}")
+
     # The tree's own lookup: this file is tracked, starts with the prefix and exists.
     here = os.path.basename(__file__)
     if here not in tracked_entries(ROOT):
@@ -218,11 +358,15 @@ def main(argv):
     with open(path, encoding="utf-8") as f:
         text = f.read()
     entries = tracked_entries(ROOT)
-    findings = check(entries, text)
+    findings = check(entries, text) + help_findings(ROOT, entries)
     for finding in findings:
         print(finding, file=sys.stderr)
     if not findings:
-        print(f"varka_tools_lint: {len(entries)} entries under dev/, each with one bullet")
+        tools = sum(1 for n in entries if n.endswith(".py"))
+        print(
+            f"varka_tools_lint: {len(entries)} entries under dev/, each with one bullet; "
+            f"{tools} Python tools answer --help, and after each subcommand"
+        )
     return min(len(findings), 100)
 
 

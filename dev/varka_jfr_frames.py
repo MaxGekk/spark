@@ -35,6 +35,19 @@ import re
 import sys
 from collections import Counter
 
+
+def _usage():
+    """Print this file's header comment, the way the shell tools answer --help."""
+    for line in open(__file__, encoding="utf-8").read().splitlines()[17:]:
+        if not line.startswith("#"):
+            break
+        print(line[2:])
+
+
+if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+    _usage()
+    sys.exit(0)
+
 VARKA = "org.apache.spark.sql.catalyst.expressions.codegen."
 PHASES = [
     ("slot planning (Slots.plan)", r"\.Slots\.plan"),
