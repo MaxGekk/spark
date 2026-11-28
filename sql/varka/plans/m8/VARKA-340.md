@@ -557,7 +557,8 @@ a claim needs, so one run is enough to state them as losses.
   `FAIL` add of step 5, which row 612's 9.4 sends to `twoLaneMeasured` (`VARKA-612.md` 9.6).
 
 The cause of either was not read from the code here. They are new findings beyond this row's
-done-when, so they are handed to the lead to file as rows.
+done-when, so they are handed to the lead to file as rows. *Filed on 28 November 2026:* the cast
+is row 709, and the `make_timestamp_ntz` add, with `dt / 24` of row 612, is row 710.
 
 With this file, 9's last condition holds: the measurement is committed at both widths with its
 predictions scored. The other conditions of 9 were the work of parts 1 to 3, merged as #1397,
